@@ -18,7 +18,7 @@ install:
   - conda install -q -c conda-forge rdkit
   - pip install codecov
   - codecov
-  - codecov --token="3c966cf0-3df9-4bec-bbd2-2dd952019d6c"
+  - codecov --token="e3f91a6d-dfcc-46dc-b73e-6546e1a3ae99"
 
 script:
   # Your test script goes here
