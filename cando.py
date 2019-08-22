@@ -13,11 +13,12 @@ from rdkit.Chem.Fingerprints import FingerprintMols
 from sklearn.metrics import mean_squared_error, pairwise_distances
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 from sklearn.ensemble import RandomForestClassifier
 from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import NearestNeighbors
+from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import pdist, squareform, cdist
 
 # proteins have ids and signatures (one row of cando matrix)
@@ -1266,7 +1267,10 @@ class CANDO(object):
                 return x.indications
             def h(x):
                 return x.id_
+
             sigs = np.array(list(map(f, cmpds)))
+            pca = PCA(n_components=10).fit(sigs)
+            sigs = pca.transform(sigs)
             inds = np.array(list(map(g, cmpds)))
             ids = np.array(list(map(h, cmpds)))
             sigs_train, sigs_test, inds_train, inds_test, ids_train, ids_test = train_test_split(sigs, inds, ids, test_size=0.20, random_state=1)
@@ -1332,61 +1336,6 @@ class CANDO(object):
         print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters),np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
 
-
-    # K Nearest Neighbor Benchmark
-    def benchmark_knn(self, n_neighbors, dist_metric='rmsd'):
-
-        def knn(cmpds):
-            def f(x):
-                return x.sig
-
-            data = np.array(list(map(f, cmpds)))
-            
-            # Dimensionality reduction first
-            # PCA
-            #pca = PCA(n_components=10).fit(data)
-            #data = pca.transform(data)
-            if dist_metric=='rmsd':
-                # RMSD
-                neigh = NearestNeighbors(algorithm='brute', n_neighbors=n_neighbors, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus).fit(data)
-            elif dist_metric in ['cosine']:
-                # cosine dist
-                neigh = NearestNeighbors(algorithm='brute', n_neighbors=n_neighbors, metric=dist_metric, n_jobs=self.ncpus).fit(data)
-            else:
-                print("Incorrect distance metric - {}".format(self.dist_metric))
-                sys.exit()
-            return data, neigh
-
-
-        # Calculate the K neighest neighbors for all compound signatures
-        pca, knn = knn(self.compounds)
-
-        total_acc = 0.0
-        total_count = 0
-        ind_accs = []
-
-        # Calculate the benchmark accuracy by 
-        # mimicking classic benchmark -- leave one out
-        # and recapture at least one for each indication-drug pair
-        for ind in self.indications:
-            if len(ind.compounds) < 2:
-                continue
-            ind_acc = 0.0
-            ind_count = 0
-            for c in ind.compounds:
-                c_neighbors = knn.kneighbors([pca[c.index]], return_distance=False)
-                for c2 in ind.compounds:
-                    if c.index != c2.index and c2.index in c_neighbors:
-                        total_acc += 1.0
-                        ind_acc += 1.0
-                        break
-                ind_count += 1
-                total_count += 1
-            ind_accs.append(ind_acc / ind_count * 100.0)
-            print("{} - accuracy = {}".format(ind.name, ind_acc / ind_count * 100.0))
-
-        print("average accuracy = {}".format(np.mean(ind_accs)))
-        print("pairwise accuracy = {}".format(total_acc / total_count * 100.0))
 
     # create a random forest classifier for a specified indication or all inds (to benchmark)
     # predict (used w/ 'effect=' - indication or ADR) is a list of compounds to classify with the trained RF model
