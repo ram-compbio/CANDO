@@ -61,6 +61,7 @@ class Indication(object):
         # every associated compound from the mapping file
         self.compounds = []
         self.pathways = []
+        self.proteins = []
 
 class Pathway(object):
     def __init__(self, id_):
@@ -79,8 +80,8 @@ class ADR(object):
 # the compound mapping, and indication mapping files
 class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
-                 pathways='', pathway_quantifier='max', indication_pathways='', similarity=False,
-                 dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='', ncpus=1,
+                 pathways='', pathway_quantifier='max', indication_pathways='', indication_genes='',
+                 similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='', ncpus=1,
                  adr_map=''):
         self.c_map = c_map
         self.i_map = i_map
@@ -102,6 +103,7 @@ class CANDO(object):
         self.ncpus = int(ncpus)
         self.pathway_quantifier = pathway_quantifier
         self.indication_pathways = indication_pathways
+        self.indication_genes = indication_genes
         self.adr_map = adr_map
         self.adrs = []
 
@@ -262,6 +264,25 @@ class CANDO(object):
             if not indication_pathways:
                 self.quantify_pathways()
             print('Done reading pathways.')
+
+        if self.indication_genes:
+            print('Reading indication-gene associations...')
+            ind_genes = {}
+            with open(indication_genes, 'r') as igf:
+                for l in igf:
+                    ls = l.strip().split('\t')
+                    mesh = ls[0]
+                    genes = ls[1].split(";")
+                    for p in genes:
+                        try:
+                            pi = self.protein_id_to_index[p]
+                            pro = self.proteins[pi]
+                            ind = self.get_indication(mesh)
+                            ind.proteins.append(pro)
+                        except KeyError:
+                            #print('Could not find protein chain {} for indication {}'.format(p, mesh))
+                            pass
+
 
 
         if read_rmsds:
@@ -523,9 +544,11 @@ class CANDO(object):
 
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
-            distances = cdist(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()))
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+            #distances = cdist(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()))
         elif self.dist_metric in ['cosine','correlation','euclidean','cityblock']:
-            distances = cdist(ca, oa, self.dist_metric)
+            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
+            #distances = cdist(ca, oa, self.dist_metric)
         else:
             print("Incorrect distance metric - {}".format(self.dist_metric))
 
@@ -550,6 +573,79 @@ class CANDO(object):
         else:
             cmpd.similar_computed = True
             return cmpd.similar
+
+
+    # for a given list of compounds, generate the similar compounds based on rmsd of sigs
+    # this is pathways/genes for all intents and purposes
+    def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
+        ca = []
+        q = []
+        index = []
+        if proteins:
+            for pro in proteins:
+                index.append(self.protein_id_to_index[pro.id_])
+
+        for cmpd in cmpds:
+            # find index of query compound, collect signatures for both
+            c_sig = []
+            if proteins is None:
+                c_sig = cmpd.sig
+            elif proteins:
+                c_sig = [cmpd.sig[i] for i in index]
+            else:
+                if aux:
+                    c_sig = cmpd.aux_sig
+                else:
+                    c_sig = cmpd.sig
+            ca.append(c_sig)
+            q.append(cmpd.id_)
+
+            other_sigs = []
+            for ci in range(len(self.compounds)):
+                c = self.compounds[ci]
+                other = []
+                if proteins is None:
+                    other_sigs.append(c.sig)
+                elif proteins:
+                    other_sigs.append([c.sig[i] for i in index])
+                else:
+                    if aux:
+                        other_sigs.append(c.aux_sig)
+                    else:
+                        other_sigs.append(c.sig)
+            oa = np.array(other_sigs)
+        ca = np.asarray(ca)
+
+        # call cdist, speed up with custom RMSD function
+        if self.dist_metric == "rmsd":
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+            #distances = cdist(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()))
+        elif self.dist_metric in ['cosine','correlation','euclidean','cityblock']:
+            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
+            #distances = cdist(ca, oa, self.dist_metric)
+        else:
+            print("Incorrect distance metric - {}".format(self.dist_metric))
+
+        # step through the cdist list - add RMSDs to Compound.similar list
+        n = len(self.compounds)
+        for j in range(len(cmpds)):
+            cmpds[j].similar = []
+            for i in range(n):
+                c2 = self.compounds[i]
+                if i == q[j]:
+                    continue
+                d = distances[j][i]
+                cmpds[j].similar.append((c2, d))
+
+            if sort:
+                sorted_scores = sorted(cmpds[j].similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                cmpds[j].similar = sorted_scores
+                cmpds[j].similar_computed = True
+            else:
+                cmpds[j].similar_computed = True
+
+
+
 
     # use this method (instead of the 'compute_distance' boolean) in the event that you are
     # manipulating signatures or something but still need to compute the rmsds
@@ -734,6 +830,7 @@ class CANDO(object):
             effects = self.indications
 
         for effect in effects:
+            print(effect.id_)
             count = len(effect.compounds)
             if count < 2:
                 continue
@@ -762,19 +859,36 @@ class CANDO(object):
                     else:
                         self.quantify_pathways(indication=effect)
 
-            for c in effect.compounds:
-                if self.pathways:
-                    if self.indication_pathways:
-                        if self.pathway_quantifier == 'proteins':
-                            if not vs:
-                                print('Warning: protein list empty for {}, using all proteins'.format(c.name, effect.id_))
-                                self.generate_similar_sigs(c, sort=True, proteins=None, aux=True)
-                            else:
-                                self.generate_similar_sigs(c, sort=True, proteins=vs, aux=True)
+            # Indication2genes
+            # retrieve the appropriate protein indices here, should be
+            # incorporated as part of the ind object during file reading
+            dg = []
+            if self.indication_genes:
+                for p in effect.proteins:
+                    if p not in dg:
+                        dg.append(p)
+
+            c = effect.compounds
+            if self.pathways:
+                if self.indication_pathways:
+                    if self.pathway_quantifier == 'proteins':
+                        if not vs:
+                            print('Warning: protein list empty for {}, using all proteins'.format(effect.id_))
+                            self.generate_some_similar_sigs(c, sort=True, proteins=None, aux=True)
                         else:
-                            self.generate_similar_sigs(c, sort=True, aux=True)
-                # call c.generate_similar_sigs()
-                # use the proteins/pathways specified above
+                            self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
+                    else:
+                        self.generate_some_similar_sigs(c, sort=True, aux=True)
+            elif self.indication_genes:
+                if len(dg) < 2:
+                    self.generate_some_similar_sigs(c, sort=True, proteins=None)
+                else:
+                    self.generate_some_similar_sigs(c, sort=True, proteins=dg)
+            # call c.generate_similar_sigs()
+            # use the proteins/pathways specified above
+
+
+            for c in effect.compounds:
                 for cs in c.similar:
                     if adrs:
                         if effect in cs[0].adrs:
@@ -1523,6 +1637,8 @@ class CANDO(object):
                 continue
             if self.pathways:
                 self.generate_similar_sigs(c, aux=True, sort=True)
+            elif self.indication_genes:
+                self.generate_similar_sigs(c, sort=True)
             else:
                 self.generate_similar_sigs(c, sort=True)
 
