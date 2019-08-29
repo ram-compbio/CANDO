@@ -1,4 +1,4 @@
-import os, sys, requests, random, time, operator, math, io
+import os, sys, requests, random, time, operator, math, io, copy
 from math import sqrt
 import progressbar
 import gzip, shutil
@@ -578,13 +578,30 @@ class CANDO(object):
     # for a given list of compounds, generate the similar compounds based on rmsd of sigs
     # this is pathways/genes for all intents and purposes
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
-        ca = []
-        q = []
-        index = []
-        if proteins:
-            for pro in proteins:
-                index.append(self.protein_id_to_index[pro.id_])
-
+        #ca = []
+        #q = []
+        #index = []
+        
+        q = [cmpd.id_ for cmpd in cmpds]
+        
+        if proteins is None:
+            ca = [cmpd.sig for cmpd in cmpds]
+            oa = [cmpd.sig for cmpd in self.compounds]
+        elif proteins:
+            index = [self.protein_id_to_index[pro.id_] for pro in proteins]
+            ca = [[cmpd.sig[i] for i in index] for cmpd in cmpds]
+            oa = [[cmpd.sig[i] for i in index] for cmpd in self.compounds]
+        else:
+            if aux:
+                ca = [cmpd.aux_sig for cmpd in cmpds]
+                oa = [cmpd.aux_sig for cmpd in self.compounds]
+            else:
+                ca = [cmpd.sig for cmpd in cmpds]
+                oa = [cmpd.sig for cmpd in self.compounds]
+        ca = np.asarray(ca)
+        oa = np.asarray(oa)
+        
+        '''
         for cmpd in cmpds:
             # find index of query compound, collect signatures for both
             c_sig = []
@@ -599,23 +616,23 @@ class CANDO(object):
                     c_sig = cmpd.sig
             ca.append(c_sig)
             q.append(cmpd.id_)
-
-            other_sigs = []
-            for ci in range(len(self.compounds)):
-                c = self.compounds[ci]
-                other = []
-                if proteins is None:
-                    other_sigs.append(c.sig)
-                elif proteins:
-                    other_sigs.append([c.sig[i] for i in index])
-                else:
-                    if aux:
-                        other_sigs.append(c.aux_sig)
-                    else:
-                        other_sigs.append(c.sig)
-            oa = np.array(other_sigs)
         ca = np.asarray(ca)
 
+        other_sigs = []
+        for ci in range(len(self.compounds)):
+            c = self.compounds[ci]
+            other = []
+            if proteins is None:
+                other_sigs.append(c.sig)
+            elif proteins:
+                other_sigs.append([c.sig[i] for i in index])
+            else:
+                if aux:
+                    other_sigs.append(c.aux_sig)
+                else:
+                    other_sigs.append(c.sig)
+        oa = np.array(other_sigs)
+        ''' 
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
             distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
@@ -632,7 +649,8 @@ class CANDO(object):
             cmpds[j].similar = []
             for i in range(n):
                 c2 = self.compounds[i]
-                if i == q[j]:
+                id2 = c2.id_
+                if id2 == q[j]:
                     continue
                 d = distances[j][i]
                 cmpds[j].similar.append((c2, d))
@@ -643,8 +661,6 @@ class CANDO(object):
                 cmpds[j].similar_computed = True
             else:
                 cmpds[j].similar_computed = True
-
-
 
 
     # use this method (instead of the 'compute_distance' boolean) in the event that you are
@@ -1057,7 +1073,7 @@ class CANDO(object):
     # this function returns the filtered CANDO object in the event that you want to explore further
     def benchmark_associated(self, file_name='', SUM='', indications=[], continuous=False, ranking='geetika'):
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = self
+        cp = copy.copy(self)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
