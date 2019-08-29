@@ -845,6 +845,10 @@ class CANDO(object):
         else:
             effects = self.indications
 
+        # Open for write the PDBs per ind file 
+        if self.indication_genes:
+            o = open("{}-ind2genes.tsv".format(filename),'w')
+
         for effect in effects:
             print(effect.id_)
             count = len(effect.compounds)
@@ -883,6 +887,12 @@ class CANDO(object):
                 for p in effect.proteins:
                     if p not in dg:
                         dg.append(p)
+            
+            # write the PDBs per ind
+            if len(dg < 2):
+                o.write("{}\t{}\t{}\n".format(effect.id_,len(self.proteins),[prot.id_ for prot in self.proteins]))
+            else:
+                o.write("{}\t{}\t{}\n".format(effect.id_,len(dg),dg))
 
             c = effect.compounds
             if self.pathways:
@@ -939,6 +949,9 @@ class CANDO(object):
                     s.append(str(int(rank)))
                     ss.append(s)
                     break
+        # Close PDB list per ind file
+        o.close()
+
         self.accuracies = effect_dct
         if adrs:
             final_accs = self.results_analysed(ra_named, metrics, adrs=True)
