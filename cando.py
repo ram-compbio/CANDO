@@ -847,7 +847,7 @@ class CANDO(object):
 
         # Open for write the PDBs per ind file 
         if self.indication_genes:
-            o = open("{}-ind2genes.tsv".format(filename),'w')
+            o = open("{}-ind2genes.tsv".format(file_name),'w')
 
         for effect in effects:
             print(effect.id_)
@@ -889,7 +889,7 @@ class CANDO(object):
                         dg.append(p)
             
             # write the PDBs per ind
-            if len(dg < 2):
+            if len(dg) < 2:
                 o.write("{}\t{}\t{}\n".format(effect.id_,len(self.proteins),[prot.id_ for prot in self.proteins]))
             else:
                 o.write("{}\t{}\t{}\n".format(effect.id_,len(dg),dg))
