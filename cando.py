@@ -55,8 +55,8 @@ class Compound(object):
 
 # indications have mesh ids and names ('hypertension')
 class Indication(object):
-    def __init__(self, mesh, name):
-        self.id_ = mesh
+    def __init__(self, ind_id, name):
+        self.id_ = ind_id
         self.name = name
         # every associated compound from the mapping file
         self.compounds = []
@@ -91,7 +91,7 @@ class CANDO(object):
         self.protein_id_to_index = {}
         self.compounds = []
         self.indications = []
-        self.indication_meshes = []
+        self.indication_ids = []
         self.pathways = []
         self.accuracies = {}
         self.compute_distance = compute_distance
@@ -152,17 +152,17 @@ class CANDO(object):
                 c_name = ls[0]
                 c_id = int(ls[1])
                 i_name = ls[2]
-                mesh = ls[3]
+                ind_id = ls[3]
                 cm = self.get_compound(c_id)
                 if cm:
-                    if mesh in self.indication_meshes:
-                        ind = self.get_indication(mesh)
+                    if ind_id in self.indication_ids:
+                        ind = self.get_indication(ind_id)
                         ind.compounds.append(cm)
                     else:
-                        ind = Indication(mesh, i_name)
+                        ind = Indication(ind_id, i_name)
                         ind.compounds.append(cm)
                         self.indications.append(ind)
-                        self.indication_meshes.append(ind.id_)
+                        self.indication_ids.append(ind.id_)
                     cm.add_indication(ind)
 
         # add proteins, add signatures and such to compounds
@@ -223,8 +223,8 @@ class CANDO(object):
                     for l in ipf:
                         ls = l.strip().split('\t')
                         pw = ls[0]
-                        meshes = ls[1:]
-                        path_ind[pw] = meshes
+                        ind_ids = ls[1:]
+                        path_ind[pw] = ind_ids
 
             with open(pathways, 'r') as pf:
                 for l in pf:
@@ -247,12 +247,12 @@ class CANDO(object):
 
                     if self.indication_pathways:
                         try:
-                            meshes = path_ind[pw]
-                            for mesh in meshes:
+                            ind_ids = path_ind[pw]
+                            for ind_id in ind_ids:
                                 try:
-                                    ind = self.get_indication(mesh)
+                                    ind = self.get_indication(ind_id)
                                 except LookupError:
-                                    # print('Could not find indication {}'.format(mesh))
+                                    # print('Could not find indication {}'.format(ind_id))
                                     # this disease is not present in the platform
                                     continue
                                 PW.indications.append(ind)
@@ -271,16 +271,16 @@ class CANDO(object):
             with open(indication_genes, 'r') as igf:
                 for l in igf:
                     ls = l.strip().split('\t')
-                    mesh = ls[0]
+                    ind_id = ls[0]
                     genes = ls[1].split(";")
                     for p in genes:
                         try:
                             pi = self.protein_id_to_index[p]
                             pro = self.proteins[pi]
-                            ind = self.get_indication(mesh)
+                            ind = self.get_indication(ind_id)
                             ind.proteins.append(pro)
                         except KeyError:
-                            #print('Could not find protein chain {} for indication {}'.format(p, mesh))
+                            #print('Could not find protein chain {} for indication {}'.format(p, ind_id))
                             pass
 
 
@@ -459,9 +459,9 @@ class CANDO(object):
         print("{0} not in {1}".format(id_, self.c_map))
         return None
 
-    def get_indication(self, mesh):
+    def get_indication(self, ind_id):
         for i in self.indications:
-            if i.id_ == mesh:
+            if i.id_ == ind_id:
                 return i
         raise LookupError
 
@@ -1125,8 +1125,8 @@ class CANDO(object):
         cp.benchmark_classic(file_name, SUM, bottom=True)
         return cp
 
-    def benchmark_indication(self, n, mesh):
-        ind = self.get_indication(mesh)
+    def benchmark_indication(self, n, ind_id):
+        ind = self.get_indication(ind_id)
         if len(ind.compounds) < 2:
             print("Sorry, there are not at least two compounds for {}".format(ind.name))
             return
@@ -1644,68 +1644,90 @@ class CANDO(object):
 
 
     # this function is an extension of canpredict - basically, give it a
-    # mesh id and for each of the associated compounds, it will generate
+    # ind_id id and for each of the associated compounds, it will generate
     # the similar compounds (based on rmsd) and add them to a dictionary
     # with a value of how many times it shows up (enrichment). If a
     # compound not approved for the indication of interest keeps showing
     # up, that means it is similar in signature to the drugs that are
     # ALREADY approved for the indication, so it may be a target for repurposing.
     # Control how many similar compounds to consider with the argument 'n'.
-    def canpredict_compounds(self, mesh, n=10, topN=10, keep_approved=False):
-        i = self.indication_meshes.index(mesh)
-        ind = self.indications[i]
-        print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
+    # Use ind_id=None to find greatest score sum across all proteins (sum_scores must be True)
+    def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
+        if ind_id:
+            i = self.indication_ids.index(ind_id)
+            ind = self.indications[i]
+            print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
+        else:
+            print("Finding compounds with greatest summed scores in {}...".format(self.matrix))
 
-        if self.pathways:
-            if self.indication_pathways:
-                self.quantify_pathways(ind)
-            else:
-                self.quantify_pathways()
-        for c in ind.compounds:
-            if c.similar_computed:
-                continue
+        if not sum_scores:
             if self.pathways:
-                self.generate_similar_sigs(c, aux=True, sort=True)
-            elif self.indication_genes:
-                self.generate_similar_sigs(c, sort=True)
-            else:
-                self.generate_similar_sigs(c, sort=True)
-
-        c_dct = {}
-        for c in ind.compounds:
-            for c2_i in range(n):
-                c2 = c.similar[c2_i]
-                if c2[1] == 0.0:
+                if self.indication_pathways:
+                    self.quantify_pathways(ind)
+                else:
+                    self.quantify_pathways()
+            for c in ind.compounds:
+                if c.similar_computed:
                     continue
-                if ind in c2[0].indications:
-                    already_approved = True
+                if self.pathways:
+                    self.generate_similar_sigs(c, aux=True, sort=True)
+                elif self.indication_genes:
+                    self.generate_similar_sigs(c, sort=True, proteins=ind.proteins)
                 else:
-                    already_approved = False
-                k = c2[0].id_
-                if k not in c_dct:
-                    c_dct[k] = [1, already_approved]
+                    self.generate_similar_sigs(c, sort=True)
+        if not sum_scores:
+            c_dct = {}
+            for c in ind.compounds:
+                for c2_i in range(n):
+                    c2 = c.similar[c2_i]
+                    if c2[1] == 0.0:
+                        continue
+                    already_approved = ind in c2[0].indications
+                    k = c2[0].id_
+                    if k not in c_dct:
+                        c_dct[k] = [1, already_approved]
+                    else:
+                        c_dct[k][0] += 1
+        else:
+            c_dct = {}
+            if self.indication_genes and ind_id:
+                indices = []
+                for p in ind.proteins:
+                    indices.append(self.protein_id_to_index[p.id_])
+            else:
+                indices = range(len(self.proteins))
+            for c in self.compounds:
+                ss = 0.0
+                for pi in indices:
+                    ss += c.sig[pi]
+                if ind_id:
+                    already_approved = ind in c.indications
                 else:
-                    c_dct[k][0] += 1
+                    already_approved = False  # Not relevant since there is no indication
+                c_dct[c.id_] = [ss, already_approved]
+
         sorted_x = sorted(c_dct.items(), key=lambda x:x[1][0])[::-1]
-        print("Generating top {} compound predictions...\n".format(topN))
+        print("Generating top {} compound predictions...\n".format(topX))
         if not keep_approved:
             i = 0
             print('rank\tscore\tid\tname')
             for p in enumerate(sorted_x):
-                if i >= topN and topN != -1:
+                if i >= topX and topX != -1:
                     break
                 if p[1][1][1]:
                     continue
                 else:
-                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
+                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
+                                                  self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
                     i+=1
         else:
             i = 0
             print('rank\tscore\tapproved\tid\tname')
             for p in enumerate(sorted_x):
-                if i >= topN and topN != -1:
+                if i >= topX and topX != -1:
                     break
-                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1], self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
+                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
+                                                    self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
                 i+=1
         print('\n')
         #return sorted_x
@@ -1729,8 +1751,8 @@ class CANDO(object):
                 else:
                     i_dct[ind] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1),reverse=True)
-        print("rank\tscore\tmesh_id    \tindication")
-        #print("rank\tscore\tindication\tMeSH")
+        print("rank\tscore\tind_id    \tindication")
+        #print("rank\tscore\tindication\tind_id")
         for i in range(topN):
             print("{}\t{}\t{}\t{}".format(i+1,sorted_x[i][1],sorted_x[i][0].id_,sorted_x[i][0].name))
             #print("{}\t{}\t{}\t{}".format(i+1,sorted_x[i][1],sorted_x[i][0].name,sorted_x[i][0].id_))
