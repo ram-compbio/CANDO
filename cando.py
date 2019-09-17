@@ -21,39 +21,63 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import pdist, squareform, cdist
 
-# proteins have ids and signatures (one row of cando matrix)
+## An object to represent a protein.
+#
 class Protein(object):
     def __init__(self, id_, sig):
+        ## @var id_ 
+        #   String representing the PDB 
+        #   or UniProt ID for the given protein
         self.id_ = id_
+        ## @var sig 
+        #   List of scores representing each drug
+        #   interaction with the given protein
         self.sig = sig
+        ## @var pathways 
+        #   List of pathways in which the 
+        #   given protein is involved.
         self.pathways = []
 
-# compounds have names ('caffeine'), ids (cando id from mapping file 1, 10, 100, ...),
-#  and indexes (the order in which they appear from the mapping file 1, 2, 3, ...)
+## An object to represent a compound. 
 class Compound(object):
     def __init__(self, name, id_, index):
+        ## @var name 
+        # (e.g., 'caffeine')
         self.name = name
+        ## @var id_
+        # cando id from mapping file (e.g., 1, 10, 100, ...)
         self.id_ = id_
+        ## @var index
+        # the order in which they appear from the mapping file (e.g, 1, 2, 3, ...)
         self.index = index
-
+        ## @var sig
         # sig is basically a column of the matrix
         self.sig = []
+        ## @var aux_sig
         # potentially temporary signature for things like pathways, where "c.sig" needs to be preserved
         self.aux_sig = []
+        ## @var indications
         # this is every indication it is associated with from the
         # mapping file
         self.indications = []
-        # this is the ranked list of compounds with the most
-        # similar interaction signatures
+        ## @var similar
+        # (list of tuples):
+        # this is the ranked list of compounds with the most similar interaction signatures
         self.similar = []
+        ## @var similar_computed
+        # 
         self.similar_computed = False
+        ## @var cluster_id
+        # 
         self.cluster_id = []
+        ## @var adrs
+        # 
         self.adrs = []
 
     def add_indication(self, ind):
         self.indications.append(ind)
 
-# indications have mesh ids and names ('hypertension')
+## An object to represent an indication
 class Indication(object):
     def __init__(self, ind_id, name):
         self.id_ = ind_id
@@ -63,47 +87,92 @@ class Indication(object):
         self.pathways = []
         self.proteins = []
 
+## An object to represent a pathway
+# 
 class Pathway(object):
     def __init__(self, id_):
         self.proteins = []
         self.id_ = id_
+        ## @var indications
         # in case we ever want to incorporate pathway-disease associations
         self.indications = []
 
+## An object to represent an adverse reaction
 class ADR(object):
     def __init__(self, id_, name):
         self.id_ = id_
         self.name = name
         self.compounds = []
 
-# this is the highest level object - to instantiate you need the cando matrix,
-# the compound mapping, and indication mapping files
+## CANDO object    
+# This is the highest level object
+#
 class CANDO(object):
+    ## To instantiate you need the cando matrix (matrix),
+    # the compound mapping (c_map), and indication mapping files (i_map)
+    #
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_genes='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='', ncpus=1,
                  adr_map=''):
+        ## @var c_map 
+        # compound mapping file
         self.c_map = c_map
+        ## @var i_map 
+        # indication mapping file
         self.i_map = i_map
+        ## @var matrix 
+        # cando matrix file
         self.matrix = matrix
+        ## @var protein_set
+        #
         self.protein_set = protein_set
         self.proteins = []
         self.protein_id_to_index = {}
         self.compounds = []
         self.indications = []
         self.indication_ids = []
+        ## @var pathways
+        #
         self.pathways = []
         self.accuracies = {}
+        ## @var compute_distance
+        #
         self.compute_distance = compute_distance
         self.clusters = {}
+        ## @var rm_zeros
+        #
+        self.rm_zeros = rm_zeros
+        ## @var rm_compounds
+        #
+        self.rm_compounds = rm_compounds
         self.rm_cmpds = []
+        ## @var save_rmsds
+        #
+        self.save_rmsds = save_rmsds
+        ## @var read_rmsds
+        #
         self.read_rmsds = read_rmsds
+        ## @var similarity
+        #
         self.similarity = similarity
+        ## @var dist_metric
+        #
         self.dist_metric = dist_metric
+        ## @var ncpus
+        #
         self.ncpus = int(ncpus)
+        ## @var pathway_quantifier
+        #
         self.pathway_quantifier = pathway_quantifier
+        ## @var indication_pathways
+        #
         self.indication_pathways = indication_pathways
+        ## @var indication_genes
+        #
         self.indication_genes = indication_genes
+        ## @var adr_map
+        #
         self.adr_map = adr_map
         self.adrs = []
 
@@ -378,7 +447,7 @@ class CANDO(object):
                 print('Done computing {} distances.'.format(self.dist_metric))
 
 
-            if save_rmsds:
+            if self.save_rmsds:
                 def rmsds_to_str(cmpd, ci):
                     o = ''
                     for si in range(len(cmpd.similar)):
@@ -392,7 +461,7 @@ class CANDO(object):
                     o = o[:-1] + '\n'
                     return o
 
-                with open(save_rmsds, 'w') as srf:
+                with open(self.save_rmsds, 'w') as srf:
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
                         srf.write(rmsds_to_str(c, ci))
@@ -405,7 +474,7 @@ class CANDO(object):
                 c.similar = sorted_scores
                 c.similar_computed = True
 
-        if rm_zeros:
+        if self.rm_zeros:
             print('Removing compounds with all-zero signatures...')
             def check_sig(sig):
                 for s in sig:
@@ -419,7 +488,7 @@ class CANDO(object):
             self.compounds = non_zero_compounds
             print('Done removing compounds with all-zero signatures.')
 
-        if rm_zeros or rm_compounds:
+        if self.rm_zeros or self.rm_compounds:
             print('Filtering indication mapping...')
             for ind in self.indications:
                 good_cmpds = []
@@ -1676,6 +1745,7 @@ class CANDO(object):
                 else:
                     self.generate_similar_sigs(c, sort=True)
         if not sum_scores:
+            print("Generating compound predictions using top {} most similar compounds...\n".format(n))
             c_dct = {}
             for c in ind.compounds:
                 for c2_i in range(n):
@@ -1707,7 +1777,7 @@ class CANDO(object):
                 c_dct[c.id_] = [ss, already_approved]
 
         sorted_x = sorted(c_dct.items(), key=lambda x:x[1][0])[::-1]
-        print("Generating top {} compound predictions...\n".format(topX))
+        print("Printing top {} compounds...\n".format(topX))
         if not keep_approved:
             i = 0
             print('rank\tscore\tid\tname')
@@ -1733,7 +1803,7 @@ class CANDO(object):
         #return sorted_x
 
 
-    def canpredict_indications(self, new_sig='', new_name='', cando_cmpd='', n='10', topN=10):
+    def canpredict_indications(self, new_sig='', new_name='', cando_cmpd='', n='10', topX=10):
         if new_sig != '':
             cmpd = self.add_cmpd(new_sig, new_name)
         elif cando_cmpd != '':
@@ -1742,7 +1812,7 @@ class CANDO(object):
             print("Compound has id {} and index {}".format(cmpd.id_,cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
-        print("Generating top {} indication predictions...\n".format(topN))
+        print("Generating indication predictions using top{} most similar compounds...".format(n))
         i_dct = {}
         for c in cmpd.similar[1:n+1]:
             for ind in c[0].indications:
@@ -1751,9 +1821,10 @@ class CANDO(object):
                 else:
                     i_dct[ind] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1),reverse=True)
+        print("Printing top {} indications...\n".format(topX))
         print("rank\tscore\tind_id    \tindication")
         #print("rank\tscore\tindication\tind_id")
-        for i in range(topN):
+        for i in range(topX):
             print("{}\t{}\t{}\t{}".format(i+1,sorted_x[i][1],sorted_x[i][0].id_,sorted_x[i][0].name))
             #print("{}\t{}\t{}\t{}".format(i+1,sorted_x[i][1],sorted_x[i][0].name,sorted_x[i][0].id_))
         print('')
@@ -2467,46 +2538,4 @@ def dl_file(url,out_file):
             bar.update(i)
             i+=1
         bar.finish()
-
-
-if __name__ == '__main__':
-    c_map1 = 'mappings/compound_column_cando_id_mapping.tab'
-    ind1 = 'mappings/compound_indication_mapping.tab.filtered.v0'
-    matrix_ob_mult = 'matrices/ob_mult_interact_real.tsv'
-    matrix1 = 'matrices/all_new.protein_compound_interact_real.tsv'
-    mat_path = 'matrices/matrices_pathway_ob_mult.tsv'
-    matrix = 'matrices/protein_drugs_interact_real.tsv'
-    humanCoach = 'will-human_prots/coach.tsv'
-
-    cv2 = 'mappings/v2/compound_mapping-approved.v2.tsv'
-    iv2 = 'mappings/v2/ctd_2_drugbank.tsv'
-    pd2 = 'mappings/v2/pathway_to_mesh_CTD_v2.tsv'
-    ptw2 = 'mappings/v2/human_pathways_pdbs_UniProt2Reactome'
-    nsc = 'mappings/v2/nsclc_pathways.tsv'
-
-
-    p = '/projects/academic/rams/wmangion/'
-    cm = p + cv2
-    im = p + iv2
-    mat = p + matrix
-    pdd = p + pd2
-    ptw = p + ptw2
-    pnsc = p + nsc
-
-    jim1 = p + c_map1
-    jim2 = p + ind1
-    jim3 = '/projects/academic/rams/jcschule/cando/analysis/rdkit/tanimoto/ecfp4_2048bits.data'
-
-    #cando = CANDO(c_map1, ind1, read_rmsds='rmsds/ob_mult_rmsds', adr_map='network/adrs/drugbank_2_sider-offsides.pt.tsv')
-    #cp = cando.canpredict('MESH:D014376', n=25)
-    #cando.print_canpredict(cp)
-
-    cando = CANDO(cv2, iv2, matrix=humanCoach, compute_distance=False)
-    e = cando.get_indication('MESH:D015746')
-    gef = cando.get_compound(204)
-    gef2 = cando.get_compound(1500)
-    cando.ml(method='svm', benchmark=True, seed=50, out='test_svm')
-
-
-
 
