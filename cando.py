@@ -78,20 +78,34 @@ class Compound(object):
         self.indications.append(ind)
 
 ## An object to represent an indication
+#
 class Indication(object):
     def __init__(self, ind_id, name):
+        ## @var id_
+        # (string) MeSH or OMIM ID for the indication from the mapping file
         self.id_ = ind_id
+        ## @var name
+        # (string) Name for the indication from the mapping file
         self.name = name
-        # every associated compound from the mapping file
+        ## @var compounds
+        # (list) Every associated compound object from the mapping file
         self.compounds = []
+        ## @var pathways
+        # (list) Every pathway associated to the indication from the mapping file
         self.pathways = []
+        ## @var proteins
+        # (list) Every protein associated to the indication form the mapping file
         self.proteins = []
 
 ## An object to represent a pathway
 # 
 class Pathway(object):
     def __init__(self, id_):
+        ## @var proteins
+        #
         self.proteins = []
+        ## @var id_
+        # 
         self.id_ = id_
         ## @var indications
         # in case we ever want to incorporate pathway-disease associations
@@ -100,12 +114,17 @@ class Pathway(object):
 ## An object to represent an adverse reaction
 class ADR(object):
     def __init__(self, id_, name):
+        ## @var id_
+        #
         self.id_ = id_
+        ## @var name
+        #
         self.name = name
+        ## @var compounds
+        #
         self.compounds = []
 
 ## CANDO object    
-# This is the highest level object
 #
 class CANDO(object):
     ## To instantiate you need the cando matrix (matrix),
@@ -116,22 +135,17 @@ class CANDO(object):
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='', ncpus=1,
                  adr_map=''):
         ## @var c_map 
-        # compound mapping file
+        # Path to the compound mapping file (relative or absolute)
         self.c_map = c_map
         ## @var i_map 
-        # indication mapping file
+        # Path to the indication mapping file (relative or absolute)
         self.i_map = i_map
         ## @var matrix 
-        # cando matrix file
+        # Path to the cando matrix file (relative or absolute)
         self.matrix = matrix
         ## @var protein_set
-        #
+        # Path to protein subset file (relative or absolute) 
         self.protein_set = protein_set
-        self.proteins = []
-        self.protein_id_to_index = {}
-        self.compounds = []
-        self.indications = []
-        self.indication_ids = []
         ## @var pathways
         #
         self.pathways = []
@@ -174,6 +188,12 @@ class CANDO(object):
         ## @var adr_map
         #
         self.adr_map = adr_map
+
+        self.proteins = []
+        self.protein_id_to_index = {}
+        self.compounds = []
+        self.indications = []
+        self.indication_ids = []
         self.adrs = []
 
         self.short_matrix_path = self.matrix.split('/')[-1]
@@ -1745,7 +1765,7 @@ class CANDO(object):
                 else:
                     self.generate_similar_sigs(c, sort=True)
         if not sum_scores:
-            print("Generating compound predictions using top {} most similar compounds...\n".format(n))
+            print("Generating compound predictions using top{} most similar compounds...\n".format(n))
             c_dct = {}
             for c in ind.compounds:
                 for c2_i in range(n):
@@ -1777,7 +1797,7 @@ class CANDO(object):
                 c_dct[c.id_] = [ss, already_approved]
 
         sorted_x = sorted(c_dct.items(), key=lambda x:x[1][0])[::-1]
-        print("Printing top {} compounds...\n".format(topX))
+        print("Printing the {} highest predicted compounds...\n".format(topX))
         if not keep_approved:
             i = 0
             print('rank\tscore\tid\tname')
@@ -1821,7 +1841,7 @@ class CANDO(object):
                 else:
                     i_dct[ind] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1),reverse=True)
-        print("Printing top {} indications...\n".format(topX))
+        print("Printing the {} highest predicted indications...\n".format(topX))
         print("rank\tscore\tind_id    \tindication")
         #print("rank\tscore\tindication\tind_id")
         for i in range(topX):
@@ -1840,7 +1860,7 @@ class CANDO(object):
             print("Compound has id {} and index {}".format(cmpd.id_,cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
-        print("Generating {} most similar compound predictions...\n".format(n))
+        print("Printing top{} most similar compounds...\n".format(n))
         print("rank\tdist\tid\tname")
         #for c in cmpd.similar[1:n+1]:
         for i in range(1,n+1):
@@ -2365,16 +2385,13 @@ def tanimoto_dense(list1, list2):
 
 
 def get_fp_lig(fp):
-    print('Downloading ligand fingerprints for {}...'.format(fp))
-    #if not os.path.exists('v2_0'):
-    #    os.mkdir('v2_0')
-    #if not os.path.exists('v2_0/ligands_fps'):
-    #    os.mkdir('v2_0/ligands_fps')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/ligands_fps/{}.tsv'.format(fp)
-    pre = os.path.dirname(__file__)
     out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre,fp)
-    dl_file(url,out_file)
-    print("Ligand fingerprints downloaded.")
+    if not os.path.exists(out_file):
+        print('Downloading ligand fingerprints for {}...'.format(fp))
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/ligands_fps/{}.tsv'.format(fp)
+        pre = os.path.dirname(__file__)
+        dl_file(url,out_file)
+        print("Ligand fingerprints downloaded.")
 
 
 def get_v2_0():
@@ -2432,20 +2449,18 @@ def get_tutorial():
     if not os.path.exists('./examples/8100.pdb'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/8100.pdb'
         dl_file(url,'./examples/8100.pdb')
-    print('All data for tutorial downloaded.')
     # Pathways
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-uniprot_set'
-    dl_file(url,'examples/example-uniprot_set')
+    dl_file(url,'./examples/example-uniprot_set')
+    print('All data for tutorial downloaded.')
 
 
 def get_test():
-    print('Downloading data for generate_matrix...')
+    print('Downloading data for test...')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpd_scores.tsv'
     dl_file(url,'test/test-cmpd_scores.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-prot_scores.tsv'
     dl_file(url,'test/test-prot_scores.tsv')
-    print('Done.\n')
-    print('Downloading data for benchmark_classic...')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpds.tsv'
     dl_file(url,'test/test-cmpds.tsv')
     with open('test/test-cmpds.tsv','r') as f:
@@ -2459,14 +2474,10 @@ def get_test():
     dl_dir(url,out,l)
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-inds.tsv'
     dl_file(url,'test/test-inds.tsv')
-    print('Done.\n')
-    print('Downloading data for generate_fp...')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/8100.pdb'
     dl_file(url,'test/8100.pdb')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpds_short.tsv'
     dl_file(url,'test/test-cmpds_short.tsv')
-    print('Done.\n')
-    print('Downloading data for pathways...')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-uniprot_set'
     dl_file(url,'test/test-uniprot_set')
     print('Done.\n')
@@ -2476,7 +2487,7 @@ def dl_dir(url,out,l):
     if not os.path.exists(out):
         os.makedirs(out)
     format_custom_text = progressbar.FormatCustomText(
-        'Downloading dir: %(f)s',
+        '%(f)s',
         dict(
             f='',
         ),
@@ -2507,9 +2518,10 @@ def dl_file(url,out_file):
         return
     elif not os.path.exists(os.path.dirname(out_file)):
         os.makedirs(os.path.dirname(out_file))
+    time.sleep(1)
     r = requests.get(url,stream=True)
     format_custom_text = progressbar.FormatCustomText(
-        'Downloading file: %(f)s',
+        '%(f)s',
         dict(
             f='',
         ),
