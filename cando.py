@@ -690,38 +690,6 @@ class CANDO(object):
         ca = np.asarray(ca)
         oa = np.asarray(oa)
         
-        '''
-        for cmpd in cmpds:
-            # find index of query compound, collect signatures for both
-            c_sig = []
-            if proteins is None:
-                c_sig = cmpd.sig
-            elif proteins:
-                c_sig = [cmpd.sig[i] for i in index]
-            else:
-                if aux:
-                    c_sig = cmpd.aux_sig
-                else:
-                    c_sig = cmpd.sig
-            ca.append(c_sig)
-            q.append(cmpd.id_)
-        ca = np.asarray(ca)
-
-        other_sigs = []
-        for ci in range(len(self.compounds)):
-            c = self.compounds[ci]
-            other = []
-            if proteins is None:
-                other_sigs.append(c.sig)
-            elif proteins:
-                other_sigs.append([c.sig[i] for i in index])
-            else:
-                if aux:
-                    other_sigs.append(c.aux_sig)
-                else:
-                    other_sigs.append(c.sig)
-        oa = np.array(other_sigs)
-        ''' 
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
             distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
@@ -2385,11 +2353,11 @@ def tanimoto_dense(list1, list2):
 
 
 def get_fp_lig(fp):
+    pre = os.path.dirname(__file__)
     out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre,fp)
     if not os.path.exists(out_file):
         print('Downloading ligand fingerprints for {}...'.format(fp))
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/ligands_fps/{}.tsv'.format(fp)
-        pre = os.path.dirname(__file__)
         dl_file(url,out_file)
         print("Ligand fingerprints downloaded.")
 
