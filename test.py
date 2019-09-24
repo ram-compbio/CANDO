@@ -48,9 +48,6 @@ print('\n')
 
 print("Test #5 - generate fingerprint, scores, and interaction signature for three old compounds and one new compound")
 print('-------')
-cnd.generate_scores(fp="rd_ecfp4",
-        cmpd_map="test-cmpds_short.tsv",
-        cmpd_dir=cmpd_dir,out_path=".",ncpus=ncpus)
 cnd.generate_scores(fp="ob_fp4",
         cmpd_pdb="8100.pdb",out_path=".")
 cnd.generate_scores(fp="rd_ecfp4",
