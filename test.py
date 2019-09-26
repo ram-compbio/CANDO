@@ -21,22 +21,21 @@ cnd.generate_matrix(matrix_file=matrix_file,
         ncpus=ncpus)
 print('\n')
 
-print("Test #2 - create CANDO object and run classic benchmark test")
+print("Test #2 - create CANDO object and run canbenchmark test")
 print('-------')
 cando = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, 
         compute_distance=True, ncpus=ncpus)
-cando.benchmark_classic('test', SUM='summary-test')
+cando.canbenchmark('test')
 print('\n')
 
-print("Test #3 - create CANDO object using cosine distance metric then run continuous and associated benchmark test with 'sort' ranking")
+print("Test #3 - create CANDO object using cosine distance metric then run continuous, bottom, and associated benchmark test with 'sort' ranking")
 print('-------')
 cando_cos = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, 
         compute_distance=True, dist_metric='cosine',
         ncpus=ncpus)
-cando_cos.benchmark_continuous('test_continuous', 
-        SUM='summary-test_continuous', ranking='sort')
-cando_cos.benchmark_associated('test_associated', 
-        SUM='summary-test_associated', ranking='sort')
+cando_cos.canbenchmark('test_continuous', continuous=True, ranking='sort')
+cando_cos.canbenchmark_bottom('test_bottom', ranking='sort')
+cando_cos.canbenchmark_associated('test_associated', ranking='sort')
 print('\n')
 
 print("Test #4 - canpredict_compounds()")

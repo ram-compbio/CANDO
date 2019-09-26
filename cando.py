@@ -624,8 +624,7 @@ class CANDO(object):
 
     def generate_similar_sigs(self, cmpd, sort=False, proteins=[], aux=False):
         """!
-        For a given compound, generate the similar compounds based on rmsd of sigs
-        this is canpredict for all intents and purposes
+        For a given compound, generate the similar compounds using distance of sigs.
 
         @param cmpd Compound object
         @param sort (bool) Sort the list of similar compounds 
@@ -669,7 +668,7 @@ class CANDO(object):
                 else:
                     other_sigs.append(c.sig)
         oa = np.array(other_sigs)
-
+        
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
             distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
@@ -688,6 +687,7 @@ class CANDO(object):
             d = distances[0][i]
             cmpd.similar.append((c2, d))
             n += 1
+        
 
         if sort:
             sorted_scores = sorted(cmpd.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
@@ -857,7 +857,7 @@ class CANDO(object):
                 c.aux_sig = pw_sig_all
 
 
-    def results_analysed(self, f, metrics, adrs=False):
+    def results_analysed(self, f, metrics, effect_type):
         """!
         Creates the results analysed named file for the benchmarking
 
@@ -867,10 +867,14 @@ class CANDO(object):
         """
         fo = open(f, 'w')
         effects = list(self.accuracies.keys())
-        if not adrs:
-            effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
-        else:
-            effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
+        # Write header
+        fo.write("{0}_id\tcmpds_per_{0}\ttop10\ttop25\ttop50\ttop100\ttopAll\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\t{0}_name\n".format(effect_type))
+        effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
+
+        #if not adrs:
+        #    effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
+        #else:
+        #    effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
         l = len(effects)
         final_accs = {}
         for m in metrics:
@@ -884,11 +888,11 @@ class CANDO(object):
                 fo.write("{}\t".format(y))
 
                 final_accs[m] += n / c / l
-            fo.write("|\t{}\n".format(effect.name))
+            fo.write("{}\n".format(effect.name))
         fo.close()
         return final_accs
 
-    def canbenchmark(self, file_name='', indications=[], continuous=False,
+    def canbenchmark(self, file_name, indications=[], continuous=False,
                           bottom=False, ranking='geetika', adrs=False):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
@@ -919,16 +923,16 @@ class CANDO(object):
             print("Directory 'raw_results' does not exist, creating directory")
             os.system('mkdir raw_results')
 
-        ra_named = 'results_analysed_named/results_analysed_named_' + file_name
-        ra = 'raw_results/raw_results_' + file_name
-        summ = 'summary_' + file_name
+        ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '.tsv'
+        ra = 'raw_results/raw_results_' + file_name + '.csv'
+        summ = 'summary_' + file_name + '.tsv'
         ra_out = open(ra, 'w')
 
         def effect_type():
             if adrs:
                 return 'ADR'
             else:
-                return 'Disease'
+                return 'disease'
 
         if bottom:
             def rank_compound(sims, r):
@@ -996,15 +1000,15 @@ class CANDO(object):
                        (9, int(x*50.0001)), (10, int(x*100.0001))]
 
         if continuous:
-            ra_out.write("Compound, {}, 0.1%({:.3f}), 0.25%({:.3f}), 0.5%({:.3f}), "
-                         "1%({:.3f}), 5%({:.3f}), 10%({:.3f}), 20%({:.3f}), 33%({:.3f}), "
-                         "50%({:.3f}), 100%({:.3f}), Value\n".format(effect_type(), metrics[0][1], metrics[1][1],
+            ra_out.write("compound_id,{}_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
+                         "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
+                         "50%({:.3f}),100%({:.3f}),value\n".format(effect_type(), metrics[0][1], metrics[1][1],
                                                                      metrics[2][1], metrics[3][1], metrics[4][1],
                                                                      metrics[5][1], metrics[6][1], metrics[7][1],
                                                                      metrics[8][1], metrics[9][1]))
         else:
-            ra_out.write("Compound, {}, Top10, Top25, Top50, Top100, "
-                         "TopAll, Top1%, Top5%, Top10%, Top50%, Top100%, Rank\n".format(effect_type()))
+            ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
+                         "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
 
         for effect in effects:
             count = len(effect.compounds)
@@ -1104,10 +1108,11 @@ class CANDO(object):
                     break
 
         self.accuracies = effect_dct
-        if adrs:
-            final_accs = self.results_analysed(ra_named, metrics, adrs=True)
-        else:
-            final_accs = self.results_analysed(ra_named, metrics, adrs=False)
+        final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        #if adrs:
+        #    final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        #else:
+        #    final_accs = self.results_analysed(ra_named, metrics, adrs=False, effect_type())
         ss = sorted(ss, key=lambda xx: int(xx[0]))
         top_pairwise = [0.0] * 10
         for s in ss:
@@ -1174,14 +1179,18 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-    def benchmark_associated(self, file_name='', indications=[], continuous=False, ranking='geetika'):
+    def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='geetika'):
         """!
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
         This function returns the filtered CANDO object in the event that you want to explore further.
 
+        @param file_name
+        @param indications
+        @param continuous
+        @param ranking
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = copy.copy(self)
+        cp = CANDO(self.c_map, self.i_map, self.matrix)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
@@ -1191,7 +1200,11 @@ class CANDO(object):
                         good_cs.append(c)
                         good_ids.append(c.id_)
         cp.compounds = good_cs
+                
+        print('Computing {} distances...'.format(self.dist_metric))
+
         for c in cp.compounds:
+            cp.generate_similar_sigs(c, sort=True)
             good_sims = []
             for s in c.similar:
                 if s[0].id_ not in good_ids:
@@ -1203,9 +1216,12 @@ class CANDO(object):
             c.similar = sorted_scores
             c.similar_computed = True
             c.similar_sorted = True
+        
+        print('Done computing {} distances.'.format(self.dist_metric))
+        
         cp.canbenchmark(file_name=file_name, indications=indications, continuous=continuous, ranking=ranking)
 
-    def benchmark_bottom(self, file_name='', indications=[]):
+    def canbenchmark_bottom(self, file_name, indications=[], ranking='geetika'):
         """!
         Benchmark the bottom similar compounds as a control.
 
@@ -1214,15 +1230,22 @@ class CANDO(object):
         @param indications
         """
         print("Making CANDO copy with reversed compound ordering")
-        cp = copy.copy(self)
+        cp = CANDO(self.c_map, self.i_map, self.matrix)
+        
+        print('Computing {} distances...'.format(self.dist_metric))
+        
         for ic in range(len(cp.compounds)):
+            cp.generate_similar_sigs(cp.compounds[ic], sort=True)
             sorted_scores = sorted(cp.compounds[ic].similar, key=lambda x: x[1])[::-1]
             cp.compounds[ic].similar = sorted_scores
             cp.compounds[ic].similar_computed = True
             cp.similar_sorted = True
-        cp.canbenchmark(file_name, indications=indications, bottom=True)
+        
+        print('Done computing {} distances.'.format(self.dist_metric))
+        
+        cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
-    def benchmark_cluster(self, n_clusters):
+    def canbenchmark_cluster(self, n_clusters):
         """!
         Benchmark using k-means clustering
 
@@ -1394,9 +1417,9 @@ class CANDO(object):
                 effects = sorted(self.indications, key=lambda x: (len(x.compounds), x.id_))[::-1]
             if out:
                 frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w')
-                frr.write('Compound, Effect, Class\n')
+                frr.write('Compound,Effect,Class\n')
                 fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w')
-                fsum = open('SUMMARY_ml_{}'.format(out), 'w')
+                fsum = open('summary_ml_{}'.format(out), 'w')
         else:
             if len(effect.compounds) < 1:
                 print('No compounds associated with this indication, quitting.')
@@ -1420,7 +1443,7 @@ class CANDO(object):
                 else:
                     tp_fn[1] += 1
                 if benchmark and out:
-                    frr.write('{}, {}, {}\n'.format(c.id_, e.id_, pred[0]))
+                    frr.write('{},{},{}\n'.format(c.id_, e.id_, pred[0]))
 
             # predict whether query drugs are associated with this indication
             if predict:
@@ -2240,7 +2263,7 @@ def get_tutorial():
     # Protein scores
     if not os.path.exists('./examples/example-prots_scores.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-prots_scores.tsv'
-        dl_file(url, )
+        dl_file(url, './examples/example-prots_scores')
 
     if not os.path.exists('v2_0'):
         os.mkdir('v2_0')
