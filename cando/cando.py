@@ -1692,6 +1692,8 @@ class CANDO(object):
         for c3 in cnd.compounds:
             ranks_dct = cid_to_ranks[c3.id_]
             for c4 in cnd.compounds:
+                if c4.id_ == c3.id_:
+                    continue
                 ranks = ranks_dct[c4.id_]
                 if method == 'min':
                     c3.similar.append((c4, float(min(ranks))))
@@ -1772,7 +1774,12 @@ class Matrix(object):
     Convert between fpt and tsv, as well as distance to similarity (and vice versa)
     """
     def __init__(self, matrix_file, rmsd=False, convert_to_tsv=False):
+        ## @var str matrix_file
+        # path to file with interaction scores
         self.matrix_file = matrix_file
+        ## @var bool rmsd
+        # if the matrix_file is an rmsd file
+        ## @var bool compute_to_tsv
         self.proteins = []
         self.values = []
 
@@ -1855,7 +1862,8 @@ class Matrix(object):
                 elif metric == 'sum':
                     v = v1 + v2
                 else:
-                    v = v1 * v2
+                    print('Please enter a valid metric ("mult" or "sum").')
+                    quit()
                 vs.append(v)
             out.append(vs)
 
@@ -1867,9 +1875,11 @@ class Matrix(object):
 
     def convert(self, out_file):
         """!
-        Convert old fpt format to tsv format Matrix
+        Convert similarity matrix to distance matrix or vice versa. The
+        first value in the matrix will determine the type of conversion
+        (0.0 means distance to similarity, 1.0 means similarity to distance).
 
-        @param out_file Name of the file to which write the tsv matrix.
+        @param out_file Name of the file to which write the converted matrix.
         """
         if self.values[0][0] == 0.0:
             metric = 'd'
