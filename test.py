@@ -33,9 +33,11 @@ print('-------')
 cando_cos = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, 
         compute_distance=True, dist_metric='cosine',
         ncpus=ncpus)
-cando_cos.canbenchmark('test_continuous', continuous=True, ranking='sort')
-cando_cos.canbenchmark_bottom('test_bottom', ranking='sort')
-cando_cos.canbenchmark_associated('test_associated', ranking='sort')
+cando_cos.canbenchmark('test_continuous', continuous=True, ranking='ordinal')
+cando_cos.canbenchmark_associated('test_associated', ranking='modified')
+cando_cos.canbenchmark_bottom('test_bottom', ranking='standard')
+cando_cos.canbenchmark_bottom('test_bottom', ranking='modified')
+cando_cos.canbenchmark_bottom('test_bottom', ranking='ordinal')
 print('\n')
 
 print("Test #4 - canpredict_compounds()")
@@ -52,7 +54,7 @@ cnd.generate_scores(fp="ob_fp4",
 cnd.generate_scores(fp="rd_ecfp4",
         cmpd_pdb="8100.pdb",out_path=".")
 cnd.generate_signature(cmpd_scores="rd_ecfp4/8100_scores.tsv",
-        prot_scores=prot_scores, ncpus=ncpus)
+        prot_scores=prot_scores)
 print('\n')
 
 print("Test #6 - Most similar compounds to new compound and CANDO compound signatures")
@@ -88,10 +90,10 @@ print('\n')
 
 print("Test #10 - read .fpt matrices, convert_to_tsv, then fuse with 'mult'")
 print('-------')
-cnd.Matrix(t64x, convert_to_tsv=True)
-cnd.Matrix(v64x, convert_to_tsv=True)
-toy64 = cnd.CANDO(tc, ti, matrix='matrices/toy64x.tsv', compute_distance=True, save_rmsds='toy64x_rmsds.tsv')
-vina64 = cnd.CANDO(tc, ti, matrix='matrices/vina64x.tsv', compute_distance=True)
+cnd.Matrix("toy64x.fpt", convert_to_tsv=True)
+cnd.Matrix("vina64x.fpt", convert_to_tsv=True)
+toy64 = cnd.CANDO(cmpd_map, inds_map, matrix='toy64x.tsv', compute_distance=True, save_rmsds='toy64x_rmsds.tsv')
+vina64 = cnd.CANDO(cmpd_map, inds_map, matrix='vina64x.tsv', compute_distance=True)
 fusion = toy64.fusion([vina64], method='mult')
 tr = cnd.Matrix('toy64x_rmsds.tsv', rmsd=True)
 tr.convert('toy64x_sim.tsv')

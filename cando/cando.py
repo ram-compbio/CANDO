@@ -905,6 +905,15 @@ class CANDO(object):
             else:
                 return 'disease'
 
+        def competitive_standard_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] > r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
         def competitive_modified_bottom(sims, r):
             rank = 0
             for sim in sims:
@@ -1050,8 +1059,16 @@ class CANDO(object):
                             cs_rmsd = cs[1]
                         else:
                             continue
+                    
                     if continuous:
                         value = cs_rmsd
+                    elif bottom:
+                        if ranking == 'modified':
+                            value = competitive_modified_bottom(c.similar, cs_rmsd)
+                        if ranking == 'standard':
+                            value = competitive_standard_bottom(c.similar, cs_rmsd)
+                        if ranking == 'ordinal':
+                            value = c.similar.index(cs)
                     elif ranking == 'modified':
                         value = competitive_modified(c.similar, cs_rmsd)
                     elif ranking == 'standard':
@@ -1059,8 +1076,7 @@ class CANDO(object):
                     elif ranking == 'ordinal':
                         # df sort_values
                         value = c.similar.index(cs)
-                    elif bottom:
-                        value = competitive_modified_bottom(c.similar, cs_rmsd)
+                   
                     if adrs:
                         s = [str(c.index), effect.name]
                     else:
@@ -2299,6 +2315,11 @@ def get_test():
     dl_file(url, 'test/8100.pdb')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-uniprot_set'
     dl_file(url, 'test/test-uniprot_set')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/vina64x.fpt'
+    dl_file(url, 'test/vina64x.fpt')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/toy64x.fpt'
+    dl_file(url, 'test/toy64x.fpt')
+    
     print('Done.\n')
 
 
