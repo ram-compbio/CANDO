@@ -4,8 +4,6 @@ import random
 import time
 import operator
 import math
-import copy
-from math import sqrt
 import progressbar
 import numpy as np
 import pandas as pd
@@ -13,7 +11,7 @@ import multiprocessing as mp
 import pybel
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
-from sklearn.metrics import mean_squared_error, pairwise_distances
+from sklearn.metrics import pairwise_distances
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
@@ -150,8 +148,8 @@ class CANDO(object):
     """
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_genes='',
-                 similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='', ncpus=1,
-                 adr_map=''):
+                 similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
+                 adr_map='', ncpus=1):
         ## @var c_map 
         # Path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -583,7 +581,7 @@ class CANDO(object):
 
     def get_adr(self, id_):
         """!
-        Get ADR (adverse reaction) from ADR id
+        Get ADR (adverse drug reaction) from ADR id
         
         @param id_ ADR id
         @return ADR object
@@ -595,12 +593,16 @@ class CANDO(object):
 
     def uniprot_set_index(self, prots):
         """!
+        Gather proteins from input matrix that map to UniProt IDs from 'protein_set=' param
+
+        @param prots List str of UniProt IDs
+        @return List str of protein chains matching input UniProt IDs
         
         """
         if not os.path.exists('v2_0/mappings/pdb_2_uniprot.csv'):
             print('Downloading UniProt to PDB mapping file...')
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/pdb_2_uniprot.csv'
-            dl_file(url,'v2_0/mappings/pdb_2_uniprot.csv')
+            dl_file(url, 'v2_0/mappings/pdb_2_uniprot.csv')
         pdct = {}
         with open('v2_0/mappings/pdb_2_uniprot.csv', 'r') as u2p:
             for l in u2p.readlines()[1:]:
@@ -627,7 +629,7 @@ class CANDO(object):
         For a given compound, generate the similar compounds using distance of sigs.
 
         @param cmpd Compound object
-        @param sort (bool) Sort the list of similar compounds 
+        @param sort (bool) Sort the list of similar compounds
         @param proteins List of Protein objects to identify a subset of the Compound signature
         @param aux (bool) Use an auxiliary signature (default: False)
 
@@ -687,7 +689,6 @@ class CANDO(object):
             d = distances[0][i]
             cmpd.similar.append((c2, d))
             n += 1
-        
 
         if sort:
             sorted_scores = sorted(cmpd.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
@@ -759,32 +760,6 @@ class CANDO(object):
             else:
                 cmpds[j].similar_computed = True
 
-    def generate_all_similar_sigs(self):
-        """!
-        Use this method (instead of the `compute_distance` boolean) in the event that you are
-        manipulating signatures but still need to compute the rmsds
-        """
-        print('Computing RMSDs (this will take a while)...')
-        for i in range(0, len(self.compounds)):
-            if i % 10 == 0:
-                print(i)
-            for j in range(i, len(self.compounds)):
-                c1 = self.compounds[i]
-                c2 = self.compounds[j]
-                if i == j:
-                    continue
-                else:
-                    r = sqrt(mean_squared_error(c1.sig, c2.sig))
-                    c1.similar.append((c2, r))
-                    c2.similar.append((c1, r))
-                    self.all_rmsds.append(r)
-            for c in self.compounds:
-                sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                c.similar = sorted_scores
-                c.similar_computed = True
-                c.similar_sorted = True
-        print('Done computing RMSDs.')
-
     def quantify_pathways(self, indication=None):
         """!
         Uses the pathway quantifier defined in the CANDO instantiation to make a
@@ -812,14 +787,14 @@ class CANDO(object):
 
         # this is a recursive function for checking if the pathways have proteins
         def check_proteins(paths):
-            L = []  # list of pathways with >1 protein
+            pl = []  # list of pathways with >1 protein
             n = 0
             for path in paths:
                 if len(path.proteins) > 0:
-                    L.append(path)
+                    pl.append(path)
                     n += 1
             if n > 0:
-                return L
+                return pl
             else:
                 print('The associated pathways for this indication ({}) do not have enough proteins, '
                       'using all pathways'.format(indication.id_))
@@ -856,25 +831,21 @@ class CANDO(object):
             else:
                 c.aux_sig = pw_sig_all
 
-
     def results_analysed(self, f, metrics, effect_type):
         """!
-        Creates the results analysed named file for the benchmarking
+        Creates the results analysed named file for the benchmarking and
+        computes final avg indication accuracies
 
         @param f
         @param metrics
-        @param adrs
+        @param effect_type
         """
         fo = open(f, 'w')
         effects = list(self.accuracies.keys())
         # Write header
-        fo.write("{0}_id\tcmpds_per_{0}\ttop10\ttop25\ttop50\ttop100\ttopAll\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\t{0}_name\n".format(effect_type))
+        fo.write("{0}_id\tcmpds_per_{0}\ttop10\ttop25\ttop50\ttop100\ttopAll\ttop1%\t"
+                 "top5%\ttop10%\ttop50%\ttop100%\t{0}_name\n".format(effect_type))
         effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
-
-        #if not adrs:
-        #    effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
-        #else:
-        #    effects_sorted = sorted(effects, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
         l = len(effects)
         final_accs = {}
         for m in metrics:
@@ -893,7 +864,7 @@ class CANDO(object):
         return final_accs
 
     def canbenchmark(self, file_name, indications=[], continuous=False,
-                          bottom=False, ranking='geetika', adrs=False):
+                          bottom=False, ranking='standard', adrs=False):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
@@ -934,34 +905,34 @@ class CANDO(object):
             else:
                 return 'disease'
 
-        if bottom:
-            def rank_compound(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] >= r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
-        else:
-            # Geetika's code
-            def rank_compound(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] <= r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
-            # Geetika's reverse
-            def rank_compound_reverse(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] < r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
+        def competitive_modified_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] >= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive modified ranking code
+        def competitive_modified(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] <= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive standard ranking code
+        def competitive_standard(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] < r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
 
         effect_dct = {}
         ss = []
@@ -1081,15 +1052,15 @@ class CANDO(object):
                             continue
                     if continuous:
                         value = cs_rmsd
-                    elif ranking == 'geetika':
-                        # Geetika's code
-                        value = rank_compound(c.similar, cs_rmsd)
-                    elif ranking == 'reverse':
-                        # Geetika's reverse
-                        value = rank_compound_reverse(c.similar, cs_rmsd)
-                    elif ranking == 'sort':
+                    elif ranking == 'modified':
+                        value = competitive_modified(c.similar, cs_rmsd)
+                    elif ranking == 'standard':
+                        value = competitive_standard(c.similar, cs_rmsd)
+                    elif ranking == 'ordinal':
                         # df sort_values
                         value = c.similar.index(cs)
+                    elif bottom:
+                        value = competitive_modified_bottom(c.similar, cs_rmsd)
                     if adrs:
                         s = [str(c.index), effect.name]
                     else:
@@ -1109,10 +1080,6 @@ class CANDO(object):
 
         self.accuracies = effect_dct
         final_accs = self.results_analysed(ra_named, metrics, effect_type())
-        #if adrs:
-        #    final_accs = self.results_analysed(ra_named, metrics, effect_type())
-        #else:
-        #    final_accs = self.results_analysed(ra_named, metrics, adrs=False, effect_type())
         ss = sorted(ss, key=lambda xx: int(xx[0]))
         top_pairwise = [0.0] * 10
         for s in ss:
@@ -1179,7 +1146,7 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-    def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='geetika'):
+    def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
         This function returns the filtered CANDO object in the event that you want to explore further.
@@ -1221,13 +1188,13 @@ class CANDO(object):
         
         cp.canbenchmark(file_name=file_name, indications=indications, continuous=continuous, ranking=ranking)
 
-    def canbenchmark_bottom(self, file_name, indications=[], ranking='geetika'):
+    def canbenchmark_bottom(self, file_name, indications=[], ranking='standard'):
         """!
         Benchmark the bottom similar compounds as a control.
 
         @param file_name
-        @param SUM
         @param indications
+        @param ranking
         """
         print("Making CANDO copy with reversed compound ordering")
         cp = CANDO(self.c_map, self.i_map, self.matrix)
@@ -1278,11 +1245,11 @@ class CANDO(object):
 
         # Determine how many compounds are in each cluster
         # Plot the results and output the mean, median, and range
-        all_clusters = range(n_clusters)
         c_clusters = [0] * n_clusters
         for l in labels:
             c_clusters[l] += 1
         '''
+        all_clusters = range(n_clusters)
         plt.scatter(all_clusters,c_clusters)
         plt.text(1, 1, "Average cluster size = {}".format(np.mean(c_clusters)), horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
         plt.text(1, 1, "Median cluster size = {}".format(np.median(c_clusters)), horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
@@ -1316,16 +1283,16 @@ class CANDO(object):
         print("Number of cluster = {}".format(n_clusters))
         print("Mean cluster size = {}".format(np.mean(c_clusters)))
         print("Median cluster size = {}".format(np.median(c_clusters)))
-        print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters),np.max(c_clusters)))
+        print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters), np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
 
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], seed=42, out=''):
         """!
-        create a random forest classifier for a specified indication or all inds (to benchmark)
+        create an ML classifier for a specified indication or all inds (to benchmark)
         predict (used w/ 'effect=' - indication or ADR) is a list of compounds to classify with the trained ML model
         out=X saves benchmark SUMMARY->SUMMARY_ml_X; raw results->raw_results/raw_results_ml_X (same for RAN)
         currently supports random forest ('rf'), 1-class SVM ('1csvm'), and logistic regression ('log')
-        models are trained with leave-one-out cross validation
+        models are trained with leave-one-out cross validation during benchmarking
 
         @param method
         @param effect
@@ -1448,7 +1415,7 @@ class CANDO(object):
             # predict whether query drugs are associated with this indication
             if predict:
                 print('Indication: {}'.format(e.name))
-                print('Leave-one-out cross validation: TP={}, FN={}, Acc={:0.2f}'.format(
+                print('Leave-one-out cross validation: TP={}, FN={}, Acc={:0.3f}'.format(
                     tp_fn[0], tp_fn[1], 100 * (tp_fn[0] / float(len(e.compounds)))))
                 neu = random_neutrals(e, s=seed, benchmark=False)
                 pos = split_cs(e)
@@ -1475,24 +1442,23 @@ class CANDO(object):
                 if acc > 0.5:
                     sm[3] += 1
                 if out:
-                    fran.write('{}\t{}\t{}\t{}\t{:0.2f}\t|\t{}\n'.format(efct.id_, len(efct.compounds),
+                    fran.write('{}\t{}\t{}\t{}\t{:0.3f}\t{}\n'.format(efct.id_, len(efct.compounds),
                                                                       tfp[0], tfp[1], 100 * acc, efct.name))
             if out:
-                fsum.write('aia\t{:0.2f}\n'.format(100 * (sm[1]/len(rf_scores))))
-                fsum.write('apa\t{:0.2f}\n'.format(100 * (sm[2] / sm[0])))
+                fsum.write('aia\t{:0.3f}\n'.format(100 * (sm[1]/len(rf_scores))))
+                fsum.write('apa\t{:0.3f}\n'.format(100 * (sm[2] / sm[0])))
                 fsum.write('ic\t{}\n'.format(sm[3]))
 
-            print('aia\t{:0.2f}'.format(100 * (sm[1]/len(rf_scores))))
-            print('apa\t{:0.2f}'.format(100 * (sm[2] / sm[0])))
+            print('aia\t{:0.3f}'.format(100 * (sm[1]/len(rf_scores))))
+            print('apa\t{:0.3f}'.format(100 * (sm[2] / sm[0])))
             print('ic\t{}'.format(sm[3]))
-
         return
 
     def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
         """!
-        This function is an extension of canpredict - basically, give it a
-        ind_id id and for each of the associated compounds, it will generate
-        the similar compounds (based on rmsd) and add them to a dictionary
+        This function is used for predicting putative therapeutics for an indication
+        of interest. Input an ind_id id and for each of the associated compounds, it will
+        generate the similar compounds (based on distance) and add them to a dictionary
         with a value of how many times it shows up (enrichment). If a
         compound not approved for the indication of interest keeps showing
         up, that means it is similar in signature to the drugs that are
@@ -1560,33 +1526,38 @@ class CANDO(object):
                     already_approved = False  # Not relevant since there is no indication
                 c_dct[c.id_] = [ss, already_approved]
 
-        sorted_x = sorted(c_dct.items(), key=lambda x:x[1][0])[::-1]
+        sorted_x = sorted(c_dct.items(), key=lambda x: x[1][0])[::-1]
         print("Printing the {} highest predicted compounds...\n".format(topX))
         if not keep_approved:
             i = 0
             print('rank\tscore\tid\tname')
             for p in enumerate(sorted_x):
-                if i >= topX and topX != -1:
+                if i >= topX != -1:
                     break
                 if p[1][1][1]:
                     continue
                 else:
                     print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
-                                                  self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
+                                                  self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
                     i += 1
         else:
             i = 0
             print('rank\tscore\tapproved\tid\tname')
             for p in enumerate(sorted_x):
-                if i >= topX and topX != -1:
+                if i >= topX != -1:
                     break
                 print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
-                                                    self.get_compound(p[1][0]).id_,self.get_compound(p[1][0]).name))
+                                                    self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
                 i += 1
         print('\n')
 
-    def canpredict_indications(self, new_sig='', new_name='', cando_cmpd='', n='10', topX=10):
+    def canpredict_indications(self, new_sig=None, new_name=None, cando_cmpd=None, n=10, topX=10):
         """!
+        This function is the inverse of canpredict_compounds. Input a compound
+        of interest cando_cmpd (or a novel protein signature of interest new_sig)
+        and the most similar compounds to it will be computed. The indications
+        associated with the top n most similar compounds to the query compound will
+        be examined to see if any are repeatedly enriched.
         
         @param new_sig
         @param new_name
@@ -1594,12 +1565,12 @@ class CANDO(object):
         @param n
         @param topX
         """
-        if new_sig != '':
+        if new_sig:
             cmpd = self.add_cmpd(new_sig, new_name)
-        elif cando_cmpd != '':
+        elif cando_cmpd:
             cmpd = cando_cmpd
             print("Using CANDO compound {}".format(cmpd.name))
-            print("Compound has id {} and index {}".format(cmpd.id_,cmpd.index))
+            print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
         print("Generating indication predictions using top{} most similar compounds...".format(n))
@@ -1614,46 +1585,50 @@ class CANDO(object):
         print("Printing the {} highest predicted indications...\n".format(topX))
         print("rank\tscore\tind_id    \tindication")
         for i in range(topX):
-            print("{}\t{}\t{}\t{}".format(i+1,sorted_x[i][1],sorted_x[i][0].id_,sorted_x[i][0].name))
+            print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], sorted_x[i][0].id_, sorted_x[i][0].name))
         print('')
 
-    def similar_compounds(self, new_sig='', new_name='', cando_cmpd='', n='10'):
+    def similar_compounds(self, new_sig=None, new_name=None, cando_cmpd=None, n=10):
         """!
+        Computes and prints the top n most similar compounds to an input
+        Compound object cando_cmpd or input novel signature new_sig
 
-        @param new_sig
-        @param new_name
-        @param cando_cmpd
-        @param n
+        @param new_sig List float of novel compound protein interaction signature
+        @param new_name str of drug name
+        @param cando_cmpd Compound object
+        @param n int
         """
-        if new_sig != '':
+        if new_sig:
             cmpd = self.add_cmpd(new_sig, new_name)
-        elif cando_cmpd != '':
+        elif cando_cmpd:
             cmpd = cando_cmpd
             print("Using CANDO compound {}".format(cmpd.name))
-            print("Compound has id {} and index {}".format(cmpd.id_,cmpd.index))
+            print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
         print("Printing top{} most similar compounds...\n".format(n))
         print("rank\tdist\tid\tname")
         for i in range(1, n+1):
-            print("{}\t{:.3f}\t{}\t{}".format(i,cmpd.similar[i][1],cmpd.similar[i][0].id_,cmpd.similar[i][0].name))
+            print("{}\t{:.3f}\t{}\t{}".format(i, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
 
     def add_cmpd(self, new_sig, new_name):
         """!
+        Add a new Compound object to the platform
         
-        @param new_sig
-        @param new_name
+        @param new_sig file of tab-separated interaction scores
+        @param new_name str of compound's name
+        @return cmpd Compound object
         """
-        new_sig = pd.read_csv(new_sig , sep='\t', index_col=0, header=None)
-        if new_name == '':
+        new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
+        if not new_name:
             print("Compound needs a name. Set 'new_name'")
             return
         i = len(self.compounds)
         cmpd = Compound(new_name, i, i)
         cmpd.sig = new_sig[[1]].T.values[0].tolist()
         print("New compound is " + cmpd.name)
-        print("New compound has id {} and index {}".format(cmpd.id_,cmpd.index))
+        print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         return cmpd
 
     def sigs(self, rm):
@@ -1661,7 +1636,6 @@ class CANDO(object):
         Return a list of all signatures, rm is a list of compound ids you do not want in the list
 
         @param rm List of compound ids to remove from list of signatures
-
         @return List of all signatures
         """
         return [x.sig for x in self.proteins if x.id_ not in rm]
@@ -1773,21 +1747,21 @@ class CANDO(object):
         Print stats about the CANDO object
 
         """
-        N = len(self.compounds)
+        nc = len(self.compounds)
         b = self.compounds[0].similar_computed
-        I = len(self.indications)
-        P = len(self.proteins)
-        if P:
+        ni = len(self.indications)
+        np = len(self.proteins)
+        if np:
             return 'CANDO: {0} compounds, {1} proteins, {2} indications\n' \
                    '\tMatrix - {3}\nIndication mapping - {4}\n' \
-                   '\tDistances computed - {5}'.format(N, P, I, self.matrix, self.i_map, b)
+                   '\tDistances computed - {5}'.format(nc, np, ni, self.matrix, self.i_map, b)
         elif self.read_rmsds:
             return 'CANDO: {0} compounds, {1} indications\n' \
                    '\tCompound comparison file - {2}\n' \
-                   '\tIndication mapping - {3}'.format(N, I, self.read_rmsds, self.i_map)
+                   '\tIndication mapping - {3}'.format(nc, ni, self.read_rmsds, self.i_map)
         else:
             return 'CANDO: {0} compounds, {1} indications\n' \
-                   '\tIndication mapping - {2}'.format(N, I, self.i_map)
+                   '\tIndication mapping - {2}'.format(nc, ni, self.i_map)
 
 
 class Matrix(object):
@@ -1837,7 +1811,7 @@ class Matrix(object):
                     for l_i in range(len(lines)):
                         vec = lines[l_i].strip().split('\t')
                         if len(vec) < 2:
-                            print('The matrix file {} is in the old fpt format -- please ' \
+                            print('The matrix file {} is in the old fpt format -- please '
                                   'convert to tsv with the following line of code:'.format(self.matrix_file))
                             print('-> Matrix("{}", convert_to_tsv=True) <-'.format(self.matrix_file))
                             quit()
@@ -1899,17 +1873,11 @@ class Matrix(object):
         """
         if self.values[0][0] == 0.0:
             metric = 'd'
-        elif self.values[0][0] == -1.0:
-            metric = 'd'
-            self.fix()
         elif self.values[0][0] == 1.0:
             metric = 's'
-        elif self.values[0][0] == 2.0:
-            metric = 's'
-            self.fix()
         else:
             metric = None
-            print('The first value is not 0.0 (-1.0) or 1.0 (2.0); ' \
+            print('The first value is not 0.0 or 1.0; '
                   'please ensure the matrix is generated properly')
             quit()
 
@@ -1930,18 +1898,6 @@ class Matrix(object):
                     vs = list(map(to_dist, vs))
                     of.write("{}\n".format('\t'.join(list(map(str, vs)))))
         of.close()
-
-    def fix(self):
-        """!
-        Correct old self RMSD from -1.0 to 0.0
-
-        """
-        if self.values[0][0] == -1.0:
-            for i in range(len(self.values)):
-                self.values[i][i] = 0.0
-        if self.values[0][0] == 2.0:
-            for i in range(len(self.values)):
-                self.values[i][i] = 1.0
 
 
 def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
@@ -1976,7 +1932,8 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
 
     print("Calculating interaction scores...")
     pool = mp.Pool(ncpus)
-    scores_temp = pool.starmap_async(get_scores, [(int(c), p_scores, c_scores.loc[:,c]) for c in c_scores.columns]).get()
+    scores_temp = pool.starmap_async(get_scores,
+                                     [(int(c), p_scores, c_scores.loc[:, c]) for c in c_scores.columns]).get()
     pool.close()
     first = True
     scores = pd.DataFrame()
@@ -1987,7 +1944,7 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
             first = False
         else:
             scores = scores.join(pd.DataFrame(i))
-    scores.rename(index=dict(zip(range(len(p_scores.index)),p_scores.index)),inplace=True)
+    scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
     scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
 
     end = time.time()
@@ -1995,29 +1952,28 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
     print_time(end-start)
 
 
-def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.', ncpus=1):
+def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
     """!
-    Generate the fingerprint for a new compound and calculate the tanimoto similarities against all binding site ligands.
+    Generate the fingerprint for a new compound and calculate the Tanimoto
+    similarities against all binding site ligands.
     
     
     @param fp The fingerprinting software and method used, e.g. 'rd_ecfp4', 'ob_fp2'
     @param cmpd_pdb PDB file.
     @param out_path
-    @param ncpus 
     """
     fp_name = fp
     fp = fp.split("_")
     # Check for correct fingerprinting method
-    if fp[0] not in ['rd','ob']:
+    if fp[0] not in ['rd', 'ob']:
         print("{} is not a correct fingerprinting method.".format(fp_name))
     else: 
-        if fp[0] == 'ob' and fp[1] not in ['fp4','fp2']:
+        if fp[0] == 'ob' and fp[1] not in ['fp4', 'fp2']:
             print("{} is not a correct fingerprinting method.".format(fp_name))
-        elif fp[0] == 'rd' and fp[1] not in ['daylight','ecfp4']:
+        elif fp[0] == 'rd' and fp[1] not in ['daylight', 'ecfp4']:
             print("{} is not a correct fingerprinting method.".format(fp_name))
 
     # Pull and read in fingerprints for ligands
-    #if not os.path.exists("v2_0/ligands_fps/{}.tsv".format(fp_name)):
     get_fp_lig(fp_name)
     pre = os.path.dirname(__file__)
     bs = pd.read_csv("{}/v2_0/ligands_fps/{}.tsv".format(pre, fp_name), sep='\t', header=None, index_col=0)
@@ -2028,7 +1984,7 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.', ncpus=1):
         cmpd_name = cmpd_pdb.split('/')[-1].split('.')[0]
         try:
             cmpd_id = int(cmpd_name)
-        except:
+        except ValueError:
             cmpd_id = 10000
         out_name = "{}_scores.tsv".format(cmpd_id)
         scores = [score_fp(fp, cmpd_pdb, cmpd_id, bs)]
@@ -2038,7 +1994,7 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.', ncpus=1):
     cmpd_scores = pd.DataFrame(index=sites)
     cmpd_scores = cmpd_scores.T
     for i in scores:
-        for key,value in i.items():
+        for key, value in i.items():
             temp = pd.DataFrame({key: value}, index=sites)
             cmpd_scores = cmpd_scores.append(temp.T)
     cmpd_scores = cmpd_scores.T
@@ -2051,14 +2007,13 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.', ncpus=1):
     print("Tanimoto scores written to {}/{}/{}\n".format(out_path, fp_name, out_name))
 
 
-def generate_signature(cmpd_scores='', prot_scores='', matrix_file='', ncpus=1):
+def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
     """!
     Generate signature
 
     @param cmpd_scores
     @param prot_scores
     @param matrix_file
-    @param ncpus
     """
     def print_time(s):
         if s >= 60:
@@ -2124,7 +2079,7 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
             cmpd = Chem.MolFromPDBFile(cmpd_file)
             # ECFP4 - extended connectivity fingerprint
             if fp[1] == 'ecfp4':
-                cmpd_fp = AllChem.GetMorganFingerprintAsBitVect(cmpd,2,nBits=1024)
+                cmpd_fp = AllChem.GetMorganFingerprintAsBitVect(cmpd, 2, nBits=1024)
             # Daylight
             elif fp[1] == 'daylight':
                 cmpd_fp = rdmolops.RDKFingerprint(cmpd)
@@ -2138,12 +2093,12 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 continue
         print("Calculating tanimoto scores for compound {} against all binding site ligands...".format(cmpd_id))
         for pdb in bs.index:
-            if bs.loc[(pdb)][1] == '':
+            if bs.loc[pdb][1] == '':
                 l.append(0.000)
                 continue
             try:
                 # Tanimoto similarity
-                score = tanimoto_sparse(bit_fp, str(bs.loc[(pdb)][1]))
+                score = tanimoto_sparse(bit_fp, str(bs.loc[pdb][1]))
                 l.append(score)
             except:
                 l.append(0.000)
@@ -2159,10 +2114,10 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
             cmpd_fp = cmpd.calcfp('fp4')
         print("Calculating tanimoto scores for {} against all binding site ligands...".format(cmpd_id))
         for pdb in bs.index:
-            if bs.loc[(pdb)][1] == '':
+            if bs.loc[pdb][1] == '':
                 l.append(0.000)
                 continue
-            bs_fp = bs.loc[(pdb)][1].split(',')
+            bs_fp = bs.loc[pdb][1].split(',')
             bs_fp = [int(bs_fp[x]) for x in range(len(bs_fp))]
             l.append(0.000)
     return {cmpd_id: l}
@@ -2208,7 +2163,7 @@ def get_fp_lig(fp):
     @param fp Fingerprinting method used to compile each binding site ligand fingerprint
     """
     pre = os.path.dirname(__file__)
-    out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre,fp)
+    out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre, fp)
     if not os.path.exists(out_file):
         print('Downloading ligand fingerprints for {}...'.format(fp))
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/ligands_fps/{}.tsv'.format(fp)
@@ -2228,13 +2183,13 @@ def get_v2_0():
     """
     print('Downloading data for v2_0...')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-approved.tsv'
-    dl_file(url,'v2_0/mappings/drugbank-approved.tsv')
+    dl_file(url, 'v2_0/mappings/drugbank-approved.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-all.tsv'
-    dl_file(url,'v2_0/mappings/drugbank-all.tsv')
+    dl_file(url, 'v2_0/mappings/drugbank-all.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
-    dl_file(url,'v2_0/mappings/ctd_2_drugbank.tsv')
+    dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-    dl_file(url,'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
+    dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
     os.chdir("v2_0/cmpds/scores")
     os.system("gunzip drugbank-approved-rd_ecfp4.tsv.gz")
     os.chdir("../../..")
@@ -2426,4 +2381,3 @@ def dl_file(url, out_file):
             bar.update(i)
             i += 1
         bar.finish()
-
