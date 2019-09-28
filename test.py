@@ -12,6 +12,8 @@ cmpd_map='test-cmpds.tsv'
 cmpd_dir='test-cmpds_pdb/'
 cmpd_scores='test-cmpd_scores.tsv'
 prot_scores='test-prot_scores.tsv'
+pwp = 'test-pathway-prot.tsv'
+pwm = 'test-pathway-mesh.tsv'
 ncpus = 3
 
 print("Test #1 - generate a toy matrix")
@@ -105,4 +107,11 @@ print('-------')
 cnd.get_tutorial()
 cnd.get_v2_0()
 print('\n')
+
+print("Test #12 - Pathways data plus benchmark")
+print('-------')
+cpw = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, pathways=pwp, pathway_quantifier='max', compute_distance=True)
+cpw.canbenchmark('test-pw')
+cpwi = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, pathways=pwp, pathway_quantifier='proteins', indication_pathways=pwm)
+cpwi.canbenchmark('test-pw_inds')
 
