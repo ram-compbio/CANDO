@@ -43,42 +43,46 @@ class Compound(object):
     """
     def __init__(self, name, id_, index):
         ## @var name 
-        # (e.g., 'caffeine')
+        # str: Name of the Compound (e.g., 'caffeine')
         self.name = name
         ## @var id_
-        # cando id from mapping file (e.g., 1, 10, 100, ...)
+        # int: CANDO id from mapping file (e.g., 1, 10, 100, ...)
         self.id_ = id_
         ## @var index
-        # the order in which they appear from the mapping file (e.g, 1, 2, 3, ...)
+        # int: The order in which the Compound appears in the mapping file (e.g, 1, 2, 3, ...)
         self.index = index
         ## @var sig
-        # sig is basically a column of the matrix
+        # list: Signature is essentially a column of the Matrix
         self.sig = []
         ## @var aux_sig
-        # potentially temporary signature for things like pathways, where "c.sig" needs to be preserved
+        # list: Potentially temporary signature for things like pathways, where "c.sig" needs to be preserved
         self.aux_sig = []
         ## @var indications
-        # this is every indication it is associated with from the
+        # list: This is every indication the Compound is associated with from the
         # mapping file
         self.indications = []
         ## @var similar
-        # (list of tuples):
-        # this is the ranked list of compounds with the most similar interaction signatures
+        # list: This is the ranked list of compounds with the most similar interaction signatures
         self.similar = []
         ## @var similar_computed
-        # 
+        # bool: Have the distances of all Compounds to the given Compound been computed?
         self.similar_computed = False
         ## @var similar_sorted
-        #
+        # bool: Have the most similar Compounds to the given Compound been sorted?
         self.similar_sorted = False
         ## @var cluster_id
-        # 
+        # int: The cluster id this Compound was assigned from clustering method
         self.cluster_id = []
         ## @var adrs
-        # 
+        # list: List of ADRs associated with this Compound
         self.adrs = []
 
     def add_indication(self, ind):
+        """!
+        Add an Indication to the list of Indications associated to this Compound
+
+        @param ind object: Indication object to add
+        """
         self.indications.append(ind)
 
 
@@ -88,19 +92,19 @@ class Indication(object):
     """
     def __init__(self, ind_id, name):
         ## @var id_
-        # (string) MeSH or OMIM ID for the indication from the mapping file
+        # str: MeSH or OMIM ID for the indication from the mapping file
         self.id_ = ind_id
         ## @var name
-        # (string) Name for the indication from the mapping file
+        # str: Name for the indication from the mapping file
         self.name = name
         ## @var compounds
-        # (list) Every associated compound object from the mapping file
+        # list: Every associated compound object from the mapping file
         self.compounds = []
         ## @var pathways
-        # (list) Every pathway associated to the indication from the mapping file
+        # list: Every pathway associated to the indication from the mapping file
         self.pathways = []
         ## @var proteins
-        # (list) Every protein associated to the indication form the mapping file
+        # list: Every protein associated to the indication form the mapping file
         self.proteins = []
 
 
@@ -110,13 +114,13 @@ class Pathway(object):
     """
     def __init__(self, id_):
         ## @var proteins
-        #
+        # list: Protein objects associated with the given Pathway
         self.proteins = []
         ## @var id_
-        # 
+        # str: Identification for the given Pathway
         self.id_ = id_
         ## @var indications
-        # in case we ever want to incorporate pathway-disease associations
+        # list: Indication objects associated with the given Pathway
         self.indications = []
 
 
@@ -126,13 +130,13 @@ class ADR(object):
     """
     def __init__(self, id_, name):
         ## @var id_
-        #
+        # str: Identification for the given ADR
         self.id_ = id_
         ## @var name
-        #
+        # str: Name of the given ADR
         self.name = name
         ## @var compounds
-        #
+        # list: Compound objects associated with the given ADR
         self.compounds = []
 
 
@@ -144,65 +148,64 @@ class CANDO(object):
     indication mapping file (i_map), and a compound-protein matrix (matrix=) or
     or precomputed compound-compound distance matrix (read_rmsds=)
 
-
     """
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
                  adr_map='', ncpus=1):
         ## @var c_map 
-        # Path to the compound mapping file (relative or absolute)
+        # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
         ## @var i_map 
-        # Path to the indication mapping file (relative or absolute)
+        # str: File path to the indication mapping file (relative or absolute)
         self.i_map = i_map
         ## @var matrix 
-        # Path to the cando matrix file (relative or absolute)
+        # str: File path to the cando matrix file (relative or absolute)
         self.matrix = matrix
         ## @var protein_set
-        # Path to protein subset file (relative or absolute) 
+        # str: File path to protein subset file (relative or absolute) 
         self.protein_set = protein_set
         ## @var pathways
-        #
+        # str: File path to pathway file
         self.pathways = []
         self.accuracies = {}
         ## @var compute_distance
-        #
+        # bool: Calculate the distance for each Compound against all other Compounds using chosen distance metric
         self.compute_distance = compute_distance
         self.clusters = {}
         ## @var rm_zeros
-        #
+        # bool: Remove Compounds with all-zero signatures from CANDO object
         self.rm_zeros = rm_zeros
         ## @var rm_compounds
-        #
+        # list: Compounds to remove from the CANDO object 
         self.rm_compounds = rm_compounds
         self.rm_cmpds = []
         ## @var save_rmsds
-        #
+        # bool: Write the calculated distances to file after computation (set compute_distances=True)
         self.save_rmsds = save_rmsds
         ## @var read_rmsds
-        #
+        # str: File path to pre-computed distance matrix
         self.read_rmsds = read_rmsds
         ## @var similarity
-        #
+        # bool: Use similarity instead of distance
         self.similarity = similarity
         ## @var dist_metric
-        #
+        # str: Distance metric to be used for computing Compound-Compound distances
         self.dist_metric = dist_metric
         ## @var ncpus
-        #
+        # int: Numebr of CPUs used for parallelization
         self.ncpus = int(ncpus)
         ## @var pathway_quantifier
-        #
+        # str: Method used to quantify a all Pathways
         self.pathway_quantifier = pathway_quantifier
         ## @var indication_pathways
-        #
+        # str: File path to Indication-Pathway association file
         self.indication_pathways = indication_pathways
         ## @var indication_proteins
-        #
+        # str: File path to Indication-Protein association file
         self.indication_proteins = indication_proteins
         ## @var adr_map
-        #
+        # str: File path to ADR mapping file
         self.adr_map = adr_map
 
         self.proteins = []
@@ -546,8 +549,8 @@ class CANDO(object):
         """!
         Get Compound object from Compound id
 
-        @param id_ Compound id
-        @return Returns Compound object
+        @param id_ int: Compound id
+        @return Returns object: Compound object
         """
         for c in self.compounds:
             if c.id_ == id_:
@@ -559,8 +562,8 @@ class CANDO(object):
         """!
         Get Indication object from Indication id
 
-        @param ind_id Indication id
-        @return Returns Indication object
+        @param str: ind_id Indication id
+        @return Returns object: Indication object
         """
         for i in self.indications:
             if i.id_ == ind_id:
@@ -571,8 +574,8 @@ class CANDO(object):
         """!
         Get Pathway object from Pathway id
 
-        @param id_ Pathway id
-        @return Returns Pathway object
+        @param id_ str: Pathway id
+        @return Returns object: Pathway object
         """
         for p in self.pathways:
             if p.id_ == id_:
@@ -583,8 +586,8 @@ class CANDO(object):
         """!
         Get ADR (adverse drug reaction) from ADR id
         
-        @param id_ ADR id
-        @return ADR object
+        @param id_ str: ADR id
+        @return Returns object: ADR object
         """
         for a in self.adrs:
             if a.id_ == id_:
@@ -595,9 +598,8 @@ class CANDO(object):
         """!
         Gather proteins from input matrix that map to UniProt IDs from 'protein_set=' param
 
-        @param prots List str of UniProt IDs
-        @return List str of protein chains matching input UniProt IDs
-        
+        @param prots list: UniProt IDs (str)
+        @return Returns list: Protein chains (str) matching input UniProt IDs
         """
         if not os.path.exists('v2_0/mappings/pdb_2_uniprot.csv'):
             print('Downloading UniProt to PDB mapping file...')
@@ -628,12 +630,12 @@ class CANDO(object):
         """!
         For a given compound, generate the similar compounds using distance of sigs.
 
-        @param cmpd Compound object
-        @param sort (bool) Sort the list of similar compounds
-        @param proteins List of Protein objects to identify a subset of the Compound signature
-        @param aux (bool) Use an auxiliary signature (default: False)
+        @param cmpd object: Compound object
+        @param sort bool: Sort the list of similar compounds
+        @param proteins list: Protein objects to identify a subset of the Compound signature
+        @param aux bool: Use an auxiliary signature (default: False)
 
-        @return List of similar Compounds to the given Compound
+        @return Returns list: Similar Compounds to the given Compound
         """
         # find index of query compound, collect signatures for both
         q = 0
@@ -705,12 +707,12 @@ class CANDO(object):
         For a given list of compounds, generate the similar compounds based on rmsd of sigs
         This is pathways/genes for all intents and purposes
 
-        @param cmpds List of Compound objects
-        @param sort (bool) sort similar compounds for each Compound
-        @param proteins List of Protein objects to identify a subset of the Compound signature
-        @param aux (bool) Use an auxiliary signature (default: False)
+        @param cmpds list: Compound objects
+        @param sort bool: Sort similar compounds for each Compound
+        @param proteins list: Protein objects to identify a subset of the Compound signature
+        @param aux bool: Use an auxiliary signature (default: False)
 
-        @return List of similar Compounds to the given Compound
+        @return Returns list: Similar Compounds to the given Compound
 
         """
         q = [cmpd.id_ for cmpd in cmpds]
@@ -765,7 +767,7 @@ class CANDO(object):
         Uses the pathway quantifier defined in the CANDO instantiation to make a
         pathway signature for all pathways in the input file (NOTE: does not compute distances)
 
-        @param indication
+        @param indication object: Indication object
         """
         pq = self.pathway_quantifier
         if pq == 'max':
@@ -836,9 +838,9 @@ class CANDO(object):
         Creates the results analysed named file for the benchmarking and
         computes final avg indication accuracies
 
-        @param f
-        @param metrics
-        @param effect_type
+        @param f str: File path for results analysed named
+        @param metrics list: Cutoffs used for the benchmarking protocol
+        @param effect_type str: Defines the effect as either an Indication (disease) or ADR (adverse reaction)
         """
         fo = open(f, 'w')
         effects = list(self.accuracies.keys())
@@ -868,12 +870,12 @@ class CANDO(object):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
-        @param file_name
-        @param indications
-        @param continuous
-        @param bottom
-        @param ranking
-        @param adrs
+        @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
+        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for benchmarking
+        @param bottom bool: Reverse the ranking (descending) for the benchmark
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
+        @param adrs bool: ADRs are used as the effect instead of Indications
         """
 
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
@@ -1172,10 +1174,10 @@ class CANDO(object):
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
         This function returns the filtered CANDO object in the event that you want to explore further.
 
-        @param file_name
-        @param indications
-        @param continuous
-        @param ranking
+        @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
+        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for benchmarking
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
         cp = CANDO(self.c_map, self.i_map, self.matrix)
@@ -1211,11 +1213,11 @@ class CANDO(object):
 
     def canbenchmark_bottom(self, file_name, indications=[], ranking='standard'):
         """!
-        Benchmark the bottom similar compounds as a control.
+        Benchmark the reverse ranking of similar compounds as a control.
 
-        @param file_name
-        @param indications
-        @param ranking
+        @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
+        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
         """
         print("Making CANDO copy with reversed compound ordering")
         cp = CANDO(self.c_map, self.i_map, self.matrix)
@@ -1237,7 +1239,7 @@ class CANDO(object):
         """!
         Benchmark using k-means clustering
 
-        @param n_clusters Number of clusters for k-means
+        @param n_clusters int: Number of clusters for k-means
         """
         def cluster_kmeans(cmpds):
             def f(x):
@@ -1342,8 +1344,14 @@ class CANDO(object):
                     mtrx.append(cm.sig)
             return mtrx, [1] * len(mtrx)
 
-        # choose random 'neutral' compounds for training, seed for reproducibility
         def random_neutrals(efct, s=None, benchmark=False):
+            """!
+            Choose random 'neutral' compounds for training, seed for reproducibility
+            
+            @param efct
+            @param s
+            @param benchmark bool:
+            """
             neutrals = []
             used = []
             shuffled = list(range(len(self.compounds)))
@@ -1374,6 +1382,9 @@ class CANDO(object):
             return neutrals, [0] * len(neutrals)
 
         def model(meth, samples, labels, params=None, seed=None):
+            """!
+
+            """
             if meth == 'rf':
                 m = RandomForestClassifier(n_estimators=100, random_state=seed)
                 m.fit(samples, labels)
@@ -1487,11 +1498,11 @@ class CANDO(object):
         Control how many similar compounds to consider with the argument 'n'.
         Use ind_id=None to find greatest score sum across all proteins (sum_scores must be True)
         
-        @param ind_id
-        @param n
-        @param topX
-        @param sum_scores
-        @param keep_approved
+        @param ind_id str: Indication id
+        @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
+        @param topX int: top number of predicted Compounds to be printed
+        @param sum_scores bool: Sum all ascores across all proteins
+        @param keep_approved bool: Print Compounds that are already approved for the Indication
         """
         if ind_id:
             i = self.indication_ids.index(ind_id)
@@ -1580,11 +1591,11 @@ class CANDO(object):
         associated with the top n most similar compounds to the query compound will
         be examined to see if any are repeatedly enriched.
         
-        @param new_sig
-        @param new_name
-        @param cando_cmpd
-        @param n
-        @param topX
+        @param new_sig str: Path to the new Compound signature
+        @param new_name str: Name to be used for the new Compound
+        @param cando_cmpd object: Compound object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Indications to be printed
         """
         if new_sig:
             cmpd = self.add_cmpd(new_sig, new_name)
@@ -1614,10 +1625,10 @@ class CANDO(object):
         Computes and prints the top n most similar compounds to an input
         Compound object cando_cmpd or input novel signature new_sig
 
-        @param new_sig List float of novel compound protein interaction signature
-        @param new_name str of drug name
-        @param cando_cmpd Compound object
-        @param n int
+        @param new_sig list: List float of novel compound protein interaction signature
+        @param new_name str: Drug name
+        @param cando_cmpd object: Compound object
+        @param n int: top number of similar Compounds to be used for prediction
         """
         if new_sig:
             cmpd = self.add_cmpd(new_sig, new_name)
@@ -1637,9 +1648,9 @@ class CANDO(object):
         """!
         Add a new Compound object to the platform
         
-        @param new_sig file of tab-separated interaction scores
-        @param new_name str of compound's name
-        @return cmpd Compound object
+        @param new_sig str: Path to the tab-separated interaction scores
+        @param new_name str: Name for the new Compound
+        @return cmpd object: Compound object
         """
         new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
         if not new_name:
@@ -1656,8 +1667,8 @@ class CANDO(object):
         """!
         Return a list of all signatures, rm is a list of compound ids you do not want in the list
 
-        @param rm List of compound ids to remove from list of signatures
-        @return List of all signatures
+        @param rm list: List of compound ids to remove from list of signatures
+        @return list: List of all signatures
         """
         return [x.sig for x in self.proteins if x.id_ not in rm]
 
@@ -1680,12 +1691,12 @@ class CANDO(object):
 
     def fusion(self, cando_objs, out_file='', method='sum'):
         """!
-        this function re-ranks the compounds according to the desired comparison specified by
+        This function re-ranks the compounds according to the desired comparison specified by
         'method' -> currently supports 'min', 'avg', 'mult', and 'sum'
 
-        @param cando_objs
-        @param out_file
-        @param method
+        @param cando_objs list: List of CANDO objects
+        @param out_file str: Path to where the result will be written
+        @param method str: Method of fusion to be used (e.g., sum, mult, etc.)
         """
         print("Fusing CANDO objects using " + method)
         cnd = CANDO(self.c_map, self.i_map)
@@ -1860,7 +1871,7 @@ class Matrix(object):
         first value in the matrix will determine the type of conversion
         (0.0 means distance to similarity, 1.0 means similarity to distance).
 
-        @param out_file Name of the file to which write the converted matrix.
+        @param out_file str: File path to which write the converted matrix.
         """
         if self.values[0][0] == 0.0:
             metric = 'd'
@@ -1895,10 +1906,10 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
     """!
     Generate a CANDO Matrix 
 
-    @param cmpd_scores
-    @param prot_scores
-    @param matrix_file
-    @param ncpus
+    @param cmpd_scores str: File path to tab-separated scores for all Compounds
+    @param prot_scores str: File path to tab-separated scores for all Proteins
+    @param matrix_file str: File path to where the generated Matrix will be written
+    @param ncpus int: Number of cpus to use for parallelization
     """
     def print_time(s):
         if s >= 60:
@@ -1948,10 +1959,9 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
     Generate the fingerprint for a new compound and calculate the Tanimoto
     similarities against all binding site ligands.
     
-    
-    @param fp The fingerprinting software and method used, e.g. 'rd_ecfp4', 'ob_fp2'
-    @param cmpd_pdb PDB file.
-    @param out_path
+    @param fp str: The fingerprinting software and method used, e.g. 'rd_ecfp4', 'ob_fp2'
+    @param cmpd_pdb str: File path to the PDB
+    @param out_path str: Path to where the scores file will be written
     """
     fp_name = fp
     fp = fp.split("_")
@@ -2002,9 +2012,9 @@ def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
     """!
     Generate signature
 
-    @param cmpd_scores
-    @param prot_scores
-    @param matrix_file
+    @param cmpd_scores str: File path to tab-separated scores for all Compounds
+    @param prot_scores str: File path to tab-separated scores for all Proteins
+    @param matrix_file str: File path to where the generated Compounds signature will be written
     """
     def print_time(s):
         if s >= 60:
@@ -2043,6 +2053,13 @@ def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
 
 
 def get_scores(c, p_scores, c_score):
+    """!
+    Get best score for each Compound-Protein interaction
+
+    @param c int: Compound id
+    @param p_scores df: DataFrame of all Protein ligands
+    @param c_score df: DataFrame of all Compound-ligand scores
+    """
     l = []
     for pdb in p_scores.index:
         temp_value = 0.000
@@ -2061,7 +2078,12 @@ def get_scores(c, p_scores, c_score):
 
 def score_fp(fp, cmpd_file, cmpd_id, bs):
     """!
+    Generate the scores for a given Compound against all Protein ligands.
 
+    @param fp str: Fingerprinting software and method used, e.g., rd_ecfp4
+    @param cmpd_file str: File path to PDB
+    @param cmpd_id int: Number correspodning to the new Compound id
+    @param bs df: DataFrame of all protein ligand fingerprints for the given fingerprinting method (fp)
     """
     l = []
     # Use RDkit
@@ -2131,8 +2153,8 @@ def tanimoto_sparse(str1, str2):
     """!
     Calculate the tanimoto coefficient for a pair of sparse vectors
 
-    @param str1 String of 1s and 0s representing the first compound fingerprint
-    @param str2 String of 1s and 0s representing the second compound fingerprint
+    @param str1 str: String of 1s and 0s representing the first compound fingerprint
+    @param str2 str: String of 1s and 0s representing the second compound fingerprint
     """
     n_c = 0.0
     n_a = 0.0
@@ -2153,8 +2175,8 @@ def tanimoto_dense(list1, list2):
     """!
     Calculate the tanimoto coefficient for a pair of dense vectors
 
-    @param list1 List of positions that have a 1 in first compound fingerprint
-    @param list2 List of positions that have a 1 in second compound fingerprint
+    @param list1 list: List of positions that have a 1 in first compound fingerprint
+    @param list2 list: List of positions that have a 1 in second compound fingerprint
     """
     c = [common_item for common_item in list1 if common_item in list2]
     return float(len(c))/(len(list1) + len(list2) - len(c))
@@ -2164,7 +2186,7 @@ def get_fp_lig(fp):
     """!
     Download precompiled binding site ligand fingerprints using the given fingerprint method.
 
-    @param fp Fingerprinting method used to compile each binding site ligand fingerprint
+    @param fp str: Fingerprinting method used to compile each binding site ligand fingerprint
     """
     pre = os.path.dirname(__file__)
     out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre, fp)
@@ -2312,9 +2334,9 @@ def dl_dir(url, out, l):
 
     Prints the name of the directory and a progress bar.
 
-    @param url URL of the dir to be downloaded.
-    @param out Path to where the dir will be downloaded.
-    @param l List of files in dir to be downloaded.
+    @param url str: URL of the dir to be downloaded
+    @param out str: Path to where the dir will be downloaded
+    @param l list: List of files in dir to be downloaded
     """
     if not os.path.exists(out):
         os.makedirs(out)
@@ -2356,8 +2378,8 @@ def dl_file(url, out_file):
 
     Prints the name of the file and a progress bar.
 
-    @param url URL of the file to be downloaded.
-    @param out_file Path to where the file will be downloaded.
+    @param url str: URL of the file to be downloaded
+    @param out_file str: File path to where the file will be downloaded
     """
     if os.path.exists(out_file):
         return
