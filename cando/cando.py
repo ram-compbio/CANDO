@@ -880,7 +880,7 @@ class CANDO(object):
             print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
             exit()
 
-        if not self.indication_prooteins and not self.indication_pathways:
+        if not self.indication_proteins and not self.indication_pathways:
             if not self.compounds[0].similar_sorted:
                 for c in self.compounds:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
