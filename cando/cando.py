@@ -999,8 +999,8 @@ class CANDO(object):
                     if len(effect.pathways) == 0:
                         print('No associated pathways for {}, skipping'.format(effect.id_))
                         continue
-                    elif len(effect.pathways) < 5:
-                        print('Less than 10 associated pathways for {}, skipping'.format(effect.id_))
+                    elif len(effect.pathways) < 1:
+                        #print('Less than 5 associated pathways for {}, skipping'.format(effect.id_))
                         continue
             c_per_effect += count
             effect_dct[(effect, count)] = {}
@@ -1306,7 +1306,6 @@ class CANDO(object):
         print("Median cluster size = {}".format(np.median(c_clusters)))
         print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters), np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
-
 
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], seed=42, out=''):
         """!
@@ -2193,11 +2192,12 @@ def get_v2_0():
     dl_file(url, 'v2_0/mappings/drugbank-all.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
     dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-    dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
-    os.chdir("v2_0/cmpds/scores")
-    os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
-    os.chdir("../../..")
+    if not os.path.exists('v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
+        dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
+        os.chdir("v2_0/cmpds/scores")
+        os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
+        os.chdir("../../..")
     print('All data for v2.0 downloaded.')
 
 
@@ -2253,7 +2253,7 @@ def get_tutorial():
     if not os.path.exists('./examples/8100.pdb'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/8100.pdb'
         dl_file(url, './examples/8100.pdb')
-    # Pathways
+    # Protein subset
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-uniprot_set'
     dl_file(url, './examples/example-uniprot_set')
     print('All data for tutorial downloaded.')
@@ -2298,7 +2298,11 @@ def get_test():
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/vina64x.fpt'
     dl_file(url, 'test/vina64x.fpt')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/toy64x.fpt'
-    dl_file(url, 'test/toy64x.fpt') 
+    dl_file(url, 'test/toy64x.fpt')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-pathway-prot.tsv'
+    dl_file(url, 'test/test-pathway-prot.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-pathway-mesh.tsv'
+    dl_file(url, 'test/test-pathway-mesh.tsv')
     print('All test data downloaded.\n')
 
 
