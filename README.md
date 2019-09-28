@@ -13,7 +13,7 @@ Computational Analysis of Novel Drug Opportunities
 CANDO is a unique computational drug discovery, design, and repurposing platform.
 
 
-## INSTALL
+## Install
 
 You may download the source code via the releases or cloning the git repository. However, we suggest using anaconda to install the CANDO package, as this is the easiest and quickest way to start using our platform! 
 
