@@ -870,12 +870,14 @@ class CANDO(object):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
-        @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
+        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
         @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
-        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for benchmarking
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
+        benchmarking
         @param bottom bool: Reverse the ranking (descending) for the benchmark
-        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
-        @param adrs bool: ADRs are used as the effect instead of Indications
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
+        modified, and ordinal)
+        @param adrs bool: ADRs are used as the phenotypic effect instead of Indications
         """
 
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
@@ -1217,7 +1219,8 @@ class CANDO(object):
 
         @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
         @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
-        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
+        modified, and ordinal)
         """
         print("Making CANDO copy with reversed compound ordering")
         cp = CANDO(self.c_map, self.i_map, self.matrix)
@@ -1314,16 +1317,17 @@ class CANDO(object):
         create an ML classifier for a specified indication or all inds (to benchmark)
         predict (used w/ 'effect=' - indication or ADR) is a list of compounds to classify with the trained ML model
         out=X saves benchmark SUMMARY->SUMMARY_ml_X; raw results->raw_results/raw_results_ml_X (same for RAN)
-        currently supports random forest ('rf'), 1-class SVM ('1csvm'), and logistic regression ('log')
-        models are trained with leave-one-out cross validation during benchmarking
+        currently supports random forest ('rf'), support vector machine ('svm'), 1-class SVM ('1csvm'), and logistic
+        regression ('log') models are trained with leave-one-out cross validation during benchmarking
 
-        @param method
-        @param effect
-        @param benchmark
-        @param adrs
-        @param predict
-        @param seed
-        @param out
+        @param method str: type of machine learning algorithm to use ('rf', 'svm', '1csvm', and 'log')
+        @param effect list: provide a specific Indication or ADR object to train a classifer
+        @param benchmark bool: benchmark the ML pipeline by training a classifier with LOOCV for each Indication or ADR
+        @param adrs bool: if the models are trained with ADRs instead of Indications
+        @param predict list: provide a list of Compound objects to classify with the model (only used in
+        combination with effect=Indication/ADR object)
+        @param seed int: choose a seed for reproducibility
+        @param out str: file name extension for the output of benchmark (note: must have benchmark=True)
         """
         if out:
             if not os.path.exists('./raw_results/'):
@@ -1345,13 +1349,6 @@ class CANDO(object):
             return mtrx, [1] * len(mtrx)
 
         def random_neutrals(efct, s=None, benchmark=False):
-            """!
-            Choose random 'neutral' compounds for training, seed for reproducibility
-            
-            @param efct
-            @param s
-            @param benchmark bool:
-            """
             neutrals = []
             used = []
             shuffled = list(range(len(self.compounds)))
@@ -1382,9 +1379,6 @@ class CANDO(object):
             return neutrals, [0] * len(neutrals)
 
         def model(meth, samples, labels, params=None, seed=None):
-            """!
-
-            """
             if meth == 'rf':
                 m = RandomForestClassifier(n_estimators=100, random_state=seed)
                 m.fit(samples, labels)
@@ -1593,7 +1587,7 @@ class CANDO(object):
         
         @param new_sig str: Path to the new Compound signature
         @param new_name str: Name to be used for the new Compound
-        @param cando_cmpd object: Compound object to be used
+        @param cando_cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
         """
@@ -1627,7 +1621,7 @@ class CANDO(object):
 
         @param new_sig list: List float of novel compound protein interaction signature
         @param new_name str: Drug name
-        @param cando_cmpd object: Compound object
+        @param cando_cmpd Compound: Compound object
         @param n int: top number of similar Compounds to be used for prediction
         """
         if new_sig:
@@ -1650,7 +1644,7 @@ class CANDO(object):
         
         @param new_sig str: Path to the tab-separated interaction scores
         @param new_name str: Name for the new Compound
-        @return cmpd object: Compound object
+        @return cmpd Compound: Compound object
         """
         new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
         if not new_name:
