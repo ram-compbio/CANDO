@@ -28,7 +28,7 @@ cando = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file,
 cando.canbenchmark('test')
 print('\n')
 
-print("Test #3 - create CANDO object using cosine distance metric then run continuous, bottom, and associated benchmark test with 'sort' ranking")
+print("Test #3 - create CANDO object using cosine distance metric then run continuous, bottom, cluster, and associated benchmark test with 'sort' ranking")
 print('-------')
 cando_cos = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, 
         compute_distance=True, dist_metric='cosine',
@@ -38,6 +38,7 @@ cando_cos.canbenchmark_associated('test_associated', ranking='modified')
 cando_cos.canbenchmark_bottom('test_bottom', ranking='standard')
 cando_cos.canbenchmark_bottom('test_bottom', ranking='modified')
 cando_cos.canbenchmark_bottom('test_bottom', ranking='ordinal')
+cando_cos.canbenchmark_cluster(n_clusters=5)
 print('\n')
 
 print("Test #4 - canpredict_compounds()")
@@ -97,5 +98,11 @@ vina64 = cnd.CANDO(cmpd_map, inds_map, matrix='vina64x.tsv', compute_distance=Tr
 fusion = toy64.fusion([vina64], method='mult')
 tr = cnd.Matrix('toy64x_rmsds.tsv', rmsd=True)
 tr.convert('toy64x_sim.tsv')
+print('\n')
+
+print("Test #11 - Check other download functions")
+print('-------')
+cnd.get_tutorial()
+cnd.get_v2_0()
 print('\n')
 

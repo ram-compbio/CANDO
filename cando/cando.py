@@ -147,7 +147,7 @@ class CANDO(object):
 
     """
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
-                 pathways='', pathway_quantifier='max', indication_pathways='', indication_genes='',
+                 pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
                  adr_map='', ncpus=1):
         ## @var c_map 
@@ -198,9 +198,9 @@ class CANDO(object):
         ## @var indication_pathways
         #
         self.indication_pathways = indication_pathways
-        ## @var indication_genes
+        ## @var indication_proteins
         #
-        self.indication_genes = indication_genes
+        self.indication_proteins = indication_proteins
         ## @var adr_map
         #
         self.adr_map = adr_map
@@ -364,9 +364,9 @@ class CANDO(object):
                 self.quantify_pathways()
             print('Done reading pathways.')
 
-        if self.indication_genes:
+        if self.indication_proteins:
             print('Reading indication-gene associations...')
-            with open(indication_genes, 'r') as igf:
+            with open(indication_proteins, 'r') as igf:
                 for l in igf:
                     ls = l.strip().split('\t')
                     ind_id = ls[0]
@@ -876,11 +876,11 @@ class CANDO(object):
         @param adrs
         """
 
-        if (continuous and self.indication_pathways) or (continuous and self.indication_genes):
+        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
             print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
             exit()
 
-        if not self.indication_genes and not self.indication_pathways:
+        if not self.indication_prooteins and not self.indication_pathways:
             if not self.compounds[0].similar_sorted:
                 for c in self.compounds:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
@@ -1019,10 +1019,9 @@ class CANDO(object):
                     else:
                         self.quantify_pathways(indication=effect)
 
-            # Indication2genes
-            # retrieve the appropriate protein indices here, should be
+            # Retrieve the appropriate protein indices here, should be
             # incorporated as part of the ind object during file reading
-            if self.indication_genes:
+            if self.indication_proteins:
                 dg = []
                 for p in effect.proteins:
                     if p not in dg:
@@ -1039,7 +1038,7 @@ class CANDO(object):
                             self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
                     else:
                         self.generate_some_similar_sigs(c, sort=True, aux=True)
-            elif self.indication_genes:
+            elif self.indication_proteins:
                 if len(dg) < 2:
                     self.generate_some_similar_sigs(c, sort=True, proteins=None)
                 else:
@@ -1059,23 +1058,29 @@ class CANDO(object):
                             cs_rmsd = cs[1]
                         else:
                             continue
-                    
+
+                    value = 0.0 
                     if continuous:
                         value = cs_rmsd
                     elif bottom:
                         if ranking == 'modified':
                             value = competitive_modified_bottom(c.similar, cs_rmsd)
-                        if ranking == 'standard':
+                        elif ranking == 'standard':
                             value = competitive_standard_bottom(c.similar, cs_rmsd)
-                        if ranking == 'ordinal':
+                        elif ranking == 'ordinal':
                             value = c.similar.index(cs)
+                        else:
+                            print("Ranking function {} is incorrect.".format(ranking))
+                            exit()
                     elif ranking == 'modified':
                         value = competitive_modified(c.similar, cs_rmsd)
                     elif ranking == 'standard':
                         value = competitive_standard(c.similar, cs_rmsd)
                     elif ranking == 'ordinal':
-                        # df sort_values
                         value = c.similar.index(cs)
+                    else:    
+                        print("Ranking function {} is incorrect.".format(ranking))
+                        exit()
                    
                     if adrs:
                         s = [str(c.index), effect.name]
@@ -1228,7 +1233,7 @@ class CANDO(object):
         
         cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
-    def canbenchmark_cluster(self, n_clusters):
+    def canbenchmark_cluster(self, n_clusters=5):
         """!
         Benchmark using k-means clustering
 
@@ -1301,6 +1306,7 @@ class CANDO(object):
         print("Median cluster size = {}".format(np.median(c_clusters)))
         print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters), np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
+
 
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], seed=42, out=''):
         """!
@@ -1506,7 +1512,7 @@ class CANDO(object):
                     continue
                 if self.pathways:
                     self.generate_similar_sigs(c, aux=True, sort=True)
-                elif self.indication_genes:
+                elif self.indication_proteins:
                     self.generate_similar_sigs(c, sort=True, proteins=ind.proteins)
                 else:
                     self.generate_similar_sigs(c, sort=True)
@@ -1526,7 +1532,7 @@ class CANDO(object):
                         c_dct[k][0] += 1
         else:
             c_dct = {}
-            if self.indication_genes and ind_id:
+            if self.indication_proteins and ind_id:
                 indices = []
                 for p in ind.proteins:
                     indices.append(self.protein_id_to_index[p.id_])
@@ -1849,46 +1855,6 @@ class Matrix(object):
                     scores = list(map(float, lines[i].strip().split('\t')))
                     self.values.append(scores)
 
-    def fusion(self, matrix, metric='mult', out_file=''):
-        """!
-        Function to fuse two Matrix objects
-
-        @param matrix Matrix object
-        @param metric How to fuse the two Matrix objects (e.g. mult or sum)
-        @param out_file Name of the file to save the fused matrix
-        """
-        if len(self.values[0]) != len(self.values):
-            print('{} not symmetric, quitting.'.format(self.matrix_file))
-            quit()
-        if len(matrix.values[0]) != len(matrix.values):
-            print('{} not symmetric, quitting.'.format(matrix.matrix_file))
-            quit()
-        if self.values[0][0] != matrix.values[0][0]:
-            print('The first values of these matrices do not match; '
-                  'please ensure they are using both distance or similarity -- quitting.')
-            quit()
-        out = []
-        for i in range(len(self.values)):
-            vs = []
-            for j in range(len(self.values)):
-                v1 = self.values[i][j]
-                v2 = matrix.values[i][j]
-                if metric == 'mult':
-                    v = v1 * v2
-                elif metric == 'sum':
-                    v = v1 + v2
-                else:
-                    print('Please enter a valid metric ("mult" or "sum").')
-                    quit()
-                vs.append(v)
-            out.append(vs)
-
-        if out_file:
-            of = open(out_file, 'w')
-            for vs in out:
-                of.write("{}\n".format('\t'.join(list(map(str, vs)))))
-            of.close()
-
     def convert(self, out_file):
         """!
         Convert similarity matrix to distance matrix or vice versa. The
@@ -2110,13 +2076,13 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
             elif fp[1] == 'daylight':
                 cmpd_fp = rdmolops.RDKFingerprint(cmpd)
             else:
-                return
+                l.append(0.000)
             bit_fp = DataStructs.BitVectToText(cmpd_fp)
         except:
             print ("Reading Exception: ", cmpd_id)
             for pdb in bs.index:
                 l.append(0.000)
-                continue
+            return {cmpd_id: l}
         print("Calculating tanimoto scores for compound {} against all binding site ligands...".format(cmpd_id))
         for pdb in bs.index:
             if bs.loc[pdb][1] == '':
@@ -2131,13 +2097,20 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 continue
     # Use OpenBabel
     elif fp[0] == 'ob':
-        cmpd = next(pybel.readfile("pdb", cmpd_file))
-        # FP2 - Daylight
-        if fp[1] == 'fp2':
-            cmpd_fp = cmpd.calcfp('fp2')
-        # FP4 - SMARTS
-        elif fp[1] == 'fp4':
-            cmpd_fp = cmpd.calcfp('fp4')
+        try:
+            cmpd = next(pybel.readfile("pdb", cmpd_file))
+            # FP2 - Daylight
+            if fp[1] == 'fp2':
+                cmpd_fp = cmpd.calcfp('fp2')
+            # FP4 - SMARTS
+            elif fp[1] == 'fp4':
+                cmpd_fp = cmpd.calcfp('fp4')
+        except:
+            for pdb in bs.index:
+                l.append(0.000)
+            return {cmpd_id: l}
+
+        bit_fp = cmpd_fp.bits
         print("Calculating tanimoto scores for {} against all binding site ligands...".format(cmpd_id))
         for pdb in bs.index:
             if bs.loc[pdb][1] == '':
@@ -2145,7 +2118,13 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 continue
             bs_fp = bs.loc[pdb][1].split(',')
             bs_fp = [int(bs_fp[x]) for x in range(len(bs_fp))]
-            l.append(0.000)
+            try:
+                # Tanimoto similarity
+                score = tanimoto_dense(bit_fp, bs_fp)
+                l.append(score)
+            except:
+                l.append(0.000)
+                continue
     return {cmpd_id: l}
 
 
@@ -2217,8 +2196,9 @@ def get_v2_0():
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
     dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
     os.chdir("v2_0/cmpds/scores")
-    os.system("gunzip drugbank-approved-rd_ecfp4.tsv.gz")
+    os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
     os.chdir("../../..")
+    print('All data for v2.0 downloaded.')
 
 
 def get_tutorial():
@@ -2267,7 +2247,7 @@ def get_tutorial():
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
         dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
         os.chdir("v2_0/cmpds/scores")
-        os.system("gunzip drugbank-approved-rd_ecfp4.tsv.gz")
+        os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
     # New compound
     if not os.path.exists('./examples/8100.pdb'):
@@ -2318,9 +2298,8 @@ def get_test():
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/vina64x.fpt'
     dl_file(url, 'test/vina64x.fpt')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/toy64x.fpt'
-    dl_file(url, 'test/toy64x.fpt')
-    
-    print('Done.\n')
+    dl_file(url, 'test/toy64x.fpt') 
+    print('All test data downloaded.\n')
 
 
 def dl_dir(url, out, l):
