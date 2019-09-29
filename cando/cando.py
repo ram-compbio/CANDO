@@ -26,13 +26,13 @@ class Protein(object):
     An object to represent a protein
     """
     def __init__(self, id_, sig):
-        ## @var String id_ 
+        ## @var id_ 
         #   PDB or UniProt ID for the given protein
         self.id_ = id_
-        ## @var List sig 
+        ## @var sig 
         #   List of scores representing each drug interaction with the given protein
         self.sig = sig
-        ## @var list pathways 
+        ## @var pathways 
         #   List of Pathway objects in which the given protein is involved.
         self.pathways = []
 
@@ -562,7 +562,7 @@ class CANDO(object):
         """!
         Get Indication object from Indication id
 
-        @param str: ind_id Indication id
+        @param ind_id str: Indication id
         @return Returns object: Indication object
         """
         for i in self.indications:
@@ -1800,13 +1800,20 @@ class Matrix(object):
     Convert between fpt and tsv, as well as distance to similarity (and vice versa)
     """
     def __init__(self, matrix_file, rmsd=False, convert_to_tsv=False):
-        ## @var str matrix_file
-        # path to file with interaction scores
+        ## @var matrix_file
+        # str: Path to file with interaction scores
         self.matrix_file = matrix_file
-        ## @var bool rmsd
-        # if the matrix_file is an rmsd file
-        ## @var bool compute_to_tsv
+        ## @var rmsd
+        # bool: if the matrix_file is an rmsd file
+        self.rmsd = rmsd
+        ## @var convert_to_tsv
+        # bool: Convert old matrix format (.fpt) to .tsv
+        self.convert_to_tsv = convert_to_tsv
+        ## @var proteins
+        # list: Proteins in the Matrix
         self.proteins = []
+        ## @var values
+        # list: Values in the Matrix
         self.values = []
 
         def pro_name(l):
