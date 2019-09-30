@@ -1302,7 +1302,7 @@ class CANDO(object):
                             total_acc+=1.0
                             done = True
                             break
-                    if done == True:
+                    if done:
                         break
                 total_count += 1
 
