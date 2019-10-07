@@ -2247,7 +2247,7 @@ def get_tutorial():
     # Protein scores
     if not os.path.exists('./examples/example-prots_scores.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-prots_scores.tsv'
-        dl_file(url, './examples/example-prots_scores')
+        dl_file(url, './examples/example-prots_scores.tsv')
 
     if not os.path.exists('v2_0'):
         os.mkdir('v2_0')
