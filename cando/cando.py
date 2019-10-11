@@ -32,9 +32,26 @@ class Protein(object):
         ## @var sig 
         #   List of scores representing each drug interaction with the given protein
         self.sig = sig
+        ## @var indications
+        #   This is every indication it is associated with from the
+        #   mapping file
+        self.indications = []
+        ## @var similar
+        #   (list of tuples)
+        #   Ranked list of proteins with the 
+        #   most similar interaction signatures
+        self.similar = []
+        ## @var similar_computed
+        #   (bool)
+        #   If a similar list has been generated
+        #   for the protein.
+        self.similar_computed = False
         ## @var pathways 
         #   List of Pathway objects in which the given protein is involved.
         self.pathways = []
+        ## @var adrs
+        # 
+        self.adrs = []
 
 
 class Compound(object):
@@ -152,7 +169,7 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 adr_map='', ncpus=1):
+                 adr_map='', protein_distance=False, ncpus=1):
         ## @var c_map 
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -207,6 +224,8 @@ class CANDO(object):
         ## @var adr_map
         # str: File path to ADR mapping file
         self.adr_map = adr_map
+        
+        self.protein_distance = protein_distance
 
         self.proteins = []
         self.protein_id_to_index = {}
@@ -380,8 +399,61 @@ class CANDO(object):
                             pro = self.proteins[pi]
                             ind = self.get_indication(ind_id)
                             ind.proteins.append(pro)
+                            pro.indications.append(ind)
                         except KeyError:
                             pass
+
+            if self.protein_distance:
+                print('Computing {} distances for all proteins...'.format(self.dist_metric))
+                # put all protein signatures into 2D-array
+                signatures = []
+                for i in range(0, len(self.proteins)):
+                    signatures.append(self.proteins[i].sig)
+                snp = np.array(signatures)  # convert to numpy form
+
+                # call pairwise_distances, speed up with custom RMSD function and parallelism
+                if self.dist_metric == "rmsd":
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = squareform(distance_matrix)
+                elif self.dist_metric in ['cosine','correlation','euclidean','cityblock']:
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
+                    distance_matrix = squareform(distance_matrix,checks=False)
+                else:
+                    print("Incorrect distance metric - {}".format(self.dist_metric))
+                    exit()
+
+                # step through the condensed matrix - add RMSDs to Compound.similar lists
+                N = len(self.proteins)
+                n = 0
+                for i in range(N):
+                    for j in range(i, N):
+                        p1 = self.proteins[i]
+                        p2 = self.proteins[j]
+                        if i == j:
+                            #c1.similar.append((c1, -1.0))
+                            continue
+                        r = distance_matrix[n]
+                        p1.similar.append((p2, r))
+                        p2.similar.append((p1, r))
+                        n += 1
+                for p in self.proteins:
+                    sorted_scores = sorted(p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    p.similar = sorted_scores
+                    p.similar_computed = True
+   
+                def rmsds_to_str(prot):
+                    o = ''
+                    for s in prot.similar:
+                        o += '{}\t'.format(s[1])
+                    o = o + '\n'
+                    return o
+                with open("rmsd-prots.tsv", 'w') as srf:
+                    for p in self.proteins:
+                        srf.write(rmsds_to_str(p))
+
+                print('Done computing {} distances for all proteins.'.format(self.dist_metric))
+
 
         if read_rmsds:
             print('Reading RMSDs...')
@@ -865,6 +937,32 @@ class CANDO(object):
         fo.close()
         return final_accs
 
+
+    def proteins_analysed(self, f, metrics, adrs=False):
+        fo = open(f, 'w')
+        effects = list(self.accuracies.keys())
+        if not adrs:
+            effects_sorted = sorted(effects, key=lambda x: (len(x[0].proteins), x[0].id_))[::-1]
+        else:
+            effects_sorted = sorted(effects, key=lambda x: (len(x[0].proteins), x[0].id_))[::-1]
+        l = len(effects)
+        final_accs = {}
+        for m in metrics:
+            final_accs[m] = 0.0
+        for effect, p in effects_sorted:
+            fo.write("{0}\t{1}\t".format(effect.id_, p))
+            accs = self.accuracies[(effect,p)]
+            for m in metrics:
+                n = accs[m]
+                y = str(n / p * 100)[0:4]
+                fo.write("{}\t".format(y))
+
+                final_accs[m] += n / p / l
+            fo.write("|\t{}\n".format(effect.name))
+        fo.close()
+        return final_accs
+
+
     def canbenchmark(self, file_name, indications=[], continuous=False,
                           bottom=False, ranking='standard', adrs=False):
         """!
@@ -1212,6 +1310,264 @@ class CANDO(object):
         print('Done computing {} distances.'.format(self.dist_metric))
         
         cp.canbenchmark(file_name=file_name, indications=indications, continuous=continuous, ranking=ranking)
+
+
+    def benchmark_proteins(self, file_name='', SUM='', v1=False, indications=[],
+                          bottom=False, ranking='geetika', adrs=False):
+        if not os.path.exists('./results_analysed_named'):
+            print("Directory 'results_analysed_named' does not exist, creating directory")
+            os.system('mkdir results_analysed_named')
+        if not os.path.exists('./raw_results'):
+            print("Directory 'raw_results' does not exist, creating directory")
+            os.system('mkdir raw_results')
+
+        ra_named = 'results_analysed_named/results_analysed_named_' + file_name
+        ra = 'raw_results/raw_results_' + file_name
+        ra_out = open(ra, 'w')
+        if adrs:
+            ra_out.write("Compound, ADR, Top10, Top25, Top50, Top100, "
+                     "TopAll, Top1%, Top5%, Top10%, Top50%, Top100%, Rank\n")
+        else:
+            ra_out.write("Compound, Disease, Top10, Top25, Top50, Top100, "
+                         "TopAll, Top1%, Top5%, Top10%, Top50%, Top100%, Rank\n")
+
+        x = (len(self.proteins)) / 100.0  # changed this...no reason to use similar instead of compounds
+        # had to change from 100.0 to 100.0001 because the int function
+        # would chop off an additional value of 1 for some reason...
+        metrics = [(1,10), (2,25), (3,50), (4,100), (5,int(x*100.0001)),
+                   (6,int(x*1.0001)), (7,int(x*5.0001)), (8,int(x*10.0001)),
+                   (9,int(x*50.0001)), (10,int(x*100.0001))]
+
+        if bottom:
+            def rank_protein(sims, r):
+                rank = 0
+                for sim in sims:
+                    if sim[1] >= r:
+                        rank += 1.0
+                    else:
+                        return rank
+                return len(sims)
+        else:
+            # Geetika's code
+            def rank_protein(sims, r):
+                rank = 0
+                for sim in sims:
+                    if sim[1] <= r:
+                        rank += 1.0
+                    else:
+                        return rank
+                return len(sims)
+            # Geetika's reverse
+            def rank_protein_reverse(sims, r):
+                rank = 0
+                for sim in sims:
+                    if sim[1] < r:
+                        rank += 1.0
+                    else:
+                        return rank
+                return len(sims)
+
+        effect_dct = {}
+        ss = []
+        p_per_effect = 0
+
+
+        if indications:
+            effects = list(map(self.get_indication, indications))
+        elif adrs:
+            effects = self.adrs
+        else:
+            effects = self.indications
+
+        # Open for write the PDBs per ind file 
+        if self.indication_genes:
+            o = open("{}-ind2genes.tsv".format(file_name),'w')
+
+        for effect in effects:
+            count = len(effect.proteins)
+            if count < 2:
+                continue
+            if not adrs:
+                if self.indication_pathways:
+                    if len(effect.pathways) == 0:
+                        print('No associated pathways for {}, skipping'.format(effect.id_))
+                        continue
+                    elif len(effect.pathways) < 10:
+                        print('Less than 10 associated pathways for {}, skipping'.format(effect.id_))
+                        continue
+            p_per_effect += count
+            effect_dct[(effect, count)] = {}
+            for m in metrics:
+                effect_dct[(effect, count)][m] = 0.0
+            
+            for p in effect.proteins:
+                for ps in p.similar:
+                    if adrs:
+                        if effect in ps[0].adrs:
+                            ps_rmsd = ps[1]
+                        else:
+                            continue
+                    else:
+                        if effect in ps[0].indications:
+                            ps_rmsd = ps[1]
+                        else:
+                            continue
+                        # Test different ranking methods
+                    if ranking=='geetika':
+                        # Geetika's code
+                        rank = rank_protein(p.similar, ps_rmsd)
+                    elif ranking=='reverse':
+                        # Geetika's reverse
+                        rank = rank_protein_reverse(p.similar, ps_rmsd)
+                    elif ranking=='sort':
+                        # df sort_values
+                        rank = p.similar.index(ps)
+                    if adrs:
+                        p_ind = self.protein_id_to_index[p.id_]
+                        s = [str(p_ind), effect.name]
+                    else:
+                        p_ind = self.protein_id_to_index[p.id_]
+                        s = [str(p_ind), effect.id_]
+                    for x in metrics:
+                        if rank <= x[1]:
+                            effect_dct[(effect, count)][x] += 1.0
+                            s.append('1')
+                        else:
+                            s.append('0')
+                    s.append(str(int(rank)))
+                    ss.append(s)
+                    break
+        
+        self.accuracies = effect_dct
+        if adrs:
+            final_accs = self.proteins_analysed(ra_named, metrics, adrs=True)
+        else:
+            final_accs = self.proteins_analysed(ra_named, metrics, adrs=False)
+        ss = sorted(ss, key=lambda xx: int(xx[0]))
+        top_pairwise = [0.0] * 10
+        for s in ss:
+            if s[2] == '1':
+                top_pairwise[0] += 1.0
+            if s[3] == '1':
+                top_pairwise[1] += 1.0
+            if s[4] == '1':
+                top_pairwise[2] += 1.0
+            if s[5] == '1':
+                top_pairwise[3] += 1.0
+            if s[6] == '1':
+                top_pairwise[4] += 1.0
+            if s[7] == '1':
+                top_pairwise[5] += 1.0
+            if s[8] == '1':
+                top_pairwise[6] += 1.0
+            if s[9] == '1':
+                top_pairwise[7] += 1.0
+            if s[10] == '1':
+                top_pairwise[8] += 1.0
+            if s[11] == '1':
+                top_pairwise[9] += 1.0
+            sj = ','.join(s)
+            sj += '\n'
+            ra_out.write(sj)
+        ra_out.close()
+
+        cov = [0] * 10
+        cov_count = [0.0] * 10
+        for effect,p in list(self.accuracies.keys()):
+            accs = self.accuracies[effect,p]
+            for m_i in range(len(metrics)):
+                v = accs[metrics[m_i]]
+                if v > 0.0:
+                    cov[m_i] += 1
+                    cov_count[m_i] += v / p
+
+        def float_to_str0(x):
+            o = str(x * 100.0 / len(ss))[0:6]
+            o_s = o.split('.')
+            if len(o_s[-1]) == 1:
+                return o + '00'
+            if len(o_s[-1]) == 2:
+                return o + '0'
+            else:
+                return o
+
+        def float_to_str1(x):
+            if len(ss) == 0:
+                o = '0.00'
+            else:
+                o = str(x * 100.0 / len(ss))[0:6]
+            o_s = o.split('.')
+            if len(o_s[-1]) == 1:
+                return o + '00'
+            if len(o_s[-1]) == 2:
+                return o + '0'
+            if len(o_s[-1]) == 4:
+                return o[:-1]
+            else:
+                return o
+
+        def float_to_str2(x):
+            o = str(x * 100.0)[0:6]
+            o_s = o.split('.')
+            if len(o_s[-1]) == 1:
+                return o + '00'
+            if len(o_s[-1]) == 2:
+                return o + '0'
+            if len(o_s[-1]) == 4:
+                return o[:-1]
+            else:
+                return o
+
+        for p_i in range(len(cov_count)):
+            if cov[p_i] == 0:
+                cov_count[p_i] = 0.0
+            else:
+                cov_count[p_i] /= cov[p_i]
+
+        cov_count = list(map(float_to_str2, cov_count))
+
+        if SUM:
+            if v1:
+                summary = open(SUM, 'w')
+                summary.write('{0}\t{1}\t'.format(len(self.accuracies), p_per_effect/len(self.accuracies)))
+                for m in metrics:
+                    l = final_accs[m]
+                    summary.write('{0}\t'.format(float_to_str2(l)))
+                summary.write('-\t{}\n'.format(self.data_name))
+                summary.write('.\t{0}\t{1}\t-\t{2}\n'.format(len(ss), '\t'.join(list(map(float_to_str1,top_pairwise))),
+                                                             self.data_name))
+                summary.write('{0} / {1} - {2} / {3} - {4} / {5} - {6} / {7} - {8} / {9} - {10}'
+                              .format(cov[0], cov_count[0], cov[1], cov_count[1], cov[2], cov_count[2],
+                                      cov[3], cov_count[3], cov[5], cov_count[5], self.data_name))
+                summary.close()
+            else:
+                headers = ['top10','top25','top50','top100','top{}'.format(len(self.proteins)),
+                           'top1%','top5%','top10%','top50%','top100%']
+                # Create empty df with cutoff headers
+                df = pd.DataFrame(columns=headers)
+                # Create average indication accuracy list
+                ia = []
+                for m in metrics:
+                    ia.append(float_to_str2(final_accs[m]))
+                # Create average pairwise accuracy list
+                pa = list(map(float_to_str1, top_pairwise))
+                # Indication coverage is already done
+                # Append 3 lists to df and write to file
+                df = df.append(pd.Series(ia, index=df.columns), ignore_index=True)
+                df = df.append(pd.Series(pa, index=df.columns), ignore_index=True)
+                df = df.append(pd.Series(cov, index=df.columns), ignore_index=True)
+                df.rename(index={0:'aia',1:'apa',2:'ic'}, inplace=True)
+                df.to_csv(SUM, sep="\t")
+       
+        # pretty print the average indication accuracies
+        cut = 0
+        print("\taia")
+        for m in metrics:
+            print("{}\t{:.2f}".format(headers[cut], final_accs[m] * 100.0))
+            cut+=1
+        print('\n')
+        #return final_accs
+
 
     def canbenchmark_bottom(self, file_name, indications=[], ranking='standard'):
         """!
