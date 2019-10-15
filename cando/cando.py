@@ -387,7 +387,7 @@ class CANDO(object):
             print('Done reading pathways.')
 
         if self.indication_proteins:
-            print('Reading indication-gene associations...')
+            print('Reading indication-protein associations...')
             with open(indication_proteins, 'r') as igf:
                 for l in igf:
                     ls = l.strip().split('\t')
@@ -406,9 +406,7 @@ class CANDO(object):
             if self.protein_distance:
                 print('Computing {} distances for all proteins...'.format(self.dist_metric))
                 # put all protein signatures into 2D-array
-                signatures = []
-                for i in range(0, len(self.proteins)):
-                    signatures.append(self.proteins[i].sig)
+                signatures = [self.proteins[i].sig for i in range(0, len(self.proteins))]
                 snp = np.array(signatures)  # convert to numpy form
 
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
@@ -641,6 +639,19 @@ class CANDO(object):
             if i.id_ == ind_id:
                 return i
         raise LookupError
+
+    def get_protein(self, id_):
+        """!
+        Get Pathway object from Pathway id
+
+        @param id_ str: Pathway id
+        @return Returns object: Pathway object
+        """
+        for p in self.proteins:
+            if p.id_ == id_:
+                return p
+        raise LookupError
+
 
     def get_pathway(self, id_):
         """!
@@ -1269,6 +1280,7 @@ class CANDO(object):
             cut += 1
         print('\n')
 
+
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
@@ -1280,7 +1292,7 @@ class CANDO(object):
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = CANDO(self.c_map, self.i_map, self.matrix)
+        cp = CANDO(self.c_map, self.i_map, self.matrix, compute_distance=self.compute_distance, pathways=self.pathways, pathway_quantifier=self.pathway_quantifier, indication_pathways=self.indication_pathways, indication_proteins=self.indication_proteins, similarity=self.similarity, dist_metric=self.dist_metric, protein_set=self.protein_set, rm_zeros=self.rm_zeros, rm_compounds=self.rm_compounds, protein_distance=self.protein_distance, ncpus=self.ncpus)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
@@ -1380,8 +1392,7 @@ class CANDO(object):
             effects = self.indications
 
         # Open for write the PDBs per ind file 
-        if self.indication_genes:
-            o = open("{}-ind2genes.tsv".format(file_name),'w')
+        o = open("{}-ind2prots.tsv".format(file_name),'w')
 
         for effect in effects:
             count = len(effect.proteins)
@@ -1400,6 +1411,9 @@ class CANDO(object):
             for m in metrics:
                 effect_dct[(effect, count)][m] = 0.0
             
+            prot_ids = [i.id_ for i in effect.proteins]
+            o.write("{}\t{}\t{}\n".format(effect.id_,count,';'.join(prot_ids)))
+
             for p in effect.proteins:
                 for ps in p.similar:
                     if adrs:
@@ -1437,7 +1451,9 @@ class CANDO(object):
                     s.append(str(int(rank)))
                     ss.append(s)
                     break
-        
+
+        o.close()
+ 
         self.accuracies = effect_dct
         if adrs:
             final_accs = self.proteins_analysed(ra_named, metrics, adrs=True)
@@ -1835,6 +1851,104 @@ class CANDO(object):
             print('apa\t{:0.3f}'.format(100 * (sm[2] / sm[0])))
             print('ic\t{}'.format(sm[3]))
         return
+
+
+
+
+    def canpredict_proteins(self, ind_id='', all_inds=False, n=10, topX=10, sum_scores=False, keep_approved=False, write=False):
+        if write:
+            o = open("all_inds-{}-top{}.tsv".format(n,topX), 'w')
+
+        if ind_id:
+            i = self.indication_ids.index(ind_id)
+            ind = self.indications[i]
+            print("{0} proteins found for {1} --> {2}".format(len(ind.proteins), ind.id_, ind.name))
+        elif all_inds:
+            print("Compiling the {} highest predicted proteins for each indication...".format(n))
+            for ind in self.indications:
+                if len(ind.proteins) == 0:
+                    continue
+                p_dct = {}
+                for p in ind.proteins:
+                    for p2_i in range(n):
+                        p2 = p.similar[p2_i]
+                        if p2[1] == 0.0:
+                            continue
+                        already_approved = ind in p2[0].indications
+                        k = p2[0].id_
+                        if k not in p_dct:
+                            p_dct[k] = [1, already_approved]
+                        else:
+                            p_dct[k][0] += 1
+                sorted_x = sorted(p_dct.items(), key=lambda x: x[1][0])[::-1]
+                if write:
+                    prots = [self.get_protein(p[1][0]).id_ for p in enumerate(sorted_x)]
+                    o.write("{}\t{}\n".format(ind.id_,";".join(prots[:topX])))
+            if write:
+                o.close()
+            return
+               
+        else:
+            print("Finding proteins with greatest summed scores in {}...".format(self.matrix))
+
+        if not sum_scores:
+            if self.pathways:
+                if self.indication_pathways:
+                    self.quantify_pathways(ind)
+                else:
+                    self.quantify_pathways()
+            for p in ind.proteins:
+                if p.similar_computed:
+                    continue
+                if self.pathways:
+                    self.generate_similar_sigs(p, aux=True, sort=True)
+                #elif self.indication_proteins:
+                #    self.generate_similar_sigs(p, sort=True, proteins=ind.proteins)
+                else:
+                    self.generate_similar_sigs(p, sort=True)
+        if not sum_scores:
+            print("Generating protein predictions using top{} most similar proteins...\n".format(n))
+            p_dct = {}
+            for p in ind.proteins:
+                for p2_i in range(n):
+                    p2 = p.similar[p2_i]
+                    if p2[1] == 0.0:
+                        continue
+                    already_approved = ind in p2[0].indications
+                    k = p2[0].id_
+                    if k not in p_dct:
+                        p_dct[k] = [1, already_approved]
+                    else:
+                        p_dct[k][0] += 1
+        sorted_x = sorted(p_dct.items(), key=lambda x: x[1][0])[::-1]
+        print("Printing the {} highest predicted proteins...\n".format(topX))
+        if not keep_approved:
+            i = 0
+            print('rank\tscore\tid\tname')
+            for p in enumerate(sorted_x):
+                if i >= topX != -1:
+                    break
+                if p[1][1][1]:
+                    continue
+                else:
+                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
+                                                  self.get_protein(p[1][0]).id_, self.get_protein(p[1][0]).name))
+                    i += 1
+        else:
+            i = 0
+            print('rank\tscore\tapproved\tid\tname')
+            for p in enumerate(sorted_x):
+                if i >= topX != -1:
+                    break
+                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
+                                                    self.get_protein(p[1][0]).id_, self.get_protein(p[1][0]).name))
+                i += 1
+        print('\n')
+
+
+
+
+
 
     def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
         """!
