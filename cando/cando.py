@@ -2209,12 +2209,22 @@ def get_v2_0():
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
     print('Downloading data for v2_0...')
+    # Mappings
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-approved.tsv'
     dl_file(url, 'v2_0/mappings/drugbank-approved.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-all.tsv'
     dl_file(url, 'v2_0/mappings/drugbank-all.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
     dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
+    # Matrices
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
+    dl_file(url, 'v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
+    dl_file(url, 'v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+    # Proteins
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/prots/nrpdb.tsv'
+    dl_file(url, 'v2_0/prots/nrpdb.tsv')
+    # Compounds
     if not os.path.exists('v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
         dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
