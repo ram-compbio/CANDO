@@ -16,7 +16,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
 from sklearn import svm
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform
 
@@ -29,29 +29,15 @@ class Protein(object):
         ## @var id_ 
         #   PDB or UniProt ID for the given protein
         self.id_ = id_
+        ## @alt_id
+        #   Used when a second identifer mapping is available (such as SIFTs project)
+        self.alt_id = ''
         ## @var sig 
         #   List of scores representing each drug interaction with the given protein
         self.sig = sig
-        ## @var indications
-        #   This is every indication it is associated with from the
-        #   mapping file
-        self.indications = []
-        ## @var similar
-        #   (list of tuples)
-        #   Ranked list of proteins with the 
-        #   most similar interaction signatures
-        self.similar = []
-        ## @var similar_computed
-        #   (bool)
-        #   If a similar list has been generated
-        #   for the protein.
-        self.similar_computed = False
         ## @var pathways 
         #   List of Pathway objects in which the given protein is involved.
         self.pathways = []
-        ## @var adrs
-        # 
-        self.adrs = []
 
 
 class Compound(object):
@@ -123,6 +109,9 @@ class Indication(object):
         ## @var proteins
         # list: Every protein associated to the indication form the mapping file
         self.proteins = []
+        ## @var pathogen
+        # bool: Whether or not this indication is caused by a pathogen
+        self.pathogen = None
 
 
 class Pathway(object):
@@ -169,7 +158,7 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 adr_map='', protein_distance=False, ncpus=1):
+                 adr_map='', ncpus=1):
         ## @var c_map 
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -224,8 +213,6 @@ class CANDO(object):
         ## @var adr_map
         # str: File path to ADR mapping file
         self.adr_map = adr_map
-        
-        self.protein_distance = protein_distance
 
         self.proteins = []
         self.protein_id_to_index = {}
@@ -312,14 +299,22 @@ class CANDO(object):
                 m_lines = m_f.readlines()
                 if self.protein_set:
                     print('Editing signatures according to proteins in {}...'.format(self.protein_set))
-                    targets = self.uniprot_set_index(self.protein_set)
+                    targets, pdct_rev = self.uniprot_set_index(self.protein_set)
                     new_i = 0
+                    matches = [[], 0]
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
                         name = vec[0]
                         if name in targets:
                             scores = list(map(float, vec[1:]))
                             p = Protein(name, scores)
+                            alt = pdct_rev[name]
+                            p.alt_id = alt
+                            if alt in matches[0]:
+                                matches[1] += 1
+                            else:
+                                matches[0].append(alt)
+                                matches[1] += 1
                             self.proteins.append(p)
                             self.protein_id_to_index[name] = new_i
                             for i in range(len(scores)):
@@ -328,6 +323,8 @@ class CANDO(object):
                             new_i += 1
                         else:
                             continue
+                    print('{} proteins in {} mapped to {} proteins '
+                          'in {}.'.format(len(matches[0]), self.protein_set, matches[1], self.matrix))
                 else:
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
@@ -387,7 +384,7 @@ class CANDO(object):
             print('Done reading pathways.')
 
         if self.indication_proteins:
-            print('Reading indication-protein associations...')
+            print('Reading indication-gene associations...')
             with open(indication_proteins, 'r') as igf:
                 for l in igf:
                     ls = l.strip().split('\t')
@@ -399,59 +396,8 @@ class CANDO(object):
                             pro = self.proteins[pi]
                             ind = self.get_indication(ind_id)
                             ind.proteins.append(pro)
-                            pro.indications.append(ind)
                         except KeyError:
                             pass
-
-            if self.protein_distance:
-                print('Computing {} distances for all proteins...'.format(self.dist_metric))
-                # put all protein signatures into 2D-array
-                signatures = [self.proteins[i].sig for i in range(0, len(self.proteins))]
-                snp = np.array(signatures)  # convert to numpy form
-
-                # call pairwise_distances, speed up with custom RMSD function and parallelism
-                if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
-                    distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['cosine','correlation','euclidean','cityblock']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
-                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    distance_matrix = squareform(distance_matrix,checks=False)
-                else:
-                    print("Incorrect distance metric - {}".format(self.dist_metric))
-                    exit()
-
-                # step through the condensed matrix - add RMSDs to Compound.similar lists
-                N = len(self.proteins)
-                n = 0
-                for i in range(N):
-                    for j in range(i, N):
-                        p1 = self.proteins[i]
-                        p2 = self.proteins[j]
-                        if i == j:
-                            #c1.similar.append((c1, -1.0))
-                            continue
-                        r = distance_matrix[n]
-                        p1.similar.append((p2, r))
-                        p2.similar.append((p1, r))
-                        n += 1
-                for p in self.proteins:
-                    sorted_scores = sorted(p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                    p.similar = sorted_scores
-                    p.similar_computed = True
-   
-                def rmsds_to_str(prot):
-                    o = ''
-                    for s in prot.similar:
-                        o += '{}\t'.format(s[1])
-                    o = o + '\n'
-                    return o
-                with open("rmsd-prots.tsv", 'w') as srf:
-                    for p in self.proteins:
-                        srf.write(rmsds_to_str(p))
-
-                print('Done computing {} distances for all proteins.'.format(self.dist_metric))
-
 
         if read_rmsds:
             print('Reading RMSDs...')
@@ -640,19 +586,6 @@ class CANDO(object):
                 return i
         raise LookupError
 
-    def get_protein(self, id_):
-        """!
-        Get Pathway object from Pathway id
-
-        @param id_ str: Pathway id
-        @return Returns object: Pathway object
-        """
-        for p in self.proteins:
-            if p.id_ == id_:
-                return p
-        raise LookupError
-
-
     def get_pathway(self, id_):
         """!
         Get Pathway object from Pathway id
@@ -677,6 +610,35 @@ class CANDO(object):
                 return a
         raise LookupError
 
+    def top_targets(self, cmpd, n=10, negative=False):
+        """!
+        Get the top scoring protein targets for a given compound
+
+        @param cmpd Compound: Compound object for which to print targets
+        @param n int: number of top targets to print/return
+        @param negative int: if the interaction scores are negative (stronger) energies
+        @return Returns list: list of tuples (protein id_, score)
+        """
+        # print the list of the top targets
+        all_interactions = []
+        sig = cmpd.sig
+        for i in range(len(sig)):
+            s = sig[i]
+            p_id = self.proteins[i].id_
+            all_interactions.append((p_id, s))
+        if negative:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
+        else:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
+        print('Compound is {}'.format(cmpd.name))
+        m = len(self.proteins)
+        if n > m:
+            print('There are only {} proteins in this CANDO object, printing all.'.format(m))
+            n = m
+        for si in range(n):
+            print(interactions_sorted[si][0], interactions_sorted[si][1])
+        return interactions_sorted[0:n]
+
     def uniprot_set_index(self, prots):
         """!
         Gather proteins from input matrix that map to UniProt IDs from 'protein_set=' param
@@ -689,6 +651,7 @@ class CANDO(object):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/pdb_2_uniprot.csv'
             dl_file(url, 'v2_0/mappings/pdb_2_uniprot.csv')
         pdct = {}
+        pdct_rev = {}
         with open('v2_0/mappings/pdb_2_uniprot.csv', 'r') as u2p:
             for l in u2p.readlines()[1:]:
                 spl = l.strip().split(',')
@@ -699,15 +662,18 @@ class CANDO(object):
                         pdct[uni].append(pdb)
                 except KeyError:
                     pdct[uni] = [pdb]
+                pdct_rev[pdb] = uni
         targets = []
-        targets += prots
+        for tgt in prots:
+            targets.append(tgt)
+            pdct_rev[tgt] = tgt
         with open(prots, 'r') as unisf:
             for lp in unisf:
                 try:
                     targets += pdct[lp.strip().upper()]
                 except KeyError:
                     pass
-        return targets
+        return targets, pdct_rev
 
     def generate_similar_sigs(self, cmpd, sort=False, proteins=[], aux=False):
         """!
@@ -948,39 +914,13 @@ class CANDO(object):
         fo.close()
         return final_accs
 
-
-    def proteins_analysed(self, f, metrics, adrs=False):
-        fo = open(f, 'w')
-        effects = list(self.accuracies.keys())
-        if not adrs:
-            effects_sorted = sorted(effects, key=lambda x: (len(x[0].proteins), x[0].id_))[::-1]
-        else:
-            effects_sorted = sorted(effects, key=lambda x: (len(x[0].proteins), x[0].id_))[::-1]
-        l = len(effects)
-        final_accs = {}
-        for m in metrics:
-            final_accs[m] = 0.0
-        for effect, p in effects_sorted:
-            fo.write("{0}\t{1}\t".format(effect.id_, p))
-            accs = self.accuracies[(effect,p)]
-            for m in metrics:
-                n = accs[m]
-                y = str(n / p * 100)[0:4]
-                fo.write("{}\t".format(y))
-
-                final_accs[m] += n / p / l
-            fo.write("|\t{}\n".format(effect.name))
-        fo.close()
-        return final_accs
-
-
-    def canbenchmark(self, file_name, indications=[], continuous=False,
-                          bottom=False, ranking='standard', adrs=False):
+    def canbenchmark(self, file_name, indications=[], continuous=False, bottom=False,
+                     ranking='standard', adrs=False):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
         @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
-        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param indications list or str: List of Indication ids to be used for this benchmark, otherwise all will be used.
         @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
         benchmarking
         @param bottom bool: Reverse the ranking (descending) for the benchmark
@@ -1056,16 +996,41 @@ class CANDO(object):
                     return rank
             return len(sims)
 
+        def filter_indications(ind_set):
+            if not os.path.exists('v2_0/mappings/group_disease-top_level.tsv'):
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/group_disease-top_level.tsv'
+                dl_file(url, 'v2_0/mappings/group_disease-top_level.tsv')
+            path_ids = ['C01', 'C02', 'C03']
+            with open('v2_0/mappings/group_disease-top_level.tsv', 'r') as fgd:
+                for l in fgd:
+                    ls = l.strip().split('\t')
+                    if ls[1] in path_ids:
+                        ind = self.get_indication(ls[0])
+                        ind.pathogen = True
+            if ind_set == 'pathogen':
+                return [indx for indx in self.indications if indx.pathogen]
+            elif ind_set == 'human':
+                return [indx for indx in self.indications if not indx.pathogen]
+            else:
+                print('Please enter proper indication set, options include "pathogen", "human", or "all".')
+                quit()
+
         effect_dct = {}
         ss = []
         c_per_effect = 0
 
-        if indications:
+        if isinstance(indications, list) and len(indications) >= 1:
             effects = list(map(self.get_indication, indications))
+        elif isinstance(indications, list) and len(indications) == 0:
+            effects = self.indications
         elif adrs:
             effects = self.adrs
         else:
-            effects = self.indications
+            if isinstance(indications, str):
+                if indications == 'all':
+                    effects = self.indications
+                else:
+                    effects = filter_indications(indications)
 
         def cont_metrics():
             all_v = []
@@ -1280,7 +1245,6 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
@@ -1292,7 +1256,7 @@ class CANDO(object):
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = CANDO(self.c_map, self.i_map, self.matrix, compute_distance=self.compute_distance, pathways=self.pathways, pathway_quantifier=self.pathway_quantifier, indication_pathways=self.indication_pathways, indication_proteins=self.indication_proteins, similarity=self.similarity, dist_metric=self.dist_metric, protein_set=self.protein_set, rm_zeros=self.rm_zeros, rm_compounds=self.rm_compounds, protein_distance=self.protein_distance, ncpus=self.ncpus)
+        cp = CANDO(self.c_map, self.i_map, self.matrix)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
@@ -1322,268 +1286,6 @@ class CANDO(object):
         print('Done computing {} distances.'.format(self.dist_metric))
         
         cp.canbenchmark(file_name=file_name, indications=indications, continuous=continuous, ranking=ranking)
-
-
-    def benchmark_proteins(self, file_name='', SUM='', v1=False, indications=[],
-                          bottom=False, ranking='geetika', adrs=False):
-        if not os.path.exists('./results_analysed_named'):
-            print("Directory 'results_analysed_named' does not exist, creating directory")
-            os.system('mkdir results_analysed_named')
-        if not os.path.exists('./raw_results'):
-            print("Directory 'raw_results' does not exist, creating directory")
-            os.system('mkdir raw_results')
-
-        ra_named = 'results_analysed_named/results_analysed_named_' + file_name
-        ra = 'raw_results/raw_results_' + file_name
-        ra_out = open(ra, 'w')
-        if adrs:
-            ra_out.write("Compound, ADR, Top10, Top25, Top50, Top100, "
-                     "TopAll, Top1%, Top5%, Top10%, Top50%, Top100%, Rank\n")
-        else:
-            ra_out.write("Compound, Disease, Top10, Top25, Top50, Top100, "
-                         "TopAll, Top1%, Top5%, Top10%, Top50%, Top100%, Rank\n")
-
-        x = (len(self.proteins)) / 100.0  # changed this...no reason to use similar instead of compounds
-        # had to change from 100.0 to 100.0001 because the int function
-        # would chop off an additional value of 1 for some reason...
-        metrics = [(1,10), (2,25), (3,50), (4,100), (5,int(x*100.0001)),
-                   (6,int(x*1.0001)), (7,int(x*5.0001)), (8,int(x*10.0001)),
-                   (9,int(x*50.0001)), (10,int(x*100.0001))]
-
-        if bottom:
-            def rank_protein(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] >= r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
-        else:
-            # Geetika's code
-            def rank_protein(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] <= r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
-            # Geetika's reverse
-            def rank_protein_reverse(sims, r):
-                rank = 0
-                for sim in sims:
-                    if sim[1] < r:
-                        rank += 1.0
-                    else:
-                        return rank
-                return len(sims)
-
-        effect_dct = {}
-        ss = []
-        p_per_effect = 0
-
-
-        if indications:
-            effects = list(map(self.get_indication, indications))
-        elif adrs:
-            effects = self.adrs
-        else:
-            effects = self.indications
-
-        # Open for write the PDBs per ind file 
-        o = open("{}-ind2prots.tsv".format(file_name),'w')
-
-        for effect in effects:
-            count = len(effect.proteins)
-            if count < 2:
-                continue
-            if not adrs:
-                if self.indication_pathways:
-                    if len(effect.pathways) == 0:
-                        print('No associated pathways for {}, skipping'.format(effect.id_))
-                        continue
-                    elif len(effect.pathways) < 10:
-                        print('Less than 10 associated pathways for {}, skipping'.format(effect.id_))
-                        continue
-            p_per_effect += count
-            effect_dct[(effect, count)] = {}
-            for m in metrics:
-                effect_dct[(effect, count)][m] = 0.0
-            
-            prot_ids = [i.id_ for i in effect.proteins]
-            o.write("{}\t{}\t{}\n".format(effect.id_,count,';'.join(prot_ids)))
-
-            for p in effect.proteins:
-                for ps in p.similar:
-                    if adrs:
-                        if effect in ps[0].adrs:
-                            ps_rmsd = ps[1]
-                        else:
-                            continue
-                    else:
-                        if effect in ps[0].indications:
-                            ps_rmsd = ps[1]
-                        else:
-                            continue
-                        # Test different ranking methods
-                    if ranking=='geetika':
-                        # Geetika's code
-                        rank = rank_protein(p.similar, ps_rmsd)
-                    elif ranking=='reverse':
-                        # Geetika's reverse
-                        rank = rank_protein_reverse(p.similar, ps_rmsd)
-                    elif ranking=='sort':
-                        # df sort_values
-                        rank = p.similar.index(ps)
-                    if adrs:
-                        p_ind = self.protein_id_to_index[p.id_]
-                        s = [str(p_ind), effect.name]
-                    else:
-                        p_ind = self.protein_id_to_index[p.id_]
-                        s = [str(p_ind), effect.id_]
-                    for x in metrics:
-                        if rank <= x[1]:
-                            effect_dct[(effect, count)][x] += 1.0
-                            s.append('1')
-                        else:
-                            s.append('0')
-                    s.append(str(int(rank)))
-                    ss.append(s)
-                    break
-
-        o.close()
- 
-        self.accuracies = effect_dct
-        if adrs:
-            final_accs = self.proteins_analysed(ra_named, metrics, adrs=True)
-        else:
-            final_accs = self.proteins_analysed(ra_named, metrics, adrs=False)
-        ss = sorted(ss, key=lambda xx: int(xx[0]))
-        top_pairwise = [0.0] * 10
-        for s in ss:
-            if s[2] == '1':
-                top_pairwise[0] += 1.0
-            if s[3] == '1':
-                top_pairwise[1] += 1.0
-            if s[4] == '1':
-                top_pairwise[2] += 1.0
-            if s[5] == '1':
-                top_pairwise[3] += 1.0
-            if s[6] == '1':
-                top_pairwise[4] += 1.0
-            if s[7] == '1':
-                top_pairwise[5] += 1.0
-            if s[8] == '1':
-                top_pairwise[6] += 1.0
-            if s[9] == '1':
-                top_pairwise[7] += 1.0
-            if s[10] == '1':
-                top_pairwise[8] += 1.0
-            if s[11] == '1':
-                top_pairwise[9] += 1.0
-            sj = ','.join(s)
-            sj += '\n'
-            ra_out.write(sj)
-        ra_out.close()
-
-        cov = [0] * 10
-        cov_count = [0.0] * 10
-        for effect,p in list(self.accuracies.keys()):
-            accs = self.accuracies[effect,p]
-            for m_i in range(len(metrics)):
-                v = accs[metrics[m_i]]
-                if v > 0.0:
-                    cov[m_i] += 1
-                    cov_count[m_i] += v / p
-
-        def float_to_str0(x):
-            o = str(x * 100.0 / len(ss))[0:6]
-            o_s = o.split('.')
-            if len(o_s[-1]) == 1:
-                return o + '00'
-            if len(o_s[-1]) == 2:
-                return o + '0'
-            else:
-                return o
-
-        def float_to_str1(x):
-            if len(ss) == 0:
-                o = '0.00'
-            else:
-                o = str(x * 100.0 / len(ss))[0:6]
-            o_s = o.split('.')
-            if len(o_s[-1]) == 1:
-                return o + '00'
-            if len(o_s[-1]) == 2:
-                return o + '0'
-            if len(o_s[-1]) == 4:
-                return o[:-1]
-            else:
-                return o
-
-        def float_to_str2(x):
-            o = str(x * 100.0)[0:6]
-            o_s = o.split('.')
-            if len(o_s[-1]) == 1:
-                return o + '00'
-            if len(o_s[-1]) == 2:
-                return o + '0'
-            if len(o_s[-1]) == 4:
-                return o[:-1]
-            else:
-                return o
-
-        for p_i in range(len(cov_count)):
-            if cov[p_i] == 0:
-                cov_count[p_i] = 0.0
-            else:
-                cov_count[p_i] /= cov[p_i]
-
-        cov_count = list(map(float_to_str2, cov_count))
-
-        if SUM:
-            if v1:
-                summary = open(SUM, 'w')
-                summary.write('{0}\t{1}\t'.format(len(self.accuracies), p_per_effect/len(self.accuracies)))
-                for m in metrics:
-                    l = final_accs[m]
-                    summary.write('{0}\t'.format(float_to_str2(l)))
-                summary.write('-\t{}\n'.format(self.data_name))
-                summary.write('.\t{0}\t{1}\t-\t{2}\n'.format(len(ss), '\t'.join(list(map(float_to_str1,top_pairwise))),
-                                                             self.data_name))
-                summary.write('{0} / {1} - {2} / {3} - {4} / {5} - {6} / {7} - {8} / {9} - {10}'
-                              .format(cov[0], cov_count[0], cov[1], cov_count[1], cov[2], cov_count[2],
-                                      cov[3], cov_count[3], cov[5], cov_count[5], self.data_name))
-                summary.close()
-            else:
-                headers = ['top10','top25','top50','top100','top{}'.format(len(self.proteins)),
-                           'top1%','top5%','top10%','top50%','top100%']
-                # Create empty df with cutoff headers
-                df = pd.DataFrame(columns=headers)
-                # Create average indication accuracy list
-                ia = []
-                for m in metrics:
-                    ia.append(float_to_str2(final_accs[m]))
-                # Create average pairwise accuracy list
-                pa = list(map(float_to_str1, top_pairwise))
-                # Indication coverage is already done
-                # Append 3 lists to df and write to file
-                df = df.append(pd.Series(ia, index=df.columns), ignore_index=True)
-                df = df.append(pd.Series(pa, index=df.columns), ignore_index=True)
-                df = df.append(pd.Series(cov, index=df.columns), ignore_index=True)
-                df.rename(index={0:'aia',1:'apa',2:'ic'}, inplace=True)
-                df.to_csv(SUM, sep="\t")
-       
-        # pretty print the average indication accuracies
-        cut = 0
-        print("\taia")
-        for m in metrics:
-            print("{}\t{:.2f}".format(headers[cut], final_accs[m] * 100.0))
-            cut+=1
-        print('\n')
-        #return final_accs
-
 
     def canbenchmark_bottom(self, file_name, indications=[], ranking='standard'):
         """!
@@ -1779,7 +1481,7 @@ class CANDO(object):
             if adrs:
                 effects = sorted(self.adrs, key=lambda x: (len(x.compounds), x.id_))[::-1]
             else:
-                effects = sorted(self.indications, key=lambda x: (len(x.compounds), x.id_))[::-1]
+                effects = sorted(self.indications, key=lambda x: (len(x.compounds), x.id_))[::-1][0:10]
             if out:
                 frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w')
                 frr.write('Compound,Effect,Class\n')
@@ -1802,13 +1504,15 @@ class CANDO(object):
                 train_samples = np.array(pos[0] + neu[0])
                 train_labels = np.array(pos[1] + neu[1])
                 mdl = model(method, train_samples, train_labels, seed=seed)
-                pred = mdl.predict(np.array([c.sig]))
-                if pred[0] == 1:
+                pred = mdl.predict_proba(np.array([c.sig]))
+                pos_class = list(mdl.classes_).index(1)
+
+                if pred[0][pos_class] > 0.5:
                     tp_fn[0] += 1
                 else:
                     tp_fn[1] += 1
                 if benchmark and out:
-                    frr.write('{},{},{}\n'.format(c.id_, e.id_, pred[0]))
+                    frr.write('{},{},{}\n'.format(c.id_, e.id_, pred[0][pos_class]))
 
             # predict whether query drugs are associated with this indication
             if predict:
@@ -1852,104 +1556,6 @@ class CANDO(object):
             print('ic\t{}'.format(sm[3]))
         return
 
-
-
-
-    def canpredict_proteins(self, ind_id='', all_inds=False, n=10, topX=10, sum_scores=False, keep_approved=False, write=False):
-        if write:
-            o = open("all_inds-{}-top{}.tsv".format(n,topX), 'w')
-
-        if ind_id:
-            i = self.indication_ids.index(ind_id)
-            ind = self.indications[i]
-            print("{0} proteins found for {1} --> {2}".format(len(ind.proteins), ind.id_, ind.name))
-        elif all_inds:
-            print("Compiling the {} highest predicted proteins for each indication...".format(n))
-            for ind in self.indications:
-                if len(ind.proteins) == 0:
-                    continue
-                p_dct = {}
-                for p in ind.proteins:
-                    for p2_i in range(n):
-                        p2 = p.similar[p2_i]
-                        if p2[1] == 0.0:
-                            continue
-                        already_approved = ind in p2[0].indications
-                        k = p2[0].id_
-                        if k not in p_dct:
-                            p_dct[k] = [1, already_approved]
-                        else:
-                            p_dct[k][0] += 1
-                sorted_x = sorted(p_dct.items(), key=lambda x: x[1][0])[::-1]
-                if write:
-                    prots = [self.get_protein(p[1][0]).id_ for p in enumerate(sorted_x)]
-                    o.write("{}\t{}\n".format(ind.id_,";".join(prots[:topX])))
-            if write:
-                o.close()
-            return
-               
-        else:
-            print("Finding proteins with greatest summed scores in {}...".format(self.matrix))
-
-        if not sum_scores:
-            if self.pathways:
-                if self.indication_pathways:
-                    self.quantify_pathways(ind)
-                else:
-                    self.quantify_pathways()
-            for p in ind.proteins:
-                if p.similar_computed:
-                    continue
-                if self.pathways:
-                    self.generate_similar_sigs(p, aux=True, sort=True)
-                #elif self.indication_proteins:
-                #    self.generate_similar_sigs(p, sort=True, proteins=ind.proteins)
-                else:
-                    self.generate_similar_sigs(p, sort=True)
-        if not sum_scores:
-            print("Generating protein predictions using top{} most similar proteins...\n".format(n))
-            p_dct = {}
-            for p in ind.proteins:
-                for p2_i in range(n):
-                    p2 = p.similar[p2_i]
-                    if p2[1] == 0.0:
-                        continue
-                    already_approved = ind in p2[0].indications
-                    k = p2[0].id_
-                    if k not in p_dct:
-                        p_dct[k] = [1, already_approved]
-                    else:
-                        p_dct[k][0] += 1
-        sorted_x = sorted(p_dct.items(), key=lambda x: x[1][0])[::-1]
-        print("Printing the {} highest predicted proteins...\n".format(topX))
-        if not keep_approved:
-            i = 0
-            print('rank\tscore\tid\tname')
-            for p in enumerate(sorted_x):
-                if i >= topX != -1:
-                    break
-                if p[1][1][1]:
-                    continue
-                else:
-                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
-                                                  self.get_protein(p[1][0]).id_, self.get_protein(p[1][0]).name))
-                    i += 1
-        else:
-            i = 0
-            print('rank\tscore\tapproved\tid\tname')
-            for p in enumerate(sorted_x):
-                if i >= topX != -1:
-                    break
-                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
-                                                    self.get_protein(p[1][0]).id_, self.get_protein(p[1][0]).name))
-                i += 1
-        print('\n')
-
-
-
-
-
-
     def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
         """!
         This function is used for predicting putative therapeutics for an indication
@@ -1966,6 +1572,103 @@ class CANDO(object):
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
         @param sum_scores bool: Sum all ascores across all proteins
+        @param keep_approved bool: Print Compounds that are already approved for the Indication
+        """
+        if ind_id:
+            i = self.indication_ids.index(ind_id)
+            ind = self.indications[i]
+            print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
+        else:
+            print("Finding compounds with greatest summed scores in {}...".format(self.matrix))
+
+        if not sum_scores:
+            if self.pathways:
+                if self.indication_pathways:
+                    self.quantify_pathways(ind)
+                else:
+                    self.quantify_pathways()
+            for c in ind.compounds:
+                if c.similar_computed:
+                    continue
+                if self.pathways:
+                    self.generate_similar_sigs(c, aux=True, sort=True)
+                elif self.indication_proteins:
+                    self.generate_similar_sigs(c, sort=True, proteins=ind.proteins)
+                else:
+                    self.generate_similar_sigs(c, sort=True)
+        if not sum_scores:
+            print("Generating compound predictions using top{} most similar compounds...\n".format(n))
+            c_dct = {}
+            for c in ind.compounds:
+                for c2_i in range(n):
+                    c2 = c.similar[c2_i]
+                    if c2[1] == 0.0:
+                        continue
+                    already_approved = ind in c2[0].indications
+                    k = c2[0].id_
+                    if k not in c_dct:
+                        c_dct[k] = [1, already_approved]
+                    else:
+                        c_dct[k][0] += 1
+        else:
+            c_dct = {}
+            if self.indication_proteins and ind_id:
+                indices = []
+                for p in ind.proteins:
+                    indices.append(self.protein_id_to_index[p.id_])
+            else:
+                indices = range(len(self.proteins))
+            for c in self.compounds:
+                ss = 0.0
+                for pi in indices:
+                    ss += c.sig[pi]
+                if ind_id:
+                    already_approved = ind in c.indications
+                else:
+                    already_approved = False  # Not relevant since there is no indication
+                c_dct[c.id_] = [ss, already_approved]
+
+        sorted_x = sorted(c_dct.items(), key=lambda x: x[1][0])[::-1]
+        print("Printing the {} highest predicted compounds...\n".format(topX))
+        if not keep_approved:
+            i = 0
+            print('rank\tscore\tid\tname')
+            for p in enumerate(sorted_x):
+                if i >= topX != -1:
+                    break
+                if p[1][1][1]:
+                    continue
+                else:
+                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
+                                                  self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
+                    i += 1
+        else:
+            i = 0
+            print('rank\tscore\tapproved\tid\tname')
+            for p in enumerate(sorted_x):
+                if i >= topX != -1:
+                    break
+                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
+                                                    self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
+                i += 1
+        print('\n')
+
+    def canpredict_compounds2(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False, filter=False):
+        """!
+        This function is used for predicting putative therapeutics for an indication
+        of interest. Input an ind_id id and for each of the associated compounds, it will
+        generate the similar compounds (based on distance) and add them to a dictionary
+        with a value of how many times it shows up (enrichment). If a
+        compound not approved for the indication of interest keeps showing
+        up, that means it is similar in signature to the drugs that are
+        ALREADY approved for the indication, so it may be a target for repurposing.
+        Control how many similar compounds to consider with the argument 'n'.
+        Use ind_id=None to find greatest score sum across all proteins (sum_scores must be True)
+
+        @param ind_id str: Indication id
+        @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
+        @param topX int: top number of predicted Compounds to be printed
+        @param sum_scores bool: Sum all scores across all proteins
         @param keep_approved bool: Print Compounds that are already approved for the Indication
         """
         if ind_id:
@@ -2372,6 +2075,59 @@ class Matrix(object):
                     of.write("{}\n".format('\t'.join(list(map(str, vs)))))
         of.close()
 
+    def normalize(self, outfile, dimension='drugs', method='avg'):
+        """!
+        Normalize the interaction scores across drugs (default) or proteins (not implemented yet).
+
+        @param outfile str: File path to which is written the converted matrix.
+        @param dimension str: which vector to normalize - either 'drugs' to normalize all
+        scores within the proteomic vector or 'proteins' to normalize for a protein against
+        all drug scores.
+        @param method str: normalize by the average or max within the vectors
+        """
+        # dimensions include drugs or features (e.g. "proteins")
+        # methods are average ('avg') or max ('max')
+        dvs = {}  # drug vectors
+        cc = 0
+        if dimension == 'drugs':
+            for vec in self.values:
+                for vi in range(len(vec)):
+                    if cc == 0:
+                        dvs[vi] = []
+                    dvs[vi].append(vec[vi])
+                cc += 1
+
+        new_dvecs = []
+        for i in range(len(dvs)):
+            vec = dvs[i]
+            if method == 'avg':
+                norm_val = np.average(vec)
+            elif method == 'max':
+                norm_val = max(vec)
+            else:
+                print('Please enter a proper normalization method: "max" or "avg"')
+                quit()
+
+            def norm(x):
+                if norm_val == 0:
+                    return 0.0
+                else:
+                    return x/norm_val
+
+            new_dvecs.append(list(map(norm, vec)))
+
+        pvs = {}
+        for dvi in range(len(new_dvecs)):
+            for p in range(len(self.proteins)):
+                try:
+                    pvs[p].append(new_dvecs[dvi][p])
+                except KeyError:
+                    pvs[p] = [new_dvecs[dvi][p]]
+
+        with open(outfile, 'w') as fo:
+            for p in range(len(self.proteins)):
+                fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
+
 
 def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
@@ -2679,12 +2435,22 @@ def get_v2_0():
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
     print('Downloading data for v2_0...')
+    # Mappings
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-approved.tsv'
     dl_file(url, 'v2_0/mappings/drugbank-approved.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-all.tsv'
     dl_file(url, 'v2_0/mappings/drugbank-all.tsv')
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
     dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
+    # Matrices
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
+    dl_file(url, 'v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
+    dl_file(url, 'v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+    # Proteins
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/prots/nrpdb.tsv'
+    dl_file(url, 'v2_0/prots/nrpdb.tsv')
+    # Compounds
     if not os.path.exists('v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
         dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
