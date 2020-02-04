@@ -9,9 +9,11 @@ import numpy as np
 import pandas as pd
 import multiprocessing as mp
 import pybel
+import difflib
+import matplotlib.pyplot as plt
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
-from sklearn.metrics import pairwise_distances
+from sklearn.metrics import pairwise_distances, roc_curve, roc_auc_score, average_precision_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
@@ -29,6 +31,9 @@ class Protein(object):
         ## @var id_ 
         #   PDB or UniProt ID for the given protein
         self.id_ = id_
+        ## @alt_id
+        #   Used when a second identifer mapping is available (such as SIFTs project)
+        self.alt_id = ''
         ## @var sig 
         #   List of scores representing each drug interaction with the given protein
         self.sig = sig
@@ -106,6 +111,9 @@ class Indication(object):
         ## @var proteins
         # list: Every protein associated to the indication form the mapping file
         self.proteins = []
+        ## @var pathogen
+        # bool: Whether or not this indication is caused by a pathogen
+        self.pathogen = None
 
 
 class Pathway(object):
@@ -293,14 +301,22 @@ class CANDO(object):
                 m_lines = m_f.readlines()
                 if self.protein_set:
                     print('Editing signatures according to proteins in {}...'.format(self.protein_set))
-                    targets = self.uniprot_set_index(self.protein_set)
+                    targets, pdct_rev = self.uniprot_set_index(self.protein_set)
                     new_i = 0
+                    matches = [[], 0]
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
                         name = vec[0]
                         if name in targets:
                             scores = list(map(float, vec[1:]))
                             p = Protein(name, scores)
+                            alt = pdct_rev[name]
+                            p.alt_id = alt
+                            if alt in matches[0]:
+                                matches[1] += 1
+                            else:
+                                matches[0].append(alt)
+                                matches[1] += 1
                             self.proteins.append(p)
                             self.protein_id_to_index[name] = new_i
                             for i in range(len(scores)):
@@ -309,6 +325,8 @@ class CANDO(object):
                             new_i += 1
                         else:
                             continue
+                    print('{} proteins in {} mapped to {} proteins '
+                          'in {}.'.format(len(matches[0]), self.protein_set, matches[1], self.matrix))
                 else:
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
@@ -382,6 +400,7 @@ class CANDO(object):
                             ind.proteins.append(pro)
                         except KeyError:
                             pass
+            print('Done reading indication-gene associations.')
 
         if read_rmsds:
             print('Reading RMSDs...')
@@ -545,18 +564,50 @@ class CANDO(object):
                         self.adrs.append(adr)
             print('Read {} ADRs.'.format(len(self.adrs)))
 
-    def get_compound(self, id_):
+    def search_compound(self, name, n=5):
+        id_d = {}
+
+        def return_names(x):
+            id_d[x.name] = x.id_
+            return x.name
+
+        name = name.strip()
+        cando_drugs = list(map(return_names, self.compounds))
+        nms = difflib.get_close_matches(name, cando_drugs, n=n, cutoff=0.5)
+        print('Query: {}'.format(name))
+        print('\tMatch name\tID/Index')
+        for nm in nms:
+            print("\t{}\t{}".format(nm, id_d[nm]))
+
+    def get_compound(self, id_=None, name=''):
         """!
         Get Compound object from Compound id
 
         @param id_ int: Compound id
+        @param name str: name of drug (must match exactly)
         @return Returns object: Compound object
         """
-        for c in self.compounds:
-            if c.id_ == id_:
-                return c
-        print("{0} not in {1}".format(id_, self.c_map))
-        return None
+        if id_ is not None:
+            for c in self.compounds:
+                if c.id_ == id_:
+                    return c
+            print("{0} not in {1}".format(id_, self.c_map))
+            return None
+        else:
+            id_d = {}
+
+            def return_names(x):
+                id_d[x.name] = x.id_
+                return x.name
+
+            cando_drugs = list(map(return_names, self.compounds))
+            name = name.strip()
+            if name not in cando_drugs:
+                print('"{}" is not in our mapping, here are the 5 closest results:'.format(name))
+                self.search_compound(name, n=5)
+                return None
+            else:
+                return self.get_compound(id_=id_d[name])
 
     def get_indication(self, ind_id):
         """!
@@ -594,6 +645,35 @@ class CANDO(object):
                 return a
         raise LookupError
 
+    def top_targets(self, cmpd, n=10, negative=False):
+        """!
+        Get the top scoring protein targets for a given compound
+
+        @param cmpd Compound: Compound object for which to print targets
+        @param n int: number of top targets to print/return
+        @param negative int: if the interaction scores are negative (stronger) energies
+        @return Returns list: list of tuples (protein id_, score)
+        """
+        # print the list of the top targets
+        all_interactions = []
+        sig = cmpd.sig
+        for i in range(len(sig)):
+            s = sig[i]
+            p_id = self.proteins[i].id_
+            all_interactions.append((p_id, s))
+        if negative:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
+        else:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
+        print('Compound is {}'.format(cmpd.name))
+        m = len(self.proteins)
+        if n > m:
+            print('There are only {} proteins in this CANDO object, printing all.'.format(m))
+            n = m
+        for si in range(n):
+            print(interactions_sorted[si][0], interactions_sorted[si][1])
+        return interactions_sorted[0:n]
+
     def uniprot_set_index(self, prots):
         """!
         Gather proteins from input matrix that map to UniProt IDs from 'protein_set=' param
@@ -601,12 +681,13 @@ class CANDO(object):
         @param prots list: UniProt IDs (str)
         @return Returns list: Protein chains (str) matching input UniProt IDs
         """
-        if not os.path.exists('v2_0/mappings/pdb_2_uniprot.csv'):
+        if not os.path.exists('v2.0/mappings/pdb_2_uniprot.csv'):
             print('Downloading UniProt to PDB mapping file...')
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/pdb_2_uniprot.csv'
-            dl_file(url, 'v2_0/mappings/pdb_2_uniprot.csv')
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/pdb_2_uniprot.csv'
+            dl_file(url, 'v2.0/mappings/pdb_2_uniprot.csv')
         pdct = {}
-        with open('v2_0/mappings/pdb_2_uniprot.csv', 'r') as u2p:
+        pdct_rev = {}
+        with open('v2.0/mappings/pdb_2_uniprot.csv', 'r') as u2p:
             for l in u2p.readlines()[1:]:
                 spl = l.strip().split(',')
                 pdb = spl[0] + spl[1]
@@ -616,15 +697,21 @@ class CANDO(object):
                         pdct[uni].append(pdb)
                 except KeyError:
                     pdct[uni] = [pdb]
+                pdct_rev[pdb] = uni
         targets = []
-        targets += prots
+        #for tgt in prots:
+        #    targets.append(tgt)
+        #    pdct_rev[tgt] = tgt
         with open(prots, 'r') as unisf:
             for lp in unisf:
+                prot = lp.strip()
+                targets.append(prot)
+                #pdct_rev[prot] = lp.strip().upper()
                 try:
                     targets += pdct[lp.strip().upper()]
                 except KeyError:
                     pass
-        return targets
+        return targets, pdct_rev
 
     def generate_similar_sigs(self, cmpd, sort=False, proteins=[], aux=False):
         """!
@@ -865,13 +952,13 @@ class CANDO(object):
         fo.close()
         return final_accs
 
-    def canbenchmark(self, file_name, indications=[], continuous=False,
-                          bottom=False, ranking='standard', adrs=False):
+    def canbenchmark(self, file_name, indications=[], continuous=False, bottom=False,
+                     ranking='standard', adrs=False):
         """!
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
         @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
-        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param indications list or str: List of Indication ids to be used for this benchmark, otherwise all will be used.
         @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
         benchmarking
         @param bottom bool: Reverse the ranking (descending) for the benchmark
@@ -947,16 +1034,41 @@ class CANDO(object):
                     return rank
             return len(sims)
 
+        def filter_indications(ind_set):
+            if not os.path.exists('v2.0/mappings/group_disease-top_level.tsv'):
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/group_disease-top_level.tsv'
+                dl_file(url, 'v2.0/mappings/group_disease-top_level.tsv')
+            path_ids = ['C01', 'C02', 'C03']
+            with open('v2.0/mappings/group_disease-top_level.tsv', 'r') as fgd:
+                for l in fgd:
+                    ls = l.strip().split('\t')
+                    if ls[1] in path_ids:
+                        ind = self.get_indication(ls[0])
+                        ind.pathogen = True
+            if ind_set == 'pathogen':
+                return [indx for indx in self.indications if indx.pathogen]
+            elif ind_set == 'human':
+                return [indx for indx in self.indications if not indx.pathogen]
+            else:
+                print('Please enter proper indication set, options include "pathogen", "human", or "all".')
+                quit()
+
         effect_dct = {}
         ss = []
         c_per_effect = 0
 
-        if indications:
+        if isinstance(indications, list) and len(indications) >= 1:
             effects = list(map(self.get_indication, indications))
+        elif isinstance(indications, list) and len(indications) == 0:
+            effects = self.indications
         elif adrs:
             effects = self.adrs
         else:
-            effects = self.indications
+            if isinstance(indications, str):
+                if indications == 'all':
+                    effects = self.indications
+                else:
+                    effects = filter_indications(indications)
 
         def cont_metrics():
             all_v = []
@@ -1312,7 +1424,8 @@ class CANDO(object):
         print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters), np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
 
-    def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], seed=42, out=''):
+    def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], threshold=0.5,
+           negative='random', seed=42, out=''):
         """!
         create an ML classifier for a specified indication or all inds (to benchmark)
         predict (used w/ 'effect=' - indication or ADR) is a list of compounds to classify with the trained ML model
@@ -1321,7 +1434,7 @@ class CANDO(object):
         regression ('log') models are trained with leave-one-out cross validation during benchmarking
 
         @param method str: type of machine learning algorithm to use ('rf', 'svm', '1csvm', and 'log')
-        @param effect list: provide a specific Indication or ADR object to train a classifer
+        @param effect Indication or ADR: provide a specific Indication or ADR object to train a classifer
         @param benchmark bool: benchmark the ML pipeline by training a classifier with LOOCV for each Indication or ADR
         @param adrs bool: if the models are trained with ADRs instead of Indications
         @param predict list: provide a list of Compound objects to classify with the model (only used in
@@ -1335,48 +1448,82 @@ class CANDO(object):
             if not os.path.exists('./results_analysed_named/'):
                 os.system('mkdir results_analysed_named')
 
+        paired_negs = {}
+
         # gather approved compound signatures for training
         def split_cs(efct, cmpd=None):
             mtrx = []
             for cm in efct.compounds:
                 if cmpd:
                     if cm.id_ == cmpd.id_:
-                        pass
-                    else:
-                        mtrx.append(cm.sig)
+                        continue
+                if self.indication_proteins:
+                    if len(efct.proteins) >= 3:
+                        eps = []
+                        for ep in efct.proteins:
+                            ep_index = self.protein_id_to_index[ep.id_]
+                            eps.append(cm.sig[ep_index])
+                        mtrx.append(eps)
                 else:
                     mtrx.append(cm.sig)
             return mtrx, [1] * len(mtrx)
 
-        def random_neutrals(efct, s=None, benchmark=False):
-            neutrals = []
-            used = []
-            shuffled = list(range(len(self.compounds)))
-            if s:
-                random.seed(s)
-                random.shuffle(shuffled)
-            else:
-                s = random.randint(0, len(self.compounds)-1)
-                random.seed(s)
-                random.shuffle(shuffled)
-            i = 0
-            if benchmark:
-                n_neu = len(efct.compounds) - 1
-            else:
-                n_neu = len(efct.compounds)
-            while len(neutrals) < n_neu:
-                n = shuffled[i]
-                if n in used:
-                    i += 1
-                    continue
-                neu = self.compounds[n]
-                if neu not in efct.compounds:
-                    neutrals.append(neu.sig)
-                    used.append(n)
-                    i += 1
+        def choose_negatives(efct, neg_set=negative, s=None, hold_out=None, avoid=[], test=None):
+            if neg_set == 'inverse':
+                if not self.compute_distance and not self.read_rmsds:
+                    print('Please compute all compound-compound distances before using inverse_negatives().\n'
+                          'Re-run with "compute_distance=True" or read in pre-computed distance file "read_rmsds="'
+                          'in the CANDO object instantiation.')
+            negatives = []
+            used = avoid
+
+            def pick_first_last(cmpd, s):
+
+                def return_id(cm):
+                    return cm[0].id_
+
+                if neg_set == 'inverse':
+                    r = int(len(self.compounds) / 2)
+                    shuffled = list(map(return_id, cmpd.similar[::-1][0:r]))
                 else:
-                    i += 1
-            return neutrals, [0] * len(neutrals)
+                    shuffled = list(map(return_id, cmpd.similar))
+                if s:
+                    random.seed(s)
+                    random.shuffle(shuffled)
+                else:
+                    s = random.randint(0, len(self.compounds) - 1)
+                    random.seed(s)
+                    random.shuffle(shuffled)
+                for si in range(len(shuffled)):
+                    n = shuffled[si]
+                    if n in used:
+                        continue
+                    inv = self.get_compound(id_=n)
+                    if inv not in efct.compounds:
+                        if n not in used:
+                            paired_negs[cmpd] = inv
+                            return inv
+
+            if test:
+                inv = pick_first_last(c, s)
+                return inv
+
+            for ce in efct.compounds:
+                if hold_out:
+                    if ce.id_ == hold_out.id_:
+                        continue
+                inv = pick_first_last(ce, s)
+                if self.indication_proteins:
+                    if len(efct.proteins) >= 3:
+                        eps = []
+                        for ep in efct.proteins:
+                            ep_index = self.protein_id_to_index[ep.id_]
+                            eps.append(inv.sig[ep_index])
+                        negatives.append(eps)
+                else:
+                    negatives.append(inv.sig)
+                used.append(inv.id_)
+            return negatives, [0] * len(negatives), used
 
         def model(meth, samples, labels, params=None, seed=None):
             if meth == 'rf':
@@ -1400,7 +1547,7 @@ class CANDO(object):
                 m.fit(samples, labels)
                 return m
             else:
-                print("Please enter valid machine learning method ('rf', '1csvm', 'log')")
+                print("Please enter valid machine learning method ('rf', '1csvm', 'log', or 'svm')")
                 quit()
 
         if benchmark:
@@ -1410,58 +1557,100 @@ class CANDO(object):
                 effects = sorted(self.indications, key=lambda x: (len(x.compounds), x.id_))[::-1]
             if out:
                 frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w')
-                frr.write('Compound,Effect,Class\n')
+                frr.write('Compound,Effect,Prob,Neg,Neg_prob\n')
                 fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w')
                 fsum = open('summary_ml_{}'.format(out), 'w')
         else:
             if len(effect.compounds) < 1:
-                print('No compounds associated with this indication, quitting.')
+                print('No compounds associated with {} ({}), quitting.'.format(effect.name, effect.id_))
                 quit()
+            elif self.indication_proteins and len(effect.proteins) <= 2:
+                print('Less than 3 proteins associated with {} ({}), quitting.'.format(effect.name, effect.id_))
             effects = [effect]
 
         rf_scores = []
         for e in effects:
             if len(e.compounds) < 2:
                 continue
-            neu = random_neutrals(e, s=seed, benchmark=True)
+            if self.indication_proteins:
+                if not len(e.proteins) >= 3:
+                    continue
             tp_fn = [0, 0]
+            fp_tn = [0, 0]
             for c in e.compounds:
                 pos = split_cs(e, cmpd=c)
-                train_samples = np.array(pos[0] + neu[0])
-                train_labels = np.array(pos[1] + neu[1])
+                negs = choose_negatives(e, s=seed, hold_out=c, avoid=[])
+                already_used = negs[2]
+                train_samples = np.array(pos[0] + negs[0])
+                train_labels = np.array(pos[1] + negs[1])
                 mdl = model(method, train_samples, train_labels, seed=seed)
-                pred = mdl.predict(np.array([c.sig]))
-                if pred[0] == 1:
+                test_neg = choose_negatives(e, s=seed, avoid=already_used, test=c)
+                if self.indication_proteins:
+                    eps_pos = []
+                    eps_neg = []
+                    for ep in e.proteins:
+                        ep_index = self.protein_id_to_index[ep.id_]
+                        eps_pos.append(c.sig[ep_index])
+                        eps_neg.append(test_neg.sig[ep_index])
+                    pred = mdl.predict_proba(np.array([eps_pos]))
+                    pred_neg = mdl.predict_proba(np.array([eps_neg]))
+                else:
+                    pred = mdl.predict_proba(np.array([c.sig]))
+                    pred_neg = mdl.predict_proba(np.array([test_neg.sig]))
+                pos_class = list(mdl.classes_).index(1)
+
+                if pred[0][pos_class] > threshold:
                     tp_fn[0] += 1
                 else:
                     tp_fn[1] += 1
+                if pred_neg[0][pos_class] > threshold:
+                    fp_tn[0] += 1
+                else:
+                    fp_tn[1] += 1
                 if benchmark and out:
-                    frr.write('{},{},{}\n'.format(c.id_, e.id_, pred[0]))
+                    frr.write('{},{},{},{},{}\n'.format(c.id_, e.id_, pred[0][pos_class],
+                                                        test_neg.id_, pred_neg[0][pos_class]))
 
             # predict whether query drugs are associated with this indication
             if predict:
                 print('Indication: {}'.format(e.name))
-                print('Leave-one-out cross validation: TP={}, FN={}, Acc={:0.3f}'.format(
-                    tp_fn[0], tp_fn[1], 100 * (tp_fn[0] / float(len(e.compounds)))))
-                neu = random_neutrals(e, s=seed, benchmark=False)
+                print('Leave-one-out cross validation: TP={}, FP={}, FN={}, TN={}, Acc={:0.3f}'.format(
+                    tp_fn[0], fp_tn[0], tp_fn[1], fp_tn[1], 100 * ((tp_fn[0]+fp_tn[1]) / (float(len(e.compounds))*2))))
+                negs = choose_negatives(e, s=seed)
                 pos = split_cs(e)
-                train_samples = np.array(pos[0] + neu[0])
-                train_labels = np.array(pos[1] + neu[1])
+                train_samples = np.array(pos[0] + negs[0])
+                train_labels = np.array(pos[1] + negs[1])
                 mdl = model(method, train_samples, train_labels, seed=seed)
-                print('\tCompound\tClass')
+                print('\tCompound\tProb')
                 for c in predict:
-                    pred = mdl.predict(np.array([c.sig]))
-                    print('\t{}\t{}'.format(c.name, pred[0]))
+                    inv = choose_negatives(effect, s=seed, test=c, avoid=negs[2])
+                    if self.indication_proteins:
+                        eps_pos = []
+                        eps_neg = []
+                        for ep in e.proteins:
+                            ep_index = self.protein_id_to_index[ep.id_]
+                            eps_pos.append(c.sig[ep_index])
+                            eps_neg.append(test_neg.sig[ep_index])
+                        pred = mdl.predict_proba(np.array([eps_pos]))
+                        pred_neg = mdl.predict_proba(np.array([test_neg.sig]))
+                    else:
+                        pred = mdl.predict_proba(np.array([c.sig]))
+                        pred_inv = mdl.predict_proba(np.array([inv.sig]))
+                    pos_class = list(mdl.classes_).index(1)
+
+                    print('\t{}\t{:0.3f}'.format(c.name, pred[0][pos_class]))
+                    #print('\t{}\t{:0.3f}\t(random negative of {})'.format(inv.name, pred_inv[0][pos_class], c.name))
 
             # append loocv results to combined list
-            rf_scores.append((e, tp_fn))
+            rf_scores.append((e, tp_fn, fp_tn))
 
         sm = [0, 0, 0, 0]
         if benchmark:
             for rf_score in rf_scores:
                 efct = rf_score[0]
                 tfp = rf_score[1]
-                acc = tfp[0] / float(len(efct.compounds))
+                ffp = rf_score[2]
+                acc = (tfp[0] + ffp[1]) / (float(len(efct.compounds) * 2))
                 sm[0] += len(efct.compounds)
                 sm[1] += acc
                 sm[2] += (acc * len(efct.compounds))
@@ -1479,6 +1668,57 @@ class CANDO(object):
             print('apa\t{:0.3f}'.format(100 * (sm[2] / sm[0])))
             print('ic\t{}'.format(sm[3]))
         return
+
+    def raw_results_roc(self, rr_files, labels, save='roc-raw_results.pdf'):
+
+        if len(labels) != len(rr_files):
+            print('Please enter a label for each input raw results file '
+                  '({} files, {} labels).'.format(len(rr_files), len(labels)))
+            quit()
+
+        n_per_d = {}
+        dt = {}
+        ds = {}
+        metrics = {}
+        truth = []
+        scores = []
+        for rr_file in rr_files:
+            for l in open(rr_file, 'r').readlines()[1:]:
+                ls = l.strip().split(',')
+                pp = float(ls[2])
+                truth.append(1)
+                scores.append(pp)
+
+                np = float(ls[4])
+                truth.append(0)
+                scores.append(np)
+                if ls[1] not in n_per_d:
+                    n_per_d[ls[1]] = 1
+                else:
+                    n_per_d[ls[1]] += 1
+            pr = average_precision_score(truth, scores)
+            fpr, tpr, thrs = roc_curve(truth, scores)
+            area = roc_auc_score(truth, scores)
+            dt[rr_file] = truth
+            ds[rr_file] = scores
+            metrics[rr_file] = [fpr, tpr, thrs, area, pr]
+
+        plt.figure()
+        lw = 2
+        for rr_file in rr_files:
+            i = rr_files.index(rr_file)
+            [fpr, tpr, thrs, area, pr] = metrics[rr_file]
+            plt.plot(fpr, tpr, lw=lw, label='{} (AUC-ROC={}, AUPR={})'.format(labels[i], format(area, '.3f'),
+                                                                                         format(pr, '.3f')))
+        plt.plot([0, 1], [0, 1], lw=lw, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.legend(loc="lower right", prop={'size': 8})
+        if save:
+            plt.savefig(save, dpi=300)
+        plt.show()
 
     def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
         """!
@@ -1531,9 +1771,10 @@ class CANDO(object):
                     already_approved = ind in c2[0].indications
                     k = c2[0].id_
                     if k not in c_dct:
-                        c_dct[k] = [1, already_approved]
+                        c_dct[k] = [1, already_approved, c2_i]
                     else:
                         c_dct[k][0] += 1
+                        c_dct[k][2] += c2_i
         else:
             c_dct = {}
             if self.indication_proteins and ind_id:
@@ -1551,10 +1792,13 @@ class CANDO(object):
                 else:
                     already_approved = False  # Not relevant since there is no indication
                 c_dct[c.id_] = [ss, already_approved]
+        if sum_scores:
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0]))[::-1]
+        else:
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
 
-        sorted_x = sorted(c_dct.items(), key=lambda x: x[1][0])[::-1]
         print("Printing the {} highest predicted compounds...\n".format(topX))
-        if not keep_approved:
+        if sum_scores:
             i = 0
             print('rank\tscore\tid\tname')
             for p in enumerate(sorted_x):
@@ -1564,6 +1808,19 @@ class CANDO(object):
                     continue
                 else:
                     print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
+                                              self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
+                    i += 1
+            return
+        if not keep_approved:
+            i = 0
+            print('rank\tscore\tavg_r\tid\tname')
+            for p in enumerate(sorted_x):
+                if i >= topX != -1:
+                    break
+                if p[1][1][1]:
+                    continue
+                else:
+                    print("{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2]/p[1][1][0], 1),
                                                   self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
                     i += 1
         else:
@@ -1601,17 +1858,18 @@ class CANDO(object):
         self.generate_similar_sigs(cmpd, sort=True)
         print("Generating indication predictions using top{} most similar compounds...".format(n))
         i_dct = {}
-        for c in cmpd.similar[1:n+1]:
+        for c in cmpd.similar[0:n]:
             for ind in c[0].indications:
-                if ind not in i_dct:
-                    i_dct[ind] = 1
+                if ind.id_ not in i_dct:
+                    i_dct[ind.id_] = 1
                 else:
-                    i_dct[ind] += 1
+                    i_dct[ind.id_] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
         print("Printing the {} highest predicted indications...\n".format(topX))
         print("rank\tscore\tind_id    \tindication")
         for i in range(topX):
-            print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], sorted_x[i][0].id_, sorted_x[i][0].name))
+            indd = self.get_indication(sorted_x[i][0])
+            print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
         print('')
 
     def similar_compounds(self, new_sig=None, new_name=None, cando_cmpd=None, n=10):
@@ -1634,8 +1892,8 @@ class CANDO(object):
         self.generate_similar_sigs(cmpd, sort=True)
         print("Printing top{} most similar compounds...\n".format(n))
         print("rank\tdist\tid\tname")
-        for i in range(1, n+1):
-            print("{}\t{:.3f}\t{}\t{}".format(i, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
+        for i in range(n+1):
+            print("{}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
 
     def add_cmpd(self, new_sig, new_name):
@@ -1646,13 +1904,21 @@ class CANDO(object):
         @param new_name str: Name for the new Compound
         @return cmpd Compound: Compound object
         """
-        new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
-        if not new_name:
-            print("Compound needs a name. Set 'new_name'")
-            return
+        with open(new_sig, 'r') as nsf:
+            n_sig = [0.00] * len(self.proteins)
+            for l in nsf:
+                [pr, sc] = l.strip().split('\t')
+                pr_i = self.protein_id_to_index[pr]
+                n_sig[pr_i] = sc
+        #new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
+        #if not new_name:
+        #    print("Compound needs a name. Set 'new_name'")
+        #    return
         i = len(self.compounds)
         cmpd = Compound(new_name, i, i)
-        cmpd.sig = new_sig[[1]].T.values[0].tolist()
+        cmpd.sig = n_sig
+        #cmpd.sig = new_sig[[1]].T.values[0].tolist()
+        self.compounds.append(cmpd)
         print("New compound is " + cmpd.name)
         print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         return cmpd
@@ -1902,6 +2168,59 @@ class Matrix(object):
                     of.write("{}\n".format('\t'.join(list(map(str, vs)))))
         of.close()
 
+    def normalize(self, outfile, dimension='drugs', method='avg'):
+        """!
+        Normalize the interaction scores across drugs (default) or proteins (not implemented yet).
+
+        @param outfile str: File path to which is written the converted matrix.
+        @param dimension str: which vector to normalize - either 'drugs' to normalize all
+        scores within the proteomic vector or 'proteins' to normalize for a protein against
+        all drug scores.
+        @param method str: normalize by the average or max within the vectors
+        """
+        # dimensions include drugs or features (e.g. "proteins")
+        # methods are average ('avg') or max ('max')
+        dvs = {}  # drug vectors
+        cc = 0
+        if dimension == 'drugs':
+            for vec in self.values:
+                for vi in range(len(vec)):
+                    if cc == 0:
+                        dvs[vi] = []
+                    dvs[vi].append(vec[vi])
+                cc += 1
+
+        new_dvecs = []
+        for i in range(len(dvs)):
+            vec = dvs[i]
+            if method == 'avg':
+                norm_val = np.average(vec)
+            elif method == 'max':
+                norm_val = max(vec)
+            else:
+                print('Please enter a proper normalization method: "max" or "avg"')
+                quit()
+
+            def norm(x):
+                if norm_val == 0:
+                    return 0.0
+                else:
+                    return x/norm_val
+
+            new_dvecs.append(list(map(norm, vec)))
+
+        pvs = {}
+        for dvi in range(len(new_dvecs)):
+            for p in range(len(self.proteins)):
+                try:
+                    pvs[p].append(new_dvecs[dvi][p])
+                except KeyError:
+                    pvs[p] = [new_dvecs[dvi][p]]
+
+        with open(outfile, 'w') as fo:
+            for p in range(len(self.proteins)):
+                fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
+
 
 def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
@@ -1978,7 +2297,7 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
     # Pull and read in fingerprints for ligands
     get_fp_lig(fp_name)
     pre = os.path.dirname(__file__)
-    bs = pd.read_csv("{}/v2_0/ligands_fps/{}.tsv".format(pre, fp_name), sep='\t', header=None, index_col=0)
+    bs = pd.read_csv("{}/v2.0/ligands_fps/{}.tsv".format(pre, fp_name), sep='\t', header=None, index_col=0)
     bs = bs.replace(np.nan, '', regex=True)
     sites = bs.index
     print("Generating {} fingerprints and scores...".format('_'.join(fp)))
@@ -2190,15 +2509,15 @@ def get_fp_lig(fp):
     @param fp str: Fingerprinting method used to compile each binding site ligand fingerprint
     """
     pre = os.path.dirname(__file__)
-    out_file = '{}/v2_0/ligands_fps/{}.tsv'.format(pre, fp)
+    out_file = '{}/v2.0/ligands_fps/{}.tsv'.format(pre, fp)
     if not os.path.exists(out_file):
         print('Downloading ligand fingerprints for {}...'.format(fp))
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/ligands_fps/{}.tsv'.format(fp)
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/ligands_fps/{}.tsv'.format(fp)
         dl_file(url, out_file)
         print("Ligand fingerprints downloaded.")
 
 
-def get_v2_0():
+def get_v2(matrix='nrpdb'):
     """!
     Download CANDO v2.0 data.
 
@@ -2208,27 +2527,49 @@ def get_v2_0():
         - Scores file for all approved compounds (fingerprint: rd_ecfp4)
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
-    print('Downloading data for v2_0...')
+    print('Downloading data for v2...')
+    # Dirs
+    if not os.path.exists('v2.0'):
+        os.mkdir('v2.0')
+    if not os.path.exists('v2.0/mappings'):
+        os.mkdir('v2.0/mappings')
+    if not os.path.exists('v2.0/matrices'):
+        os.mkdir('v2.0/matrices')
+    if not os.path.exists('v2.0/prots'):
+        os.mkdir('v2.0/prots')
+    if not os.path.exists('v2.0/cmpds/'):
+        os.mkdir('v2.0/cmpds')
+    if not os.path.exists('v2.0/cmpds/scores'):
+        os.mkdir('v2.0/cmpds/scores')
     # Mappings
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-approved.tsv'
-    dl_file(url, 'v2_0/mappings/drugbank-approved.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-all.tsv'
-    dl_file(url, 'v2_0/mappings/drugbank-all.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
-    dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-approved.tsv'
+    dl_file(url, 'v2.0/mappings/drugbank-approved.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-all.tsv'
+    dl_file(url, 'v2.0/mappings/drugbank-all.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/ctd_2_drugbank.tsv'
+    dl_file(url, 'v2.0/mappings/ctd_2_drugbank.tsv')
     # Matrices
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
-    dl_file(url, 'v2_0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
-    dl_file(url, 'v2_0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+    if matrix == 'all':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
+        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
+        dl_file(url, 'v2.0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+    elif matrix == 'nrpdb':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
+        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
+        dl_file(url, 'v2.0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+    elif matrix == 'human':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
+        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
     # Proteins
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/prots/nrpdb.tsv'
-    dl_file(url, 'v2_0/prots/nrpdb.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
+    dl_file(url, 'v2.0/prots/nrpdb.tsv')
     # Compounds
-    if not os.path.exists('v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-        dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
-        os.chdir("v2_0/cmpds/scores")
+    if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
+        dl_file(url, 'v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
+        os.chdir("v2.0/cmpds/scores")
         os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
     print('All data for v2.0 downloaded.')
@@ -2252,42 +2593,42 @@ def get_tutorial():
         os.mkdir('examples')
     # Example matrix (rd_ecfp4 w/ 64 prots x 2,162 drugs)
     if not os.path.exists('./examples/example-matrix.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-matrix.tsv'
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-matrix.tsv'
         dl_file(url, './examples/example-matrix.tsv')
     # Protein scores
     if not os.path.exists('./examples/example-prots_scores.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-prots_scores.tsv'
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-prots_scores.tsv'
         dl_file(url, './examples/example-prots_scores.tsv')
 
-    if not os.path.exists('v2_0'):
-        os.mkdir('v2_0')
-    if not os.path.exists('v2_0/mappings'):
-        os.mkdir('v2_0/mappings')
+    if not os.path.exists('v2.0'):
+        os.mkdir('v2.0')
+    if not os.path.exists('v2.0/mappings'):
+        os.mkdir('v2.0/mappings')
     # Compound mapping
-    if not os.path.exists('v2_0/mappings/drugbank-approved.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/drugbank-approved.tsv'
-        dl_file(url, 'v2_0/mappings/drugbank-approved.tsv')
+    if not os.path.exists('v2.0/mappings/drugbank-approved.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-approved.tsv'
+        dl_file(url, 'v2.0/mappings/drugbank-approved.tsv')
     # Compound-indication mapping (CTD)
-    if not os.path.exists('v2_0/mappings/ctd_2_drugbank.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/mappings/ctd_2_drugbank.tsv'
-        dl_file(url, 'v2_0/mappings/ctd_2_drugbank.tsv')
+    if not os.path.exists('v2.0/mappings/ctd_2_drugbank.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/ctd_2_drugbank.tsv'
+        dl_file(url, 'v2.0/mappings/ctd_2_drugbank.tsv')
     # Compounds scores
-    if not os.path.exists('v2_0/cmpds/'):
-        os.mkdir('v2_0/cmpds')
-    if not os.path.exists('v2_0/cmpds/scores'):
-        os.mkdir('v2_0/cmpds/scores')
-    if not os.path.exists('v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-        dl_file(url, 'v2_0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
-        os.chdir("v2_0/cmpds/scores")
+    if not os.path.exists('v2.0/cmpds/'):
+        os.mkdir('v2.0/cmpds')
+    if not os.path.exists('v2.0/cmpds/scores'):
+        os.mkdir('v2.0/cmpds/scores')
+    if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
+        dl_file(url, 'v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
+        os.chdir("v2.0/cmpds/scores")
         os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
     # New compound
     if not os.path.exists('./examples/8100.pdb'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/8100.pdb'
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/8100.pdb'
         dl_file(url, './examples/8100.pdb')
     # Protein subset
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/examples/example-uniprot_set'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-uniprot_set'
     dl_file(url, './examples/example-uniprot_set')
     print('All data for tutorial downloaded.')
 
@@ -2307,11 +2648,11 @@ def get_test():
         - Test Pathways set
     """
     print('Downloading data for test...')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpd_scores.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpd_scores.tsv'
     dl_file(url, 'test/test-cmpd_scores.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-prot_scores.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-prot_scores.tsv'
     dl_file(url, 'test/test-prot_scores.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpds.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpds.tsv'
     dl_file(url, 'test/test-cmpds.tsv')
     with open('test/test-cmpds.tsv', 'r') as f:
         l = []
@@ -2319,22 +2660,22 @@ def get_test():
             i = i.split('\t')[0]
             i = "{}.pdb".format(i)
             l.append(i)
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-cmpds_pdb'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpds_pdb'
     out = 'test/test-cmpds_pdb'
     dl_dir(url, out, l)
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-inds.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-inds.tsv'
     dl_file(url, 'test/test-inds.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/8100.pdb'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/8100.pdb'
     dl_file(url, 'test/8100.pdb')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-uniprot_set'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-uniprot_set'
     dl_file(url, 'test/test-uniprot_set')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/vina64x.fpt'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/vina64x.fpt'
     dl_file(url, 'test/vina64x.fpt')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/toy64x.fpt'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/toy64x.fpt'
     dl_file(url, 'test/toy64x.fpt')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-pathway-prot.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-pathway-prot.tsv'
     dl_file(url, 'test/test-pathway-prot.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2_0/test/test-pathway-mesh.tsv'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-pathway-mesh.tsv'
     dl_file(url, 'test/test-pathway-mesh.tsv')
     print('All test data downloaded.\n')
 
