@@ -1895,6 +1895,7 @@ class CANDO(object):
         for i in range(n+1):
             print("{}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
+        return cmpd.similar
 
     def add_cmpd(self, new_sig, new_name):
         """!
@@ -2554,6 +2555,8 @@ def get_v2(matrix='nrpdb'):
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
         dl_file(url, 'v2.0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
+        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
     elif matrix == 'nrpdb':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
