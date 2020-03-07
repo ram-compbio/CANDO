@@ -1720,7 +1720,8 @@ class CANDO(object):
             plt.savefig(save, dpi=300)
         plt.show()
 
-    def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, keep_approved=False):
+    def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, threshold=0.0,
+                             keep_approved=False, associated=False, save=''):
         """!
         This function is used for predicting putative therapeutics for an indication
         of interest. Input an ind_id id and for each of the associated compounds, it will
@@ -1730,13 +1731,16 @@ class CANDO(object):
         up, that means it is similar in signature to the drugs that are
         ALREADY approved for the indication, so it may be a target for repurposing.
         Control how many similar compounds to consider with the argument 'n'.
-        Use ind_id=None to find greatest score sum across all proteins (sum_scores must be True)
+        Use ind_id=None to find greatest score sum across all proteins (sum_scores must be >0.0)
         
         @param ind_id str: Indication id
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
-        @param sum_scores bool: Sum all ascores across all proteins
+        @param sum_scores bool: Sum all interaction scores across all proteins
+        @param threshold float: a interaction score cutoff to use (ignores values for sum less than threshold)
         @param keep_approved bool: Print Compounds that are already approved for the Indication
+        @param associated bool: Only print compounds with at least one associated disease ("repurposing" candidates)
+        @param save str: name of a file to save results
         """
         if ind_id:
             i = self.indication_ids.index(ind_id)
@@ -1785,31 +1789,58 @@ class CANDO(object):
                 indices = range(len(self.proteins))
             for c in self.compounds:
                 ss = 0.0
+                count = 0
                 for pi in indices:
-                    ss += c.sig[pi]
+                    si = c.sig[pi]
+                    if si >= threshold:
+                        ss += c.sig[pi]
+                        count += 1
                 if ind_id:
                     already_approved = ind in c.indications
                 else:
                     already_approved = False  # Not relevant since there is no indication
-                c_dct[c.id_] = [ss, already_approved]
+                c_dct[c.id_] = [ss, count, already_approved]
         if sum_scores:
-            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0]))[::-1]
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], x[1][1]))[::-1]
         else:
             sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
 
+        if save:
+            fo = open(save, 'w')
+            header = 1
         print("Printing the {} highest predicted compounds...\n".format(topX))
         if sum_scores:
             i = 0
-            print('rank\tscore\tid\tname')
+            if keep_approved:
+                print('rank\tscore\tsum\tapproved\tid\tname')
+            else:
+                print('rank\tscore\tsum\tid\tname')
             for p in enumerate(sorted_x):
                 if i >= topX != -1:
                     break
-                if p[1][1][1]:
-                    continue
                 else:
-                    print("{}\t{}\t{}\t{}".format(i + 1, p[1][1][0],
-                                              self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
-                    i += 1
+                    co = self.get_compound(p[1][0])
+                    if (associated and len(co.indications) > 0) or (not associated):
+                        if keep_approved:
+                            st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], round(p[1][1][0], 3),  p[1][1][2],
+                                              co.id_, co.name)
+                            print(st)
+                            i += 1
+                            if save:
+                                if header:
+                                    fo.write('rank\tscore\tsum\tapproved\tid\tname\n')
+                                    header = 0
+                                fo.write(st + '\n')
+                        else:
+                            st = "{}\t{}\t{}\t{}\t{}".format(i + 1, round(p[1][1][0], 2), p[1][1][1],
+                                                              co.id_, co.name)
+                            print(st)
+                            i += 1
+                            if save:
+                                if header:
+                                    fo.write('rank\tscore\tsum\tid\tname\n')
+                                    header = 0
+                                fo.write(st + '\n')
             return
         if not keep_approved:
             i = 0
@@ -1817,21 +1848,37 @@ class CANDO(object):
             for p in enumerate(sorted_x):
                 if i >= topX != -1:
                     break
-                if p[1][1][1]:
-                    continue
-                else:
-                    print("{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2]/p[1][1][0], 1),
-                                                  self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
-                    i += 1
+                co = self.get_compound(p[1][0])
+                if (associated and len(co.indications) > 0) or (not associated):
+                    if p[1][1][1]:
+                        continue
+                    else:
+                        st = "{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2]/p[1][1][0], 1),
+                                                      self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name)
+                        print(st)
+                        i += 1
+                        if save:
+                            if header:
+                                fo.write('rank\tscore\tavg_r\tid\tname\n')
+                                header = 0
+                            fo.write(st + '\n')
         else:
             i = 0
-            print('rank\tscore\tapproved\tid\tname')
+            print('rank\tscore\tavg_r\tapproved\tid\tname')
             for p in enumerate(sorted_x):
                 if i >= topX != -1:
                     break
-                print("{}\t{}\t{}\t\t{}\t{}".format(i + 1, p[1][1][0], p[1][1][1],
-                                                    self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name))
-                i += 1
+                co = self.get_compound(p[1][0])
+                if (associated and len(co.indications) > 0) or (not associated):
+                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1),p[1][1][1],
+                                                    self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name)
+                    print(st)
+                    i += 1
+                    if save:
+                        if header:
+                            fo.write('rank\tscore\tavg_r\tapproved\tid\tname\n')
+                            header = 0
+                        fo.write(st + '\n')
         print('\n')
 
     def canpredict_indications(self, new_sig=None, new_name=None, cando_cmpd=None, n=10, topX=10):
