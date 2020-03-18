@@ -46,7 +46,7 @@ class Compound(object):
     """!
     An object to represent a compound/drug
     """
-    def __init__(self, name, id_, index):
+    def __init__(self, name, id_, index, status='N/A'):
         ## @var name 
         # str: Name of the Compound (e.g., 'caffeine')
         self.name = name
@@ -56,6 +56,9 @@ class Compound(object):
         ## @var index
         # int: The order in which the Compound appears in the mapping file (e.g, 1, 2, 3, ...)
         self.index = index
+        ## @var status
+        # str: The clinical trial status of the compound from DrugBank
+        self.status = status
         ## @var sig
         # list: Signature is essentially a column of the Matrix
         self.sig = []
@@ -81,6 +84,9 @@ class Compound(object):
         ## @var adrs
         # list: List of ADRs associated with this Compound
         self.adrs = []
+        ## @var alt_ids
+        # dict: dict of other ids inputted with compound mapping
+        self.alt_ids = {}
 
     def add_indication(self, ind):
         """!
@@ -239,21 +245,39 @@ class CANDO(object):
 
         # create all of the compound objects from the compound map
         with open(c_map, 'r') as c_f:
-            for l in c_f.readlines():
+            lines = c_f.readlines()
+            header = lines[0]
+            h2i = {}
+            for i, h in enumerate(header.strip().split('\t')):
+                h2i[h] = i
+            for l in lines[1:]:
                 ls = l.strip().split('\t')
-                if len(ls) == 3:
-                    name = ls[2]
-                    id_ = int(ls[1])
-                    index = int(ls[0])
-                # Used for the v2 mappings
-                # These only have 2 columns [id/index,name]
-                elif len(ls) == 2:
-                    name = ls[1]
-                    id_ = int(ls[0])
-                    index = int(ls[0])
+                name = ls[h2i['GENERIC_NAME']]
+                id_ = int(ls[h2i['CANDO_ID']])
+                db_id = ls[h2i['DRUGBANK_ID']]
+                index = id_
+                if 'DRUG_GROUPS' in h2i:
+                    stati = ls[h2i['DRUG_GROUPS']]
+                    if 'approved' in stati:
+                        status = 'approved'
+                    else:
+                        status = 'other'
                 else:
-                    print("Check the number of columns for the compound mapping.")
-                cm = Compound(name, id_, index)
+                    status = 'N/A'
+
+                #if len(ls) == 3:
+                #    name = ls[2]
+                #    id_ = int(ls[1])
+                #    index = int(ls[0])
+                ## Used for the v2 mappings
+                ## These only have 2 columns [id/index,name]
+                #elif len(ls) == 2:
+                #    name = ls[1]
+                #    id_ = int(ls[0])
+                #    index = int(ls[0])
+                #else:
+                #    print("Check the number of columns for the compound mapping.")
+                cm = Compound(name, id_, index, status=status)
                 self.compounds.append(cm)
 
         # create the indication objects and add indications to the
@@ -327,6 +351,9 @@ class CANDO(object):
                             continue
                     print('{} proteins in {} mapped to {} proteins '
                           'in {}.'.format(len(matches[0]), self.protein_set, matches[1], self.matrix))
+                    if not len(matches[0]):
+                        print('Sorry, the input proteins did not match any proteins in the input matrix -- quitting.')
+                        quit()
                 else:
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
@@ -645,7 +672,7 @@ class CANDO(object):
                 return a
         raise LookupError
 
-    def top_targets(self, cmpd, n=10, negative=False):
+    def top_targets(self, cmpd, n=10, negative=False, save=''):
         """!
         Get the top scoring protein targets for a given compound
 
@@ -704,7 +731,7 @@ class CANDO(object):
         #    pdct_rev[tgt] = tgt
         with open(prots, 'r') as unisf:
             for lp in unisf:
-                prot = lp.strip()
+                prot = lp.strip().split('\t')[0]
                 targets.append(prot)
                 #pdct_rev[prot] = lp.strip().upper()
                 try:
@@ -1720,18 +1747,133 @@ class CANDO(object):
             plt.savefig(save, dpi=300)
         plt.show()
 
-    def canpredict_compounds(self, ind_id, n=10, topX=10, sum_scores=False, threshold=0.0,
-                             keep_approved=False, associated=False, save=''):
+    def canpredict_denovo(self, method='count', threshold=0.0, topX=10, ind_id=None, proteins=None,
+                          cmpd_set='all', save=''):
         """!
         This function is used for predicting putative therapeutics for an indication
-        of interest. Input an ind_id id and for each of the associated compounds, it will
-        generate the similar compounds (based on distance) and add them to a dictionary
-        with a value of how many times it shows up (enrichment). If a
+        of interest by summing/counting the number of interactions above a certain input interaction
+        threshold for all proteins or a specified subset of proteins. An indication can be specified to
+        mark drugs associated with that indication in the output. The threshold will vary based on the
+        values of the input matrix. Method can either be 'count' (score1), which ranks compounds based on the
+        number of interactions above the threshold, or 'sum' (score2), which ranks the compounds based on the
+        highest total sum for interaction scores above the threshold (these two are highly correlated but can
+        differ for larger sets of proteins or lower thresholds). A third option is 'targets', which inspects
+        and outputs the top protein interactions on an individual basis without summing/counting per drug (the
+        output format differs from the other two options). If indication_proteins flag is used for
+        the CANDO object instantiation, the proteins associated with the input indication will automatically
+        be used. Otherwise, the 'proteins=' input can be used. The output can be saved to a file specified
+        by 'save='. If ind_id is used, compounds associated with the indication will be included and marked
+        in the output for comparison.
+
+        @param method str: 'sum', 'count', or 'targets'
+        @param threshold float: a interaction score cutoff to use (ignores values for sum/count less than threshold)
+        @param topX int: top number of predicted Compounds to be printed/saved
+        @param ind_id str: an indication id for marking drug output/ specifying protein set
+        @param proteins List str: list of protein IDs from the matrix to use for the sum/count
+        @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
+        @param save str: name of a file to save results
+        """
+
+        if ind_id:
+            ind = self.get_indication(ind_id)
+        c_dct = {}
+        top_hits = []
+        if self.indication_proteins and ind_id:
+            indices = []
+            for p in ind.proteins:
+                indices.append(self.protein_id_to_index[p.id_])
+        elif proteins:
+            indices = []
+            for p in proteins:
+                indices.append(self.protein_id_to_index[p.id_])
+        else:
+            indices = range(len(self.proteins))
+        for c in self.compounds:
+            ss = 0.0
+            count = 0
+            for pi in indices:
+                si = c.sig[pi]
+                p = self.proteins[pi]
+                if si >= threshold:
+                    ss += c.sig[pi]
+                    count += 1
+                    top_hits.append((p.id_, c, si))
+            if ind_id:
+                already_approved = ind in c.indications
+            else:
+                already_approved = False  # Not relevant since there is no indication
+            c_dct[c.id_] = [ss, count, already_approved]
+
+        if method == 'sum':
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], x[1][1]))[::-1]
+        elif method == 'count':
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][1], x[1][0]))[::-1]
+        elif method == 'targets':
+            sp = sorted(top_hits, key=lambda x: x[2])[::-1]
+            print('target  \tscore\tid\tapproved\tname\n')
+            if save:
+                fo = open(save, 'w')
+                fo.write('target  \tscore\tid\tapproved\tname\n')
+            for s in sp:
+                co = s[1]
+                if cmpd_set == 'approved':
+                    if co.status == 'approved' or (co in ind.compounds):
+                        pass
+                    else:
+                        continue
+                    st = '{}\t{}\t{}\t{}\t{}'.format(s[0].ljust(8), round(s[2], 3), co.id_,
+                                                     (str(co.status == 'approved').lower()).ljust(8), co.name)
+                    print(st)
+                    fo.write(st + '\n')
+            return
+
+        else:
+            print('Please enter a valid ranking method -- quitting.')
+            quit()
+        if save:
+            fo = open(save, 'w')
+            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
+        print("Printing the {} highest predicted compounds...\n".format(topX))
+        i = 0
+        print('rank\tscore1\tscore2\tid\tapproved\tname')
+        for p in enumerate(sorted_x):
+            if i >= topX != -1:
+                break
+            else:
+                co = self.get_compound(p[1][0])
+                if cmpd_set == 'approved':
+                    if co.status != 'approved':
+                        if ind_id:
+                            if co in ind.compounds:
+                                pass
+                            else:
+                                continue
+                        else:
+                            continue
+                if p[1][1][2]:
+                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7], co.id_,
+                                                         (str(co.status == 'approved').lower() + '+').ljust(8), co.name)
+                else:
+                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7], co.id_,
+                                                         (str(co.status == 'approved').lower()).ljust(8), co.name)
+                print(st)
+                i += 1
+                if save:
+                    fo.write(st + '\n')
+        return
+
+    def canpredict_compounds(self, ind_id, n=10, topX=10, keep_associated=False, cmpd_set='all', save=''):
+        """!
+        This function is used for predicting putative therapeutics for an indication
+        of interest using a homology-based approach. Input an ind_id id and for each of the
+        associated compounds, it will generate the similar compounds (based on distance) and add
+        them to a dictionary with a value of how many times it shows up (enrichment). If a
         compound not approved for the indication of interest keeps showing
         up, that means it is similar in signature to the drugs that are
         ALREADY approved for the indication, so it may be a target for repurposing.
-        Control how many similar compounds to consider with the argument 'n'.
-        Use ind_id=None to find greatest score sum across all proteins (sum_scores must be >0.0)
+        Control how many similar compounds to consider with the argument 'n'. In the output, 'score1'
+        refers to the number of times the compound shows up in the top 'n' drugs associated with
+        the indication and 'score2' is the average of the ranks for 'score1' (note: 'score2' <= 'n').
         
         @param ind_id str: Indication id
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
@@ -1742,143 +1884,67 @@ class CANDO(object):
         @param associated bool: Only print compounds with at least one associated disease ("repurposing" candidates)
         @param save str: name of a file to save results
         """
-        if ind_id:
-            i = self.indication_ids.index(ind_id)
-            ind = self.indications[i]
-            print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
-        else:
-            print("Finding compounds with greatest summed scores in {}...".format(self.matrix))
 
-        if not sum_scores:
-            if self.pathways:
-                if self.indication_pathways:
-                    self.quantify_pathways(ind)
-                else:
-                    self.quantify_pathways()
-            for c in ind.compounds:
-                if c.similar_computed:
-                    continue
-                if self.pathways:
-                    self.generate_similar_sigs(c, aux=True, sort=True)
-                elif self.indication_proteins:
-                    self.generate_similar_sigs(c, sort=True, proteins=ind.proteins)
-                else:
-                    self.generate_similar_sigs(c, sort=True)
-        if not sum_scores:
-            print("Generating compound predictions using top{} most similar compounds...\n".format(n))
-            c_dct = {}
-            for c in ind.compounds:
-                for c2_i in range(n):
-                    c2 = c.similar[c2_i]
-                    if c2[1] == 0.0:
-                        continue
-                    already_approved = ind in c2[0].indications
-                    k = c2[0].id_
-                    if k not in c_dct:
-                        c_dct[k] = [1, already_approved, c2_i]
-                    else:
-                        c_dct[k][0] += 1
-                        c_dct[k][2] += c2_i
-        else:
-            c_dct = {}
-            if self.indication_proteins and ind_id:
-                indices = []
-                for p in ind.proteins:
-                    indices.append(self.protein_id_to_index[p.id_])
+        i = self.indication_ids.index(ind_id)
+        ind = self.indications[i]
+        print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
+
+        if self.pathways:
+            if self.indication_pathways:
+                self.quantify_pathways(ind)
             else:
-                indices = range(len(self.proteins))
-            for c in self.compounds:
-                ss = 0.0
-                count = 0
-                for pi in indices:
-                    si = c.sig[pi]
-                    if si >= threshold:
-                        ss += c.sig[pi]
-                        count += 1
-                if ind_id:
-                    already_approved = ind in c.indications
-                else:
-                    already_approved = False  # Not relevant since there is no indication
-                c_dct[c.id_] = [ss, count, already_approved]
-        if sum_scores:
-            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], x[1][1]))[::-1]
-        else:
-            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
+                self.quantify_pathways()
+        for c in ind.compounds:
+            if c.similar_computed:
+                continue
+            if self.pathways:
+                self.generate_similar_sigs(c, aux=True, sort=True)
+            elif self.indication_proteins:
+                self.generate_similar_sigs(c, sort=True, proteins=ind.proteins)
+            else:
+                self.generate_similar_sigs(c, sort=True)
 
         if save:
             fo = open(save, 'w')
-            header = 1
-        print("Printing the {} highest predicted compounds...\n".format(topX))
-        if sum_scores:
-            i = 0
-            if keep_approved:
-                print('rank\tscore\tsum\tapproved\tid\tname')
-            else:
-                print('rank\tscore\tsum\tid\tname')
-            for p in enumerate(sorted_x):
-                if i >= topX != -1:
-                    break
+            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
+
+        print("Generating compound predictions using top{} most similar compounds...\n".format(n))
+        c_dct = {}
+        for c in ind.compounds:
+            for c2_i in range(n):
+                c2 = c.similar[c2_i]
+                if c2[1] == 0.0:
+                    continue
+                already_approved = ind in c2[0].indications
+                k = c2[0].id_
+                if k not in c_dct:
+                    c_dct[k] = [1, already_approved, c2_i]
                 else:
-                    co = self.get_compound(p[1][0])
-                    if (associated and len(co.indications) > 0) or (not associated):
-                        if keep_approved:
-                            st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], round(p[1][1][0], 3),  p[1][1][2],
-                                              co.id_, co.name)
-                            print(st)
-                            i += 1
-                            if save:
-                                if header:
-                                    fo.write('rank\tscore\tsum\tapproved\tid\tname\n')
-                                    header = 0
-                                fo.write(st + '\n')
-                        else:
-                            st = "{}\t{}\t{}\t{}\t{}".format(i + 1, round(p[1][1][0], 2), p[1][1][1],
-                                                              co.id_, co.name)
-                            print(st)
-                            i += 1
-                            if save:
-                                if header:
-                                    fo.write('rank\tscore\tsum\tid\tname\n')
-                                    header = 0
-                                fo.write(st + '\n')
-            return
-        if not keep_approved:
-            i = 0
-            print('rank\tscore\tavg_r\tid\tname')
-            for p in enumerate(sorted_x):
-                if i >= topX != -1:
-                    break
-                co = self.get_compound(p[1][0])
-                if (associated and len(co.indications) > 0) or (not associated):
-                    if p[1][1][1]:
-                        continue
-                    else:
-                        st = "{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2]/p[1][1][0], 1),
-                                                      self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name)
-                        print(st)
-                        i += 1
-                        if save:
-                            if header:
-                                fo.write('rank\tscore\tavg_r\tid\tname\n')
-                                header = 0
-                            fo.write(st + '\n')
-        else:
-            i = 0
-            print('rank\tscore\tavg_r\tapproved\tid\tname')
-            for p in enumerate(sorted_x):
-                if i >= topX != -1:
-                    break
-                co = self.get_compound(p[1][0])
-                if (associated and len(co.indications) > 0) or (not associated):
-                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1),p[1][1][1],
-                                                    self.get_compound(p[1][0]).id_, self.get_compound(p[1][0]).name)
-                    print(st)
-                    i += 1
-                    if save:
-                        if header:
-                            fo.write('rank\tscore\tavg_r\tapproved\tid\tname\n')
-                            header = 0
-                        fo.write(st + '\n')
+                    c_dct[k][0] += 1
+                    c_dct[k][2] += c2_i
+
+        sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
+        i = 0
+        print('rank\tscore1\tscore2\tid\tapproved\tname')
+        for p in enumerate(sorted_x):
+            if i >= topX != -1:
+                break
+            co = self.get_compound(p[1][0])
+            if cmpd_set == 'approved':
+                if co.status != 'approved':
+                    continue
+            if not keep_associated and p[1][1][1]:
+                continue
+            if p[1][1][1]:
+                st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1), co.id_,
+                                                     (str(co.status == 'approved').lower() + '*').ljust(8), co.name)
+            else:
+                st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1), co.id_,
+                                                     (str(co.status == 'approved').lower()).ljust(8), co.name)
+            print(st)
+            i += 1
+            if save:
+                fo.write(st + '\n')
         print('\n')
 
     def canpredict_indications(self, new_sig=None, new_name=None, cando_cmpd=None, n=10, topX=10):
@@ -2613,8 +2679,17 @@ def get_v2(matrix='nrpdb'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
     # Proteins
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
-    dl_file(url, 'v2.0/prots/nrpdb.tsv')
+    if matrix == 'all':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
+        dl_file(url, 'v2.0/prots/nrpdb.tsv')
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/human.tsv'
+        dl_file(url, 'v2.0/prots/human.tsv')
+    elif matrix == 'nrpdb':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
+        dl_file(url, 'v2.0/prots/nrpdb.tsv')
+    elif matrix == 'human':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/human.tsv'
+        dl_file(url, 'v2.0/prots/human.tsv')
     # Compounds
     if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
