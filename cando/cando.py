@@ -1939,7 +1939,7 @@ class CANDO(object):
                 fo.write(st + '\n')
         print('\n')
 
-    def canpredict_indications(self, new_sig=None, new_name=None, cando_cmpd=None, n=10, topX=10):
+    def canpredict_indications(self, cmpd, n=10, topX=10):
         """!
         This function is the inverse of canpredict_compounds. Input a compound
         of interest cando_cmpd (or a novel protein signature of interest new_sig)
@@ -1953,12 +1953,12 @@ class CANDO(object):
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
         """
-        if new_sig:
-            cmpd = self.add_cmpd(new_sig, new_name)
-        elif cando_cmpd:
-            cmpd = cando_cmpd
-            print("Using CANDO compound {}".format(cmpd.name))
-            print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        if type(cmpd) is Compound:
+            cmpd = cmpd
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        print("Using CANDO compound {}".format(cmpd.name))
+        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
         print("Generating indication predictions using top{} most similar compounds...".format(n))
@@ -1977,7 +1977,7 @@ class CANDO(object):
             print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
         print('')
 
-    def similar_compounds(self, new_sig=None, new_name=None, cando_cmpd=None, n=10):
+    def similar_compounds(self, cmpd, n=10):
         """!
         Computes and prints the top n most similar compounds to an input
         Compound object cando_cmpd or input novel signature new_sig
@@ -1987,12 +1987,12 @@ class CANDO(object):
         @param cando_cmpd Compound: Compound object
         @param n int: top number of similar Compounds to be used for prediction
         """
-        if new_sig:
-            cmpd = self.add_cmpd(new_sig, new_name)
-        elif cando_cmpd:
-            cmpd = cando_cmpd
-            print("Using CANDO compound {}".format(cmpd.name))
-            print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        if type(cmpd) is Compound:
+            cmpd = cmpd
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        print("Using CANDO compound {}".format(cmpd.name))
+        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
         print("Printing top{} most similar compounds...\n".format(n))
@@ -2002,7 +2002,7 @@ class CANDO(object):
         print('\n')
         return cmpd.similar
 
-    def add_cmpd(self, new_sig, new_name):
+    def add_cmpd(self, new_sig, new_name=''):
         """!
         Add a new Compound object to the platform
         
@@ -2016,14 +2016,11 @@ class CANDO(object):
                 [pr, sc] = l.strip().split('\t')
                 pr_i = self.protein_id_to_index[pr]
                 n_sig[pr_i] = sc
-        #new_sig = pd.read_csv(new_sig, sep='\t', index_col=0, header=None)
-        #if not new_name:
-        #    print("Compound needs a name. Set 'new_name'")
-        #    return
         i = len(self.compounds)
+        if not new_name:
+            new_name = 'compound_{}'.format(i)
         cmpd = Compound(new_name, i, i)
         cmpd.sig = n_sig
-        #cmpd.sig = new_sig[[1]].T.values[0].tolist()
         self.compounds.append(cmpd)
         print("New compound is " + cmpd.name)
         print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
