@@ -264,19 +264,6 @@ class CANDO(object):
                         status = 'other'
                 else:
                     status = 'N/A'
-
-                #if len(ls) == 3:
-                #    name = ls[2]
-                #    id_ = int(ls[1])
-                #    index = int(ls[0])
-                ## Used for the v2 mappings
-                ## These only have 2 columns [id/index,name]
-                #elif len(ls) == 2:
-                #    name = ls[1]
-                #    id_ = int(ls[0])
-                #    index = int(ls[0])
-                #else:
-                #    print("Check the number of columns for the compound mapping.")
                 cm = Compound(name, id_, index, status=status)
                 self.compounds.append(cm)
 
@@ -287,11 +274,16 @@ class CANDO(object):
         # had to remove those compounds from the indication mapping in
         # order for it to work
         with open(i_map, 'r') as i_f:
-            for l in i_f.readlines():
+            lines = i_f.readlines()
+            header = lines[0]
+            h2i = {}
+            for i, h in enumerate(header.strip().split('\t')):
+                h2i[h] = i
+            for l in lines[1:]:
                 ls = l.strip().split('\t')
-                c_id = int(ls[1])
-                i_name = ls[2]
-                ind_id = ls[3]
+                c_id = int(ls[h2i['CANDO_ID']])
+                i_name = ls[h2i['INDICATION_NAME']]
+                ind_id = ls[h2i['MESH_ID']]
                 cm = self.get_compound(c_id)
                 if cm:
                     if ind_id in self.indication_ids:
