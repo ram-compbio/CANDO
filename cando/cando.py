@@ -419,6 +419,8 @@ class CANDO(object):
                             ind.proteins.append(pro)
                         except KeyError:
                             pass
+                        except LookupError:
+                            pass
             print('Done reading indication-gene associations.')
 
         if read_rmsds:
@@ -638,6 +640,7 @@ class CANDO(object):
         for i in self.indications:
             if i.id_ == ind_id:
                 return i
+        print('{} not in {}'.format(ind_id, self.i_map))
         raise LookupError
 
     def get_pathway(self, id_):
