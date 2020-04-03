@@ -592,15 +592,14 @@ class CANDO(object):
             id_d[x.name] = x.id_
             return x.name
 
-        name = name.strip()
+        name = name.strip().lower().replace(' ', '_')
         cando_drugs = list(map(return_names, self.compounds))
         nms = difflib.get_close_matches(name, cando_drugs, n=n, cutoff=0.5)
-        print('Query: {}'.format(name))
-        print('\tMatch name\tID/Index')
+        print('id\tname')
         for nm in nms:
-            print("\t{}\t{}".format(nm, id_d[nm]))
+            print("{}\t{}".format(id_d[nm], nm))
 
-    def get_compound(self, id_=None, name=''):
+    def get_compound(self, cmpd):
         """!
         Get Compound object from Compound id
 
@@ -608,13 +607,13 @@ class CANDO(object):
         @param name str: name of drug (must match exactly)
         @return Returns object: Compound object
         """
-        if id_ is not None:
+        if type(cmpd) is int:
             for c in self.compounds:
-                if c.id_ == id_:
+                if c.id_ == cmpd:
                     return c
-            print("{0} not in {1}".format(id_, self.c_map))
+            print("{0} not in {1}".format(cmpd, self.c_map))
             return None
-        else:
+        elif type(cmpd) is str:
             id_d = {}
 
             def return_names(x):
@@ -622,13 +621,21 @@ class CANDO(object):
                 return x.name
 
             cando_drugs = list(map(return_names, self.compounds))
-            name = name.strip()
+            name = cmpd.strip().lower().replace(' ', '_')
             if name not in cando_drugs:
                 print('"{}" is not in our mapping, here are the 5 closest results:'.format(name))
                 self.search_compound(name, n=5)
                 return None
             else:
-                return self.get_compound(id_=id_d[name])
+                return self.get_compound(id_d[name])
+
+    def get_protein(self, protein_id):
+        if len(self.proteins) == 0 or not self.matrix:
+            print('No matrix/proteins loaded -- quitting.')
+            quit()
+        for p in self.proteins:
+            if p.id_ == protein_id:
+                return p
 
     def get_indication(self, ind_id):
         """!
@@ -667,34 +674,114 @@ class CANDO(object):
                 return a
         raise LookupError
 
-    def top_targets(self, cmpd, n=10, negative=False, save=''):
+    def search_indication(self, name, n=5):
+        id_d = {}
+
+        def return_names(x):
+            id_d[x.name] = x.id_
+            return x.name
+
+        name = name.strip()
+        cando_inds = list(map(return_names, self.indications))
+        exact_matches = []
+        for ci in cando_inds:
+            if name in ci:
+                exact_matches.append(ci)
+        if exact_matches:
+            print('Matches exactly containing {}:'.format(name))
+            print('id             \tname')
+            for em in exact_matches:
+                print("{}\t{}".format(id_d[em], em))
+            print()
+        nms = difflib.get_close_matches(name, cando_inds, n=n, cutoff=0.3)
+        print('Matches using string distance:')
+        print('id             \tname')
+        for nm in nms:
+            print("{}\t{}".format(id_d[nm], nm))
+
+    def top_targets(self, cmpd, n=10, negative=False):
         """!
         Get the top scoring protein targets for a given compound
 
-        @param cmpd Compound: Compound object for which to print targets
+        @param cmpd Compound or int: Compound object or int id_ for which to print targets
         @param n int: number of top targets to print/return
         @param negative int: if the interaction scores are negative (stronger) energies
         @return Returns list: list of tuples (protein id_, score)
         """
         # print the list of the top targets
+        if type(cmpd) is Compound:
+            pass
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        else:
+            print('Please enter a Compound object or integer id_ for a compound -- quitting.')
+            quit()
         all_interactions = []
         sig = cmpd.sig
         for i in range(len(sig)):
             s = sig[i]
-            p_id = self.proteins[i].id_
-            all_interactions.append((p_id, s))
+            p = self.proteins[i]
+            all_interactions.append((p, s))
         if negative:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         print('Compound is {}'.format(cmpd.name))
-        m = len(self.proteins)
-        if n > m:
-            print('There are only {} proteins in this CANDO object, printing all.'.format(m))
-            n = m
+        print('rank\tscore\tindex\tid')
         for si in range(n):
-            print(interactions_sorted[si][0], interactions_sorted[si][1])
+            pr = interactions_sorted[si][0]
+            print('{}\t{}\t{}\t{}'.format(si+1, round(interactions_sorted[si][1], 3),
+                                          self.proteins.index(pr), pr.id_))
+        print()
         return interactions_sorted[0:n]
+
+    def virtual_screen(self, protein, n=10, negative=False, compound_set='all'):
+        """!
+        Get the top scoring protein targets for a given compound
+
+        @param protein Protein int or str: Protein (object, int index, or str id_) of which to screen for top scores
+        @param n int: number of top compounds to print/return
+        @param negative int: if the interaction scores are negative (stronger) energies
+        @return Returns list: list of tuples (compound id_, score)
+        """
+        if type(protein) is Protein:
+            prot = protein
+        elif type(protein) is int:
+            prot = self.proteins[protein]
+        elif type(protein) is str:
+            for p in self.proteins:
+                if p.id_ == protein:
+                    prot = p
+
+        # print the list of the top targets
+        all_interactions = []
+        sig = prot.sig
+        for i in range(len(sig)):
+            s = sig[i]
+            c_id = self.compounds[i].id_
+            all_interactions.append((c_id, s))
+        if negative:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
+        else:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
+        print('Protein is {}'.format(prot.id_))
+        print('rank\tscore\tid\tapproved\tname')
+        printed = 0
+        while printed < n:
+            for si in range(n):
+                c = self.compounds[interactions_sorted[si][0]]
+                if compound_set == 'approved':
+                    if c.status == 'approved':
+                        print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
+                                                              'true', self.compounds[interactions_sorted[si][0]].name))
+                        printed += 1
+                else:
+                    print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3),
+                                                          c.id_, str(c.status == 'approved').lower(),
+                                                          self.compounds[interactions_sorted[si][0]].name))
+                    printed += 1
+        print()
+        return
 
     def uniprot_set_index(self, prots):
         """!
@@ -1520,7 +1607,7 @@ class CANDO(object):
                     n = shuffled[si]
                     if n in used:
                         continue
-                    inv = self.get_compound(id_=n)
+                    inv = self.get_compound(n)
                     if inv not in efct.compounds:
                         if n not in used:
                             paired_negs[cmpd] = inv
@@ -1780,7 +1867,12 @@ class CANDO(object):
         elif proteins:
             indices = []
             for p in proteins:
-                indices.append(self.protein_id_to_index[p.id_])
+                if type(p) is str:
+                    indices.append(self.protein_id_to_index[p])
+                elif type(p) is int:
+                    indices.append(p)
+                elif type(p) is Protein:
+                    indices.append(self.protein_id_to_index[p.id_])
         else:
             indices = range(len(self.proteins))
         for c in self.compounds:
@@ -2003,7 +2095,7 @@ class CANDO(object):
         for i in range(n+1):
             print("{}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
-        return cmpd.similar
+        return
 
     def add_cmpd(self, new_sig, new_name=''):
         """!
@@ -2745,8 +2837,8 @@ def get_tutorial():
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/8100.pdb'
         dl_file(url, './examples/8100.pdb')
     # Protein subset
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-uniprot_set'
-    dl_file(url, './examples/example-uniprot_set')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-bac-prots.txt'
+    dl_file(url, './examples/example-bac-prots.txt')
     print('All data for tutorial downloaded.')
 
 
