@@ -2475,7 +2475,6 @@ def generate_matrix(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff = 0
     print("Generating matrix...")
     for i in scores_temp:
         scores = scores.join(pd.DataFrame(i))
-    print(scores)
     scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
     scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
 
@@ -2606,7 +2605,7 @@ def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_sc
     for pdb in p_scores.index:
         temp_cscore = 0.000
         temp_pscore = 0.000
-        all_p_scores = list(zip(p_scores[1][pdb].split(","),p_scores[2][pdb].split(",")))
+        all_p_scores = list(zip(str(p_scores[1][pdb]).split(","),str(p_scores[2][pdb]).split(",")))
         for p,p_score in all_p_scores:
             if float(p_score) < p_cutoff:
                 continue
