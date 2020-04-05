@@ -2537,7 +2537,7 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
     print("Tanimoto scores written to {}/{}/{}\n".format(out_path, fp_name, out_name))
 
 
-def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
+def generate_signature(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff = 0.0, percentile_cutoff=None, interaction_score = 'P', matrix_file=''):
     """!
     Generate signature
 
@@ -2571,7 +2571,7 @@ def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
     print("Generating interaction signature...")
     print(c_scores.columns[0])
     c = c_scores.columns[0]
-    scores_temp = get_scores(c, p_scores, c_scores.loc[:, c])
+    scores_temp = get_scores(c, p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff, percentile_cutoff, interaction_score)
     scores = pd.DataFrame(scores_temp)
     scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
     scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
