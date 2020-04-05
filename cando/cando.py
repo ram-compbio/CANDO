@@ -21,6 +21,7 @@ from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform
+from scipy import stats
 
 
 class Protein(object):
@@ -2420,14 +2421,18 @@ class Matrix(object):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
 
-def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
+def generate_matrix(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff = 0.0, percentile_cutoff=None, interaction_score = 'P', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
     Generate a CANDO Matrix 
 
     @param cmpd_scores str: File path to tab-separated scores for all Compounds
     @param prot_scores str: File path to tab-separated scores for all Proteins
-    @param matrix_file str: File path to where the generated Matrix will be written
-    @param ncpus int: Number of cpus to use for parallelization
+    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
+    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
+    @param ineteraction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').
+    @param matrix_file str: File path to where the generated Matrix will be written Default = 'cando_interaction_matrix.tsv'
+    @param ncpus int: Number of cpus to use for parallelization. Default = 1
     """
     def print_time(s):
         if s >= 60:
@@ -2442,8 +2447,19 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
         else:
             print("Matrix generation took {:.0f} s to finish.".format(s))
 
+    # Check for correct interaction scoring metric
+    if not interaction_score in ['P','C','CxP','dC','dCxP']:
+        print("{} is an incorrect interaction score. Exiting.".format(interaction_score))
+        exit()
+
+    if percentile_cutoff:
+        percentile_cutoff = float(percentile_cutoff)
+
     start = time.time()
 
+    c_cutoff = float(c_cutoff)
+    p_cutoff = float(p_cutoff)
+        
     print("Compiling compound scores...")
     c_scores = pd.read_csv(cmpd_scores, sep='\t', index_col=0)
 
@@ -2453,17 +2469,13 @@ def generate_matrix(cmpd_scores='', prot_scores='', matrix_file='cando_interacti
     print("Calculating interaction scores...")
     pool = mp.Pool(ncpus)
     scores_temp = pool.starmap_async(get_scores,
-                                     [(int(c), p_scores, c_scores.loc[:, c]) for c in c_scores.columns]).get()
+                                     [(int(c), p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff, percentile_cutoff, interaction_score) for c in c_scores.columns]).get()
     pool.close()
-    first = True
-    scores = pd.DataFrame()
+    scores = pd.DataFrame(index=range(len(p_scores.index)))
     print("Generating matrix...")
     for i in scores_temp:
-        if first:
-            scores = pd.DataFrame(i)
-            first = False
-        else:
-            scores = scores.join(pd.DataFrame(i))
+        scores = scores.join(pd.DataFrame(i))
+    print(scores)
     scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
     scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
 
@@ -2570,27 +2582,52 @@ def generate_signature(cmpd_scores='', prot_scores='', matrix_file=''):
     print_time(end-start)
 
 
-def get_scores(c, p_scores, c_score):
+def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_score):
     """!
     Get best score for each Compound-Protein interaction
 
     @param c int: Compound id
-    @param p_scores df: DataFrame of all Protein ligands
+    @param p_scores df: DataFrame of all Protein ligands and corresponding scores
     @param c_score df: DataFrame of all Compound-ligand scores
+    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
+    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff.
+    @param i_score: The scoring function for the interaction between each Compound-Protein pair. (C, dC, P, CxP, dCxP).
     """
+    # percentile cutoff only affects Cscore
+    if percentile_cutoff:
+        c_cuts = {}
+        all_c_scores = [c_score[i] for i in c_score.index]
+        c_cutoff = np.percentile(all_c_scores,percentile_cutoff)
+    if i_score in ['dC','dCxP']:
+        all_c_scores = [c_score[i] for i in c_score.index]
+
     l = []
     for pdb in p_scores.index:
-        temp_value = 0.000
-        if pd.isnull(p_scores.loc[pdb][1]):
-            l.append(temp_value)
-            continue
-        for bs in p_scores.loc[pdb][1].split(','):
+        temp_cscore = 0.000
+        temp_pscore = 0.000
+        all_p_scores = list(zip(p_scores[1][pdb].split(","),p_scores[2][pdb].split(",")))
+        for p,p_score in all_p_scores:
+            if float(p_score) < p_cutoff:
+                continue
             try:
-                if temp_value < c_score[bs]:
-                    temp_value = c_score[bs]
+                if temp_cscore < float(c_score[p]) and float(c_score[p]) >= c_cutoff:
+                    temp_cscore = float(c_score[p])
+                    temp_pscore = float(p_score)
             except KeyError:
                 continue
-        l.append(temp_value)
+
+        if i_score == 'C':
+            l.append(temp_cscore)
+        elif i_score == 'P':
+            l.append(temp_pscore)
+        elif i_score == 'dC':
+            l.append(stats.percentileofscore(all_c_scores, temp_cscore)/100.0)
+        elif i_score == 'CxP':
+            l.append(temp_cscore*temp_pscore)
+        elif i_score == 'dCxP':
+            l.append(stats.percentileofscore(all_c_scores, temp_cscore)/100.0 * temp_pscore)
+
     return {c: l}
 
 
