@@ -20,8 +20,8 @@ install:
 
 script:
   # Your test script goes here
-  - python test.py
-  - coverage run test.py
+  - python run_test.py
+  - coverage run run_test.py
 
 # Push the results back to codecov
 after_success:

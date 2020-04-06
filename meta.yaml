@@ -1,0 +1,46 @@
+{% set version = "2.0.2" %}
+
+package:
+  name: cando
+  version: {{ version }}
+
+source:
+    git_url: "https://github.com/ram-compbio/CANDO.git"
+    git_rev: v{{ version }}
+    sha1: "207d92e4da9f69a58fc7ffa47d80fd1e48276dd1"
+
+build:
+    number: 0
+    script: "{{ PYTHON }} -m pip install . --no-deps --ignore-installed -vv "
+
+requirements:
+  build:
+    - python
+    - setuptools
+    - numpy
+  run:
+    - python
+    - rdkit
+    - openbabel=2.4.1
+    - numpy
+    - pandas
+    - scikit-learn
+    - matplotlib
+    - requests
+    - progressbar2
+    - coverage
+
+  test:
+      imports:
+          - cando
+      requires:
+          - cando
+about:
+  home: http://compbio.org/protinfo/cando
+  summary: "Computational Analysis of Novel Drug Opportunities"
+  description: "A unique computational drug discovery, design, and repurposing platform."
+  dev_url: https://github.com/ram-compbio/CANDO.git
+  doc_url: http://compbio.org/protinfo/cando/docs/CANDO-{{ version }}.pdf
+  license: BSD-3-Clause
+  license_file: LICENSE.md
+
