@@ -1880,10 +1880,10 @@ class CANDO(object):
             ss = 0.0
             count = 0
             for pi in indices:
-                si = c.sig[pi]
+                si = float(c.sig[pi])
                 p = self.proteins[pi]
                 if si >= threshold:
-                    ss += c.sig[pi]
+                    ss += si
                     count += 1
                     top_hits.append((p.id_, c, si))
             if ind_id:
