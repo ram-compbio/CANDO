@@ -70,13 +70,13 @@ print('\n')
 
 print("Test #8 - use customized protein set with 20 UniProt IDs, use benchmark with SVM ML code")
 print('-------')
-cando_uni = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, protein_set="test-uniprot_set")
+cando_uni = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, compute_distance=True, protein_set="test-uniprot_set")
 cando_uni.ml(benchmark=True, method='rf', seed=50, out='test_svm')
 print('\n')
 
 print("Test #9 - use random forest ML code to make predictions for Inflammation for two compounds")
 print('-------')
-cando_rf = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file)
+cando_rf = cnd.CANDO(cmpd_map, inds_map, compute_distance=True, matrix=matrix_file)
 inflm = cando_rf.get_indication('MESH:D007249')
 lys = cando_rf.get_compound(18)
 men = cando_rf.get_compound(62)
@@ -98,11 +98,13 @@ tr = cnd.Matrix('toy64x_rmsds.tsv', rmsd=True)
 tr.convert('toy64x_sim.tsv')
 print('\n')
 
+'''
 print("Test #11 - Check other download functions")
 print('-------')
 cnd.get_tutorial()
 cnd.get_v2()
 print('\n')
+'''
 
 print("Test #12 - Pathways data plus benchmark")
 print('-------')

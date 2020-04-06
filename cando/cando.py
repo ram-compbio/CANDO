@@ -2118,6 +2118,8 @@ class CANDO(object):
         cmpd = Compound(new_name, i, i)
         cmpd.sig = n_sig
         self.compounds.append(cmpd)
+        for c in self.compounds:
+            self.generate_similar_sigs(c)
         print("New compound is " + cmpd.name)
         print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         return cmpd
