@@ -7,7 +7,6 @@ package:
 source:
     git_url: "https://github.com/ram-compbio/CANDO.git"
     git_rev: v{{ version }}
-    sha1: "207d92e4da9f69a58fc7ffa47d80fd1e48276dd1"
 
 build:
     number: 0
