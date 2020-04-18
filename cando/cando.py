@@ -1583,20 +1583,17 @@ class CANDO(object):
                 if not self.compute_distance and not self.read_rmsds:
                     print('Please compute all compound-compound distances before using inverse_negatives().\n'
                           'Re-run with "compute_distance=True" or read in pre-computed distance file "read_rmsds="'
-                          'in the CANDO object instantiation.')
+                          'in the CANDO object instantiation -- quitting.')
+                    quit()
             negatives = []
             used = avoid
 
             def pick_first_last(cmpd, s):
-
-                def return_id(cm):
-                    return cm[0].id_
-
                 if neg_set == 'inverse':
                     r = int(len(self.compounds) / 2)
-                    shuffled = list(map(return_id, cmpd.similar[::-1][0:r]))
+                    shuffled = [cx[0].id_ for cx in cmpd.similar][::-1][0:r]
                 else:
-                    shuffled = list(map(return_id, cmpd.similar))
+                    shuffled = [cx.id_ for cx in self.compounds]
                 if s:
                     random.seed(s)
                     random.shuffle(shuffled)
@@ -2423,7 +2420,8 @@ class Matrix(object):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
 
-def generate_matrix(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff = 0.0, percentile_cutoff=None, interaction_score = 'P', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
+def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
+                    interaction_score='P', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
     Generate a CANDO Matrix 
 
