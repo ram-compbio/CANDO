@@ -33,7 +33,7 @@ class Protein(object):
         #   PDB or UniProt ID for the given protein
         self.id_ = id_
         ## @alt_id
-        #   Used when a second identifer mapping is available (such as SIFTs project)
+        #   Used when a second identifier mapping is available (such as SIFTs project)
         self.alt_id = ''
         ## @var sig 
         #   List of scores representing each drug interaction with the given protein
@@ -43,6 +43,7 @@ class Protein(object):
         self.pathways = []
         self.name = ''
         self.gene = ''
+
 
 class Compound(object):
     """!
@@ -59,7 +60,7 @@ class Compound(object):
         # int: The order in which the Compound appears in the mapping file (e.g, 1, 2, 3, ...)
         self.index = index
         ## @var status
-        # str: The clinical trial status of the compound from DrugBank
+        # str: The clinical trial status of the compound from DrugBank ('approved' or 'other')
         self.status = status
         ## @var sig
         # list: Signature is essentially a column of the Matrix
@@ -160,9 +161,9 @@ class CANDO(object):
     """!
     An object to represent all aspects of CANDO (compounds, indications, matrix, etc.)
 
-    To instantiate you need the compound mapping (c_map),
-    indication mapping file (i_map), and a compound-protein matrix (matrix=) or
-    or precomputed compound-compound distance matrix (read_rmsds=)
+    To instantiate you need the compound mapping (c_map), an
+    indication mapping file (i_map), and typically and a compound-protein matrix (matrix=) or
+    or precomputed compound-compound distance matrix (read_rmsds=), but those are optional.
 
     """
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
@@ -209,7 +210,7 @@ class CANDO(object):
         # str: Distance metric to be used for computing Compound-Compound distances
         self.dist_metric = dist_metric
         ## @var ncpus
-        # int: Numebr of CPUs used for parallelization
+        # int: Number of CPUs used for parallelization
         self.ncpus = int(ncpus)
         ## @var pathway_quantifier
         # str: Method used to quantify a all Pathways
@@ -603,6 +604,12 @@ class CANDO(object):
                 p.gene = prot_df['geneName'][i]
 
     def search_compound(self, name, n=5):
+        """!
+        Print closest Compound names/IDs for input search str
+
+        @param name str: Compound name
+        @return Returns None
+        """
         id_d = {}
 
         def return_names(x):
@@ -618,11 +625,10 @@ class CANDO(object):
 
     def get_compound(self, cmpd):
         """!
-        Get Compound object from Compound id
+        Get Compound object from Compound id or fuzzy match to Compound name
 
-        @param id_ int: Compound id
-        @param name str: name of drug (must match exactly)
-        @return Returns object: Compound object
+        @param id_ int or str: Compound id or Compound name
+        @return Returns object: Compound object or None if no exact match is found
         """
         if type(cmpd) is int:
             for c in self.compounds:
@@ -647,6 +653,12 @@ class CANDO(object):
                 return self.get_compound(id_d[name])
 
     def get_protein(self, protein_id):
+        """!
+        Get Protein object from Protein id
+
+        @param id_ str: Protein name
+        @return Returns object: Protein object
+        """
         if len(self.proteins) == 0 or not self.matrix:
             print('No matrix/proteins loaded -- quitting.')
             quit()
@@ -692,6 +704,12 @@ class CANDO(object):
         raise LookupError
 
     def search_indication(self, name, n=5):
+        """!
+        Print closest MeSH IDs for Indication name
+
+        @param name str: Indication name
+        @return Returns None
+        """
         id_d = {}
 
         def return_names(x):
@@ -756,9 +774,10 @@ class CANDO(object):
         """!
         Get the top scoring protein targets for a given compound
 
-        @param cmpds_file str: 
+        @param cmpds_file str: list of Compound IDs for which to search common targets
         @param n int: number of top targets to print/return
         @param negative int: if the interaction scores are negative (stronger) energies
+        @param save_file str: save results to file name
         @return Returns list: list of tuples (protein id_, score)
         """
         cs_df = pd.read_csv(cmpds_file,sep='\t',header=None)
@@ -792,8 +811,6 @@ class CANDO(object):
             o.close()
         return interactions_sorted[0:n]
 
-
-
     def virtual_screen(self, protein, n=10, negative=False, compound_set='all', save_file=''):
         """!
         Get the top scoring protein targets for a given compound
@@ -801,6 +818,8 @@ class CANDO(object):
         @param protein Protein int or str: Protein (object, int index, or str id_) of which to screen for top scores
         @param n int: number of top compounds to print/return
         @param negative int: if the interaction scores are negative (stronger) energies
+        @param compound_set str: use all Compounds ('all') or only approved Compounds ('approved')
+        @param save_file str: save results to file name
         @return Returns list: list of tuples (compound id_, score)
         """
         if type(protein) is Protein:
@@ -1143,7 +1162,7 @@ class CANDO(object):
         @param bottom bool: Reverse the ranking (descending) for the benchmark
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
         modified, and ordinal)
-        @param adrs bool: ADRs are used as the phenotypic effect instead of Indications
+        @param adrs bool: ADRs are used as the Compounds' phenotypic effects instead of Indications
         """
 
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
@@ -1618,9 +1637,16 @@ class CANDO(object):
         @param adrs bool: if the models are trained with ADRs instead of Indications
         @param predict list: provide a list of Compound objects to classify with the model (only used in
         combination with effect=Indication/ADR object)
+        @param threshold float: decision threshold for positive vs negative classification
+        @param negative str: choose random negative samples (default) or 'inverse' for most opposite signatures
         @param seed int: choose a seed for reproducibility
         @param out str: file name extension for the output of benchmark (note: must have benchmark=True)
         """
+
+        if method in ['1csvm', 'svm']:
+            print('SVMs are currently unsupported by this version of cando.py. Please choose "log" or "rf" - quitting.')
+            quit()
+
         if out:
             if not os.path.exists('./raw_results/'):
                 os.system('mkdir raw_results')
@@ -2032,10 +2058,8 @@ class CANDO(object):
         @param ind_id str: Indication id
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
-        @param sum_scores bool: Sum all interaction scores across all proteins
-        @param threshold float: a interaction score cutoff to use (ignores values for sum less than threshold)
-        @param keep_approved bool: Print Compounds that are already approved for the Indication
-        @param associated bool: Only print compounds with at least one associated disease ("repurposing" candidates)
+        @param keep_associated bool: Print Compounds that are already approved/associated for the Indication
+        @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
         @param save str: name of a file to save results
         """
 
@@ -2108,9 +2132,7 @@ class CANDO(object):
         and the most similar compounds to it will be computed. The indications
         associated with the top n most similar compounds to the query compound will
         be examined to see if any are repeatedly enriched.
-        
-        @param new_sig str: Path to the new Compound signature
-        @param new_name str: Name to be used for the new Compound
+
         @param cando_cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
@@ -2144,9 +2166,7 @@ class CANDO(object):
         Computes and prints the top n most similar compounds to an input
         Compound object cando_cmpd or input novel signature new_sig
 
-        @param new_sig list: List float of novel compound protein interaction signature
-        @param new_name str: Drug name
-        @param cando_cmpd Compound: Compound object
+        @param cmpd Compound: Compound object
         @param n int: top number of similar Compounds to be used for prediction
         """
         if type(cmpd) is Compound:
