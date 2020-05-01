@@ -10,5 +10,5 @@ coverage:
       default:
         threshold: 50%
   ignore:
-    - "test.py"
+    - "run_test.py"
     - "cando/__init__.py"
