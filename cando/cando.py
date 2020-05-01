@@ -41,7 +41,8 @@ class Protein(object):
         ## @var pathways 
         #   List of Pathway objects in which the given protein is involved.
         self.pathways = []
-
+        self.name = ''
+        self.gene = ''
 
 class Compound(object):
     """!
@@ -167,7 +168,7 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 adr_map='', ncpus=1):
+                 adr_map='', protein_map='', ncpus=1):
         ## @var c_map 
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -222,6 +223,9 @@ class CANDO(object):
         ## @var adr_map
         # str: File path to ADR mapping file
         self.adr_map = adr_map
+        ## @var protein_map
+        # str: File path to Protein metadata mapping file
+        self.protein_map = protein_map
 
         self.proteins = []
         self.protein_id_to_index = {}
@@ -425,7 +429,7 @@ class CANDO(object):
             print('Done reading indication-gene associations.')
 
         if read_rmsds:
-            print('Reading RMSDs...')
+            print('Reading {} distances...'.format(self.dist_metric))
             with open(read_rmsds, 'r') as rrs:
                 lines = rrs.readlines()
                 for i in range(len(lines)):
@@ -444,7 +448,7 @@ class CANDO(object):
                 c.similar = sorted_scores
                 c.similar_computed = True
                 c.similar_sorted = True
-            print('Done reading RMSDs.')
+            print('Done reading {} distances.'.format(self.dist_metric))
 
         if rm_compounds:
             print('Removing undesired compounds in {}...'.format(rm_compounds))
@@ -467,6 +471,10 @@ class CANDO(object):
                     else:
                         good_sims.append(s)
                 c.similar = good_sims
+            if self.matrix:
+                for p in self.proteins:
+                    g_sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
+                    p.sig = g_sig
             print('Done removing undesired compounds.')
 
         # if compute distance is true, generate similar compounds for each
@@ -585,6 +593,14 @@ class CANDO(object):
                         cmpd.adrs.append(adr)
                         self.adrs.append(adr)
             print('Read {} ADRs.'.format(len(self.adrs)))
+
+        if protein_map:
+            print('Reading Protein mapping file...')
+            prot_df = pd.read_csv(protein_map,sep='\t',index_col=0)
+            for i in prot_df.index:
+                p = self.get_protein(i)
+                p.name = prot_df['uniprotRecommendedName'][i]
+                p.gene = prot_df['geneName'][i]
 
     def search_compound(self, name, n=5):
         id_d = {}
@@ -728,15 +744,57 @@ class CANDO(object):
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         print('Compound is {}'.format(cmpd.name))
-        print('rank\tscore\tindex\tid')
+        print('rank\tscore\tindex\tid\tgene\tname')
         for si in range(n):
             pr = interactions_sorted[si][0]
-            print('{}\t{}\t{}\t{}'.format(si+1, round(interactions_sorted[si][1], 3),
-                                          self.proteins.index(pr), pr.id_))
+            print('{}\t{}\t{}\t{}\t{}\t{}'.format(si+1, round(interactions_sorted[si][1], 3),
+                                          self.proteins.index(pr), pr.id_, pr.gene, pr.name))
         print()
         return interactions_sorted[0:n]
 
-    def virtual_screen(self, protein, n=10, negative=False, compound_set='all'):
+    def common_targets(self, cmpds_file, n=10, negative=False, save_file=''):
+        """!
+        Get the top scoring protein targets for a given compound
+
+        @param cmpds_file str: 
+        @param n int: number of top targets to print/return
+        @param negative int: if the interaction scores are negative (stronger) energies
+        @return Returns list: list of tuples (protein id_, score)
+        """
+        cs_df = pd.read_csv(cmpds_file,sep='\t',header=None)
+        sum_sig = [0]*len(self.get_compound(0).sig)
+        for ci in cs_df.itertuples(index=False):
+            s = self.get_compound(ci[0]).sig
+            sum_sig = [i+j for i,j in zip(sum_sig,s)]
+        # print the list of the top targets
+        all_interactions = []
+        for i in range(len(sum_sig)):
+            s = sum_sig[i]
+            p = self.proteins[i]
+            all_interactions.append((p, s))
+        if negative:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
+        else:
+            interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
+        if save_file:
+            o = open(save_file,'w')
+            o.write('rank\tscore\tindex\tid\tgene\tname\n')
+        print('rank\tscore\tindex\tid\tgene\tname')
+        for si in range(n):
+            pr = interactions_sorted[si][0]
+            print('{}\t{}\t{}\t{}\t{}\t{}'.format(si+1, round(interactions_sorted[si][1], 3),
+                                          self.proteins.index(pr), pr.id_, pr.gene, pr.name))
+            if save_file:
+                o.write('{}\t{}\t{}\t{}\t{}\t{}\n'.format(si+1, round(interactions_sorted[si][1], 3),
+                                                self.proteins.index(pr), pr.id_, pr.gene, pr.name))
+        print()
+        if save_file:
+            o.close()
+        return interactions_sorted[0:n]
+
+
+
+    def virtual_screen(self, protein, n=10, negative=False, compound_set='all', save_file=''):
         """!
         Get the top scoring protein targets for a given compound
 
@@ -766,22 +824,33 @@ class CANDO(object):
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         print('Protein is {}'.format(prot.id_))
+        if save_file:
+            o = open(save_file,'w')
+            o.write('rank\tscore\tid\tapproved\tname\n')
         print('rank\tscore\tid\tapproved\tname')
         printed = 0
-        while printed < n:
-            for si in range(n):
-                c = self.compounds[interactions_sorted[si][0]]
-                if compound_set == 'approved':
-                    if c.status == 'approved':
-                        print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
-                                                              'true', self.compounds[interactions_sorted[si][0]].name))
-                        printed += 1
-                else:
-                    print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3),
-                                                          c.id_, str(c.status == 'approved').lower(),
-                                                          self.compounds[interactions_sorted[si][0]].name))
-                    printed += 1
+        for si in range(n):
+            c = self.get_compound(interactions_sorted[si][0])
+            #c = self.compounds[interactions_sorted[si][0]]
+            if compound_set == 'approved':
+                if c.status == 'approved':
+                    print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
+                                                          'true', self.compounds[interactions_sorted[si][0]].name))
+                    if save_file:
+                        o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
+                                                                'true', self.compounds[interactions_sorted[si][0]].name))
+            else:
+                print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3),
+                                                      c.id_, str(c.status == 'approved').lower(),
+                                                      self.get_compound(interactions_sorted[si][0]).name))
+                if save_file:
+                    o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3),
+                                                            c.id_, str(c.status == 'approved').lower(),
+                                                            self.get_compound(interactions_sorted[si][0]).name))
+            printed+=1
         print()
+        if save_file:
+            o.close()
         return
 
     def uniprot_set_index(self, prots):
