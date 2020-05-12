@@ -32,7 +32,7 @@ class Protein(object):
         ## @var id_ 
         #   PDB or UniProt ID for the given protein
         self.id_ = id_
-        ## @alt_id
+        ## @var alt_id
         #   Used when a second identifier mapping is available (such as SIFTs project)
         self.alt_id = ''
         ## @var sig 
@@ -608,6 +608,7 @@ class CANDO(object):
         Print closest Compound names/IDs for input search str
 
         @param name str: Compound name
+        @param n int: Number of outputted compounds
         @return Returns None
         """
         id_d = {}
@@ -623,20 +624,20 @@ class CANDO(object):
         for nm in nms:
             print("{}\t{}".format(id_d[nm], nm))
 
-    def get_compound(self, cmpd):
+    def get_compound(self, cmpd_id):
         """!
         Get Compound object from Compound id or fuzzy match to Compound name
 
-        @param id_ int or str: Compound id or Compound name
+        @param cmpd_id int or str: Compound id or Compound name
         @return Returns object: Compound object or None if no exact match is found
         """
-        if type(cmpd) is int:
+        if type(cmpd_id) is int:
             for c in self.compounds:
-                if c.id_ == cmpd:
+                if c.id_ == cmpd_id:
                     return c
-            print("{0} not in {1}".format(cmpd, self.c_map))
+            print("{0} not in {1}".format(cmpd_id, self.c_map))
             return None
-        elif type(cmpd) is str:
+        elif type(cmpd_id) is str:
             id_d = {}
 
             def return_names(x):
@@ -644,7 +645,7 @@ class CANDO(object):
                 return x.name
 
             cando_drugs = list(map(return_names, self.compounds))
-            name = cmpd.strip().lower().replace(' ', '_')
+            name = cmpd_id.strip().lower().replace(' ', '_')
             if name not in cando_drugs:
                 print('"{}" is not in our mapping, here are the 5 closest results:'.format(name))
                 self.search_compound(name, n=5)
@@ -656,7 +657,7 @@ class CANDO(object):
         """!
         Get Protein object from Protein id
 
-        @param id_ str: Protein name
+        @param protein_id str: Protein name
         @return Returns object: Protein object
         """
         if len(self.proteins) == 0 or not self.matrix:
@@ -708,6 +709,7 @@ class CANDO(object):
         Print closest MeSH IDs for Indication name
 
         @param name str: Indication name
+        @param n int: Number of outputted indications
         @return Returns None
         """
         id_d = {}
@@ -2144,7 +2146,7 @@ class CANDO(object):
         associated with the top n most similar compounds to the query compound will
         be examined to see if any are repeatedly enriched.
 
-        @param cando_cmpd Compound: Compound object to be used
+        @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
         """
@@ -2530,7 +2532,7 @@ def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percen
     @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
     @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
     @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
-    @param ineteraction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').
+    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').
     @param matrix_file str: File path to where the generated Matrix will be written Default = 'cando_interaction_matrix.tsv'
     @param ncpus int: Number of cpus to use for parallelization. Default = 1
     """
@@ -2644,6 +2646,10 @@ def generate_signature(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff 
     @param cmpd_scores str: File path to tab-separated scores for all Compounds
     @param prot_scores str: File path to tab-separated scores for all Proteins
     @param matrix_file str: File path to where the generated Compounds signature will be written
+    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
+    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
+    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').    
     """
     def print_time(s):
         if s >= 60:
