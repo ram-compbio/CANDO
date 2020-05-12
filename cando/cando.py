@@ -848,7 +848,8 @@ class CANDO(object):
             o.write('rank\tscore\tid\tapproved\tname\n')
         print('rank\tscore\tid\tapproved\tname')
         printed = 0
-        for si in range(n):
+        si = 0
+        while printed < n:
             c = self.get_compound(interactions_sorted[si][0])
             #c = self.compounds[interactions_sorted[si][0]]
             if compound_set == 'approved':
@@ -858,6 +859,7 @@ class CANDO(object):
                     if save_file:
                         o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
                                                                 'true', self.compounds[interactions_sorted[si][0]].name))
+                    printed += 1
             else:
                 print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3),
                                                       c.id_, str(c.status == 'approved').lower(),
@@ -866,7 +868,8 @@ class CANDO(object):
                     o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3),
                                                             c.id_, str(c.status == 'approved').lower(),
                                                             self.get_compound(interactions_sorted[si][0]).name))
-            printed+=1
+                printed += 1
+            si += 1
         print()
         if save_file:
             o.close()
@@ -2089,17 +2092,25 @@ class CANDO(object):
         print("Generating compound predictions using top{} most similar compounds...\n".format(n))
         c_dct = {}
         for c in ind.compounds:
-            for c2_i in range(n):
+            c2_i = 0
+            c_count = 0
+            while c_count < n:
                 c2 = c.similar[c2_i]
+                if c2[0].status != 'approved' and cmpd_set == 'approved':
+                    c2_i += 1
+                    continue
                 if c2[1] == 0.0:
+                    c2_i += 1
                     continue
                 already_approved = ind in c2[0].indications
                 k = c2[0].id_
                 if k not in c_dct:
-                    c_dct[k] = [1, already_approved, c2_i]
+                    c_dct[k] = [1, already_approved, c_count]
                 else:
                     c_dct[k][0] += 1
-                    c_dct[k][2] += c2_i
+                    c_dct[k][2] += c_count
+                c2_i += 1
+                c_count += 1
 
         sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
         i = 0
