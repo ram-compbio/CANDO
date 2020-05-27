@@ -8,12 +8,12 @@ import progressbar
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
-import pybel
+from openbabel import pybel
 import difflib
 import matplotlib.pyplot as plt
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
-from sklearn.metrics import pairwise_distances, roc_curve, roc_auc_score, average_precision_score
+from sklearn.metrics import pairwise_distances, roc_curve, roc_auc_score, average_precision_score, ndcg_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
@@ -491,14 +491,16 @@ class CANDO(object):
                 for i in range(0, len(self.compounds)):
                     signatures.append(self.compounds[i].sig)
                 snp = np.array(signatures)  # convert to numpy form
-
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock']:
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
+                    distance_matrix = squareform(distance_matrix, checks=False)
+                elif self.dist_metric in ['cosine']:
+                    distance_matrix = cosine_dist(snp)
                     distance_matrix = squareform(distance_matrix, checks=False)
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
@@ -534,11 +536,12 @@ class CANDO(object):
                     o = o[:-1] + '\n'
                     return o
 
+                print('Saving {} distances...'.format(self.dist_metric))
                 with open(self.save_rmsds, 'w') as srf:
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
                         srf.write(rmsds_to_str(c, ci))
-                print('RMSDs saved.')
+                print('{} distances saved.'.format(self.dist_metric))
 
             # sort the RMSDs after saving (if desired)
             for c in self.compounds:
@@ -837,6 +840,8 @@ class CANDO(object):
         for i in range(len(sig)):
             s = sig[i]
             c_id = self.compounds[i].id_
+            if c_id in self.rm_cmpds:
+                continue
             all_interactions.append((c_id, s))
         if negative:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
@@ -960,7 +965,7 @@ class CANDO(object):
         
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
-            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
         elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
             distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
         else:
@@ -1021,7 +1026,7 @@ class CANDO(object):
         
         # call cdist, speed up with custom RMSD function
         if self.dist_metric == "rmsd":
-            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
         elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
             distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
         else:
@@ -1548,6 +1553,61 @@ class CANDO(object):
         
         cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
+
+    def canbenchmark_ndcg(self, file_name, k=10):
+        def dcg(l,k):
+            dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
+            return np.sum(dcg)
+
+        i_accs = {}
+        c_accs = []
+        for ind in self.indications:
+            if len(ind.compounds) < 2:
+                continue
+            approved_ids = [i.id_ for i in ind.compounds]
+            acc = []
+            for c in ind.compounds:
+                if not c.similar_sorted:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_sorted = True
+                c_ideal = [0]*len(c.similar)
+                for x in range(len(approved_ids)):
+                    c_ideal[x] = 1
+                c_rank = []
+                for x in c.similar:
+                    if x[0].id_ in approved_ids:
+                        c_rank.append(1)
+                    else:
+                        c_rank.append(0)
+                acc.append(dcg(c_rank,k)/dcg(c_ideal,k))
+                c_accs.append((c.id_,ind.id_,dcg(c_rank,k)/dcg(c_ideal,k)))
+            i_accs[ind.id_] = (ind,np.mean(acc))
+        # Non-zero ndcg
+        i_accs_nz = [i_accs[x][1] for x in i_accs if i_accs[x][1] > 0.0]
+        # Write NDCG results per indication in results_analysed_named
+        if not os.path.exists('./results_analysed_named/'):
+            os.system('mkdir results_analysed_named')
+        with open("results_analysed_named/ndcg_per_indication-k{}_{}.tsv".format(k,file_name), 'w') as o:
+            o.write("disease_id\tcmpds_per_disease\tndcg\tdisease_name\n")
+            for x in i_accs:
+                o.write("{}\t{}\t{:.3f}\t{}\n".format(i_accs[x][0].id_,len(i_accs[x][0].compounds),i_accs[x][1],i_accs[x][0].name))
+        # Write NDCG results per compound-indication pair in raw_results
+        if not os.path.exists('./raw_results/'):
+            os.system('mkdir raw_results')
+        with open("raw_results/ndcg_pairwise-k{}_{}.csv".format(k,file_name), 'w') as o:
+            o.write("compound_id,disease_id,ndcg\n")
+            for x in c_accs:
+                o.write("{},{},{:.3f}\n".format(x[0],x[1],x[2]))
+        # Write a summary file for NDCG
+        with open("ndcg-k{}_summary_{}.tsv".format(k,file_name), 'w') as o:
+            o.write("\tNDCG\tcount\n")
+            o.write("ai\t{:.3f}\t{}\n".format(np.mean(list(zip(*i_accs.values()))[1]),len(i_accs)))
+            o.write("ap\t{:.3f}\t{}\n".format(np.mean(list(zip(*c_accs))[2]),len(c_accs)))
+            o.write("ic\t{:.3f}\t{}\n".format(np.mean(i_accs_nz),len(i_accs_nz)))
+        print("NDCG averaged over {} indications = {}".format(len(i_accs),np.mean(list(zip(*i_accs.values()))[1])))
+        print("Pairwise NDCG averaged over {} compound-indication pairs = {}".format(len(c_accs),np.mean(list(zip(*c_accs))[3])))
+
     def canbenchmark_cluster(self, n_clusters=5):
         """!
         Benchmark using k-means clustering
@@ -2063,6 +2123,11 @@ class CANDO(object):
         @param save str: name of a file to save results
         """
 
+        if int(topX) == -1:
+            topX = len(self.compounds)-1
+        if int(n) == -1:
+            n = len(self.compounds)-1
+
         i = self.indication_ids.index(ind_id)
         ind = self.indications[i]
         print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
@@ -2082,10 +2147,6 @@ class CANDO(object):
             else:
                 self.generate_similar_sigs(c, sort=True)
 
-        if save:
-            fo = open(save, 'w')
-            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
-
         print("Generating compound predictions using top{} most similar compounds...\n".format(n))
         c_dct = {}
         for c in ind.compounds:
@@ -2103,7 +2164,11 @@ class CANDO(object):
 
         sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
         i = 0
-        print('rank\tscore1\tscore2\tid\tapproved\tname')
+        if save:
+            fo = open(save, 'w')
+            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
+        else:
+            print('rank\tscore1\tscore2\tid\tapproved\tname')
         for p in enumerate(sorted_x):
             if i >= topX != -1:
                 break
@@ -2119,13 +2184,14 @@ class CANDO(object):
             else:
                 st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1), co.id_,
                                                      (str(co.status == 'approved').lower()).ljust(8), co.name)
-            print(st)
-            i += 1
             if save:
                 fo.write(st + '\n')
+            else:
+                print(st)
+            i += 1
         print('\n')
 
-    def canpredict_indications(self, cmpd, n=10, topX=10):
+    def canpredict_indications(self, cmpd, n=10, topX=10, save=''):
         """!
         This function is the inverse of canpredict_compounds. Input a compound
         of interest cando_cmpd (or a novel protein signature of interest new_sig)
@@ -2137,6 +2203,11 @@ class CANDO(object):
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
         """
+        if n == -1:
+            n = len(self.compounds)-1
+        if topX == -1:
+            topX = len(self.indications)
+
         if type(cmpd) is Compound:
             cmpd = cmpd
         elif type(cmpd) is int:
@@ -2154,11 +2225,21 @@ class CANDO(object):
                 else:
                     i_dct[ind.id_] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
-        print("Printing the {} highest predicted indications...\n".format(topX))
-        print("rank\tscore\tind_id    \tindication")
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted indications...\n".format(topX))
+            fo.write("rank\tscore\tind_id\tindication\n")
+        else:
+            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("rank\tscore\tind_id    \tindication")
         for i in range(topX):
             indd = self.get_indication(sorted_x[i][0])
-            print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+        if save:
+            fo.close()
         print('')
 
     def similar_compounds(self, cmpd, n=10):
@@ -2790,6 +2871,22 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 l.append(0.000)
                 continue
     return {cmpd_id: l}
+
+def cosine_dist(A):
+    similarity = np.dot(A, A.T)
+    # squared magnitude of preference vectors (number of occurrences)
+    square_mag = np.diag(similarity)
+    # inverse squared magnitude
+    inv_square_mag = 1 / square_mag
+    # if it doesn't occur, set it's inverse magnitude to zero (instead of inf)
+    inv_square_mag[np.isinf(inv_square_mag)] = 0
+    # inverse of the magnitude
+    inv_mag = np.sqrt(inv_square_mag)
+    # cosine similarity (elementwise multiply by inverse magnitudes)
+    cosine = similarity * inv_mag
+    cos_sim = cosine.T * inv_mag
+    cos_dist = [1-i for i in cos_sim]
+    return np.asarray(cos_dist)
 
 
 def tanimoto_sparse(str1, str2):

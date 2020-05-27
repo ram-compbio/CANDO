@@ -20,7 +20,7 @@ requirements:
   run:
     - python
     - rdkit
-    - openbabel=2.4.1
+    - openbabel
     - numpy
     - pandas
     - scikit-learn
