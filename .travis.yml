@@ -13,7 +13,7 @@ install:
   - conda config --set always_yes yes --set changeps1 no
   - conda update -q conda
   - conda init bash
-  - conda install -q -c conda-forge rdkit openbabel=2.4.1 numpy pandas scikit-learn matplotlib requests coverage progressbar2
+  - conda install -q -c conda-forge rdkit openbabel numpy pandas scikit-learn matplotlib requests coverage progressbar2
   - pip install codecov
   - codecov
   - codecov --token="e3f91a6d-dfcc-46dc-b73e-6546e1a3ae99"
