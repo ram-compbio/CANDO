@@ -451,33 +451,6 @@ class CANDO(object):
                 c.similar_sorted = True
             print('Done reading {} distances.'.format(self.dist_metric))
 
-        if rm_compounds:
-            print('Removing undesired compounds in {}...'.format(rm_compounds))
-            with open(rm_compounds, 'r') as rcf:
-                for line in rcf:
-                    cmpd_id = int(line.strip().split('\t')[0])
-                    self.rm_cmpds.append(cmpd_id)
-            good_cmpds = []
-            for c in self.compounds:
-                if c.id_ in self.rm_cmpds:
-                    pass
-                else:
-                    good_cmpds.append(c)
-            self.compounds = good_cmpds
-            for c in self.compounds:
-                good_sims = []
-                for s in c.similar:
-                    if s[0].id_ in self.rm_cmpds:
-                        pass
-                    else:
-                        good_sims.append(s)
-                c.similar = good_sims
-            if self.matrix:
-                for p in self.proteins:
-                    g_sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
-                    p.sig = g_sig
-            print('Done removing undesired compounds.')
-
         # if compute distance is true, generate similar compounds for each
         if compute_distance and not read_rmsds:
             if self.pathways and not self.indication_pathways:
@@ -543,6 +516,33 @@ class CANDO(object):
                         srf.write(rmsds_to_str(c, ci))
                 print('{} distances saved.'.format(self.dist_metric))
 
+        if rm_compounds:
+            print('Removing undesired compounds in {}...'.format(rm_compounds))
+            with open(rm_compounds, 'r') as rcf:
+                for line in rcf:
+                    cmpd_id = int(line.strip().split('\t')[0])
+                    self.rm_cmpds.append(cmpd_id)
+            good_cmpds = []
+            for c in self.compounds:
+                if c.id_ in self.rm_cmpds:
+                    pass
+                else:
+                    good_cmpds.append(c)
+            self.compounds = good_cmpds
+            for c in self.compounds:
+                good_sims = []
+                for s in c.similar:
+                    if s[0].id_ in self.rm_cmpds:
+                        pass
+                    else:
+                        good_sims.append(s)
+                c.similar = good_sims
+            if self.matrix:
+                for p in self.proteins:
+                    g_sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
+                    p.sig = g_sig
+            print('Done removing undesired compounds.')
+
             # sort the RMSDs after saving (if desired)
             for c in self.compounds:
                 sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
@@ -577,6 +577,49 @@ class CANDO(object):
                         good_cmpds.append(cmpd)
                 ind.compounds = good_cmpds
             print('Done filtering indication mapping.')
+
+        if compute_distance and not read_rmsds:
+            if self.pathways and not self.indication_pathways:
+                print('Reomputing distances using global pathway signatures...')
+                for c in self.compounds:
+                    self.generate_similar_sigs(c, aux=True)
+            else:
+                print('Recomputing {} distances...'.format(self.dist_metric))
+                # put all compound signatures into 2D-array
+                signatures = []
+                for i in range(0, len(self.compounds)):
+                    signatures.append(self.compounds[i].sig)
+                snp = np.array(signatures)  # convert to numpy form
+                # call pairwise_distances, speed up with custom RMSD function and parallelism
+                if self.dist_metric == "rmsd":
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
+                    distance_matrix = squareform(distance_matrix)
+                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock']:
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
+                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
+                    distance_matrix = squareform(distance_matrix, checks=False)
+                elif self.dist_metric in ['cosine']:
+                    distance_matrix = cosine_dist(snp)
+                    distance_matrix = squareform(distance_matrix, checks=False)
+                else:
+                    print("Incorrect distance metric - {}".format(self.dist_metric))
+                    exit()
+
+                # step through the condensed matrix - add RMSDs to Compound.similar lists
+                nc = len(self.compounds)
+                n = 0
+                for i in range(nc):
+                    for j in range(i, nc):
+                        c1 = self.compounds[i]
+                        c2 = self.compounds[j]
+                        if i == j:
+                            continue
+                        r = distance_matrix[n]
+                        c1.similar.append((c2, r))
+                        c2.similar.append((c1, r))
+                        n += 1
+                print('Done recomputing {} distances.'.format(self.dist_metric))
+
 
         if adr_map:
             print('Reading ADR mapping file...')
@@ -1193,9 +1236,9 @@ class CANDO(object):
             print("Directory 'raw_results' does not exist, creating directory")
             os.system('mkdir raw_results')
 
-        ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '.tsv'
-        ra = 'raw_results/raw_results_' + file_name + '.csv'
-        summ = 'summary_' + file_name + '.tsv'
+        ra_named = 'results_analysed_named/results_analysed_named-' + file_name + '.tsv'
+        ra = 'raw_results/raw_results-' + file_name + '.csv'
+        summ = 'summary-' + file_name + '.tsv'
         ra_out = open(ra, 'w')
 
         def effect_type():
@@ -1559,18 +1602,26 @@ class CANDO(object):
         cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
 
-    def canbenchmark_ndcg(self, file_name, k=10):
+    def canbenchmark_ndcg(self, file_name):
         def dcg(l,k):
             dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
             return np.sum(dcg)
 
+        k_s = [10,25,50,100,len(self.compounds),0.01*len(self.compounds),0.05*len(self.compounds),0.10*len(self.compounds),0.50*len(self.compounds),len(self.compounds)]
         i_accs = {}
-        c_accs = []
+        c_accs = {}
+        nz_counts = {}
+        for k in range(len(k_s)):
+            i_accs[k] = {}
+            c_accs[k] = []
+            nz_counts[k] = 0
         for ind in self.indications:
             if len(ind.compounds) < 2:
                 continue
             approved_ids = [i.id_ for i in ind.compounds]
-            acc = []
+            acc = {}
+            for k in range(len(k_s)):
+                acc[k] = []
             for c in ind.compounds:
                 if not c.similar_sorted:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
@@ -1585,33 +1636,52 @@ class CANDO(object):
                         c_rank.append(1)
                     else:
                         c_rank.append(0)
-                acc.append(dcg(c_rank,k)/dcg(c_ideal,k))
-                c_accs.append((c.id_,ind.id_,dcg(c_rank,k)/dcg(c_ideal,k)))
-            i_accs[ind.id_] = (ind,np.mean(acc))
-        # Non-zero ndcg
-        i_accs_nz = [i_accs[x][1] for x in i_accs if i_accs[x][1] > 0.0]
+                for k in range(len(k_s)):
+                    acc[k].append(dcg(c_rank,int(k_s[k]))/dcg(c_ideal,int(k_s[k])))
+                    c_accs[k].append((c.id_,ind.id_,dcg(c_rank,int(k_s[k]))/dcg(c_ideal,int(k_s[k]))))
+            for k in range(len(k_s)):
+                i_accs[k][ind.id_] = (ind,np.mean(acc[k]))
+        for k in range(len(k_s)):
+            # Non-zero ndcg
+            i_accs_nz = [i_accs[k][x][1] for x in i_accs[k] if i_accs[k][x][1] > 0.0]
+            nz_counts[k] = len(i_accs_nz)
         # Write NDCG results per indication in results_analysed_named
         if not os.path.exists('./results_analysed_named/'):
             os.system('mkdir results_analysed_named')
-        with open("results_analysed_named/ndcg_per_indication-k{}_{}.tsv".format(k,file_name), 'w') as o:
-            o.write("disease_id\tcmpds_per_disease\tndcg\tdisease_name\n")
-            for x in i_accs:
-                o.write("{}\t{}\t{:.3f}\t{}\n".format(i_accs[x][0].id_,len(i_accs[x][0].compounds),i_accs[x][1],i_accs[x][0].name))
+        with open("results_analysed_named/results_analysed_named_ndcg-{}.tsv".format(file_name), 'w') as o:
+            o.write("disease_id\tcmpds_per_disease\ttop10\ttop25\ttop50\ttop100\ttop{}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\tdisease_name\n".format(len(self.compounds)))
+            for x in i_accs[0]:
+                o.write("{}\t{}".format(i_accs[0][x][0].id_,len(i_accs[0][x][0].compounds)))
+                for k in range(len(k_s)):
+                    o.write("\t{:.3f}".format(i_accs[k][x][1]))
+                o.write("\t{}\n".format(i_accs[0][x][0].name))
         # Write NDCG results per compound-indication pair in raw_results
         if not os.path.exists('./raw_results/'):
             os.system('mkdir raw_results')
-        with open("raw_results/ndcg_pairwise-k{}_{}.csv".format(k,file_name), 'w') as o:
-            o.write("compound_id,disease_id,ndcg\n")
-            for x in c_accs:
-                o.write("{},{},{:.3f}\n".format(x[0],x[1],x[2]))
+        with open("raw_results/raw_results_ndcg-{}.csv".format(file_name), 'w') as o:
+            o.write("compound_id,disease_id,top10,top25,top50,top100,top{},top1%,top5%,top10%,top50%,top100%\n".format(len(self.compounds)))
+            for x in range(len(c_accs[0])):
+                o.write("{},{}".format(c_accs[0][x][0],c_accs[0][x][1]))
+                for k in range(len(k_s)):
+                    o.write(",{:.3f}".format(c_accs[k][x][2]))
+                o.write("\n")
         # Write a summary file for NDCG
-        with open("ndcg-k{}_summary_{}.tsv".format(k,file_name), 'w') as o:
-            o.write("\tNDCG\tcount\n")
-            o.write("ai\t{:.3f}\t{}\n".format(np.mean(list(zip(*i_accs.values()))[1]),len(i_accs)))
-            o.write("ap\t{:.3f}\t{}\n".format(np.mean(list(zip(*c_accs))[2]),len(c_accs)))
-            o.write("ic\t{:.3f}\t{}\n".format(np.mean(i_accs_nz),len(i_accs_nz)))
-        print("NDCG averaged over {} indications = {}".format(len(i_accs),np.mean(list(zip(*i_accs.values()))[1])))
-        print("Pairwise NDCG averaged over {} compound-indication pairs = {}".format(len(c_accs),np.mean(list(zip(*c_accs))[3])))
+        with open("summary_ndcg-{}.tsv".format(file_name), 'w') as o:
+            o.write("\ttop10\ttop25\ttop50\ttop100\ttop{}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\n".format(len(self.compounds)))
+            o.write("ai-ndcg")
+            for k in range(len(k_s)):
+                o.write("\t{:.3f}".format(np.mean(list(zip(*i_accs[k].values()))[1])))
+            o.write("\n")
+            o.write("ap-ndcg")
+            for k in range(len(k_s)):
+                o.write("\t{:.3f}".format(np.mean(list(zip(*c_accs[k]))[2])))
+            o.write("\n")
+            o.write("ic-ndcg")
+            for k in range(len(k_s)):
+                o.write("\t{}".format(int(nz_counts[k])))
+            o.write("\n")
+        #print("NDCG averaged over {} indications = {}".format(len(i_accs),np.mean(list(zip(*i_accs.values()))[1])))
+        #print("Pairwise NDCG averaged over {} compound-indication pairs = {}".format(len(c_accs),np.mean(list(zip(*c_accs))[3])))
 
     def canbenchmark_cluster(self, n_clusters=5):
         """!
@@ -1826,7 +1896,7 @@ class CANDO(object):
                 frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w')
                 frr.write('Compound,Effect,Prob,Neg,Neg_prob\n')
                 fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w')
-                fsum = open('summary_ml_{}'.format(out), 'w')
+                fsum = open('summary_ml-{}'.format(out), 'w')
         else:
             if len(effect.compounds) < 1:
                 print('No compounds associated with {} ({}), quitting.'.format(effect.name, effect.id_))
