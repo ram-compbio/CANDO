@@ -449,7 +449,7 @@ class CANDO(object):
                 c.similar = sorted_scores
                 c.similar_computed = True
                 c.similar_sorted = True
-            print('Done reading {} distances.'.format(self.dist_metric))
+            print('Done reading {} distances.\n'.format(self.dist_metric))
 
         # if compute distance is true, generate similar compounds for each
         if compute_distance and not read_rmsds:
@@ -492,7 +492,7 @@ class CANDO(object):
                         c1.similar.append((c2, r))
                         c2.similar.append((c1, r))
                         n += 1
-                print('Done computing {} distances.'.format(self.dist_metric))
+                print('Done computing {} distances.\n'.format(self.dist_metric))
 
             if self.save_rmsds:
 
@@ -514,34 +514,19 @@ class CANDO(object):
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
                         srf.write(rmsds_to_str(c, ci))
-                print('{} distances saved.'.format(self.dist_metric))
+                print('Done saving {} distances.\n'.format(self.dist_metric))
 
         if rm_compounds:
             print('Removing undesired compounds in {}...'.format(rm_compounds))
             with open(rm_compounds, 'r') as rcf:
-                for line in rcf:
-                    cmpd_id = int(line.strip().split('\t')[0])
-                    self.rm_cmpds.append(cmpd_id)
-            good_cmpds = []
+                self.rm_cmpds = [int(line.strip().split('\t')[0]) for line in rcf]
+            self.compounds = [c for c in self.compounds if c.id_ not in self.rm_cmpds]
             for c in self.compounds:
-                if c.id_ in self.rm_cmpds:
-                    pass
-                else:
-                    good_cmpds.append(c)
-            self.compounds = good_cmpds
-            for c in self.compounds:
-                good_sims = []
-                for s in c.similar:
-                    if s[0].id_ in self.rm_cmpds:
-                        pass
-                    else:
-                        good_sims.append(s)
-                c.similar = good_sims
+                c.similar = [s for s in c.similar if s[0].id_ not in self.rm_cmpds]
             if self.matrix:
                 for p in self.proteins:
-                    g_sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
-                    p.sig = g_sig
-            print('Done removing undesired compounds.')
+                    p.sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
+            print('Done removing undesired compounds.\n')
 
             # sort the RMSDs after saving (if desired)
             for c in self.compounds:
@@ -564,23 +549,17 @@ class CANDO(object):
                 if check_sig(c.sig):
                     non_zero_compounds.append(c)
             self.compounds = non_zero_compounds
-            print('Done removing compounds with all-zero signatures.')
+            print('Done removing compounds with all-zero signatures.\n')
 
         if self.rm_zeros or self.rm_compounds:
             print('Filtering indication mapping...')
             for ind in self.indications:
-                good_cmpds = []
-                for cmpd in ind.compounds:
-                    if cmpd.id_ in self.rm_cmpds:
-                        pass
-                    else:
-                        good_cmpds.append(cmpd)
-                ind.compounds = good_cmpds
-            print('Done filtering indication mapping.')
+                ind.compounds = [cmpd for cmpd in ind.compounds if cmpd.id_ not in self.rm_cmpds]
+            print('Done filtering indication mapping.\n')
 
         if compute_distance and not read_rmsds:
             if self.pathways and not self.indication_pathways:
-                print('Reomputing distances using global pathway signatures...')
+                print('Recomputing distances using global pathway signatures...')
                 for c in self.compounds:
                     self.generate_similar_sigs(c, aux=True)
             else:
@@ -618,7 +597,7 @@ class CANDO(object):
                         c1.similar.append((c2, r))
                         c2.similar.append((c1, r))
                         n += 1
-                print('Done recomputing {} distances.'.format(self.dist_metric))
+                print('Done recomputing {} distances.\n'.format(self.dist_metric))
 
 
         if adr_map:
@@ -831,7 +810,11 @@ class CANDO(object):
         cs_df = pd.read_csv(cmpds_file,sep='\t',header=None)
         sum_sig = [0]*len(self.get_compound(0).sig)
         for ci in cs_df.itertuples(index=False):
-            s = self.get_compound(ci[0]).sig
+            try:
+                s = self.get_compound(int(ci[0])).sig
+            except:
+                print("{} does not exist in the current drug library.\n".format(ci[0]))
+                continue
             sum_sig = [i+j for i,j in zip(sum_sig,s)]
         # print the list of the top targets
         all_interactions = []
@@ -885,8 +868,8 @@ class CANDO(object):
         for i in range(len(sig)):
             s = sig[i]
             c_id = self.compounds[i].id_
-            if c_id in self.rm_cmpds:
-                continue
+            #if c_id in self.rm_cmpds:
+            #    continue
             all_interactions.append((c_id, s))
         if negative:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
@@ -905,19 +888,19 @@ class CANDO(object):
             if compound_set == 'approved':
                 if c.status == 'approved':
                     print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
-                                                          'true', self.compounds[interactions_sorted[si][0]].name))
+                                                          'true', c.name))
                     if save_file:
                         o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3), c.id_,
-                                                                'true', self.compounds[interactions_sorted[si][0]].name))
+                                                                'true', c.name))
                     printed += 1
             else:
                 print('{}\t{}\t{}\t{}    \t{}'.format(printed+1, round(interactions_sorted[si][1], 3),
                                                       c.id_, str(c.status == 'approved').lower(),
-                                                      self.get_compound(interactions_sorted[si][0]).name))
+                                                      c.name))
                 if save_file:
                     o.write('{}\t{}\t{}\t{}\t{}\n'.format(printed+1, round(interactions_sorted[si][1], 3),
                                                             c.id_, str(c.status == 'approved').lower(),
-                                                            self.get_compound(interactions_sorted[si][0]).name))
+                                                            c.name))
                 printed += 1
             si += 1
         print()
@@ -1572,7 +1555,7 @@ class CANDO(object):
             c.similar_computed = True
             c.similar_sorted = True
         
-        print('Done computing {} distances.'.format(self.dist_metric))
+        print('Done computing {} distances.\n'.format(self.dist_metric))
         
         cp.canbenchmark(file_name=file_name, indications=indications, continuous=continuous, ranking=ranking)
 
@@ -1597,7 +1580,7 @@ class CANDO(object):
             cp.compounds[ic].similar_computed = True
             cp.similar_sorted = True
         
-        print('Done computing {} distances.'.format(self.dist_metric))
+        print('Done computing {} distances.\n'.format(self.dist_metric))
         
         cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
