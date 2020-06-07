@@ -23,6 +23,8 @@ from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform
 from scipy import stats
 
+print('Working build...')
+
 
 class Protein(object):
     """!
@@ -166,7 +168,7 @@ class CANDO(object):
     or precomputed compound-compound distance matrix (read_rmsds=), but those are optional.
 
     """
-    def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_rmsds='', read_rmsds='',
+    def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_dists='', read_dists='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
                  adr_map='', protein_map='', ncpus=1):
@@ -197,12 +199,12 @@ class CANDO(object):
         # list: Compounds to remove from the CANDO object 
         self.rm_compounds = rm_compounds
         self.rm_cmpds = []
-        ## @var save_rmsds
+        ## @var save_dists
         # bool: Write the calculated distances to file after computation (set compute_distances=True)
-        self.save_rmsds = save_rmsds
-        ## @var read_rmsds
+        self.save_dists = save_dists
+        ## @var read_dists
         # str: File path to pre-computed distance matrix
-        self.read_rmsds = read_rmsds
+        self.read_dists = read_dists
         ## @var similarity
         # bool: Use similarity instead of distance
         self.similarity = similarity
@@ -236,7 +238,7 @@ class CANDO(object):
         self.adrs = []
 
         self.short_matrix_path = self.matrix.split('/')[-1]
-        self.short_read_rmsds = read_rmsds.split('/')[-1]
+        self.short_read_dists = read_dists.split('/')[-1]
         self.short_protein_set = protein_set.split('/')[-1]
         self.cmpd_set = rm_compounds.split('/')[-1]
         self.data_name = ''
@@ -246,8 +248,8 @@ class CANDO(object):
                 self.data_name = self.short_protein_set + '.' + self.short_matrix_path
             elif rm_compounds:
                 self.data_name = self.cmpd_set + '.' + self.short_matrix_path
-        if self.short_read_rmsds:
-            self.data_name = self.short_read_rmsds
+        if self.short_read_dists:
+            self.data_name = self.short_read_dists
 
         # create all of the compound objects from the compound map
         with open(c_map, 'r') as c_f:
@@ -331,6 +333,10 @@ class CANDO(object):
                         name = vec[0]
                         if name in targets:
                             scores = list(map(float, vec[1:]))
+                            if len(scores) != len(self.compounds):
+                                print('The number of compounds in {} does not match the '
+                                      'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                                quit()
                             p = Protein(name, scores)
                             alt = pdct_rev[name]
                             p.alt_id = alt
@@ -357,6 +363,10 @@ class CANDO(object):
                         vec = m_lines[l_i].strip().split('\t')
                         name = vec[0]
                         scores = list(map(float, vec[1:]))
+                        if len(scores) != len(self.compounds):
+                            print('The number of compounds in {} does not match the '
+                                  'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                            quit()
                         p = Protein(name, scores)
                         self.proteins.append(p)
                         self.protein_id_to_index[name] = l_i
@@ -429,13 +439,17 @@ class CANDO(object):
                             pass
             print('Done reading indication-gene associations.')
 
-        if read_rmsds:
+        if read_dists:
             print('Reading {} distances...'.format(self.dist_metric))
-            with open(read_rmsds, 'r') as rrs:
+            with open(read_dists, 'r') as rrs:
                 lines = rrs.readlines()
                 for i in range(len(lines)):
                     c1 = self.compounds[i]
                     scores = lines[i].strip().split('\t')
+                    if len(scores) != len(self.compounds):
+                        print('The number of compounds in {} does not match the '
+                              'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                        quit()
                     for j in range(len(scores)):
                         if i == j:
                             continue
@@ -452,7 +466,7 @@ class CANDO(object):
             print('Done reading {} distances.\n'.format(self.dist_metric))
 
         # if compute distance is true, generate similar compounds for each
-        if compute_distance and not read_rmsds:
+        if compute_distance and not read_dists:
             if self.pathways and not self.indication_pathways:
                 print('Computing distances using global pathway signatures...')
                 for c in self.compounds:
@@ -494,9 +508,9 @@ class CANDO(object):
                         n += 1
                 print('Done computing {} distances.\n'.format(self.dist_metric))
 
-            if self.save_rmsds:
+            if self.save_dists:
 
-                def rmsds_to_str(cmpd, ci):
+                def dists_to_str(cmpd, ci):
                     o = ''
                     for si in range(len(cmpd.similar)):
                         if ci == si:
@@ -510,10 +524,10 @@ class CANDO(object):
                     return o
 
                 print('Saving {} distances...'.format(self.dist_metric))
-                with open(self.save_rmsds, 'w') as srf:
+                with open(self.save_dists, 'w') as srf:
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
-                        srf.write(rmsds_to_str(c, ci))
+                        srf.write(dists_to_str(c, ci))
                 print('Done saving {} distances.\n'.format(self.dist_metric))
 
         if rm_compounds:
@@ -557,7 +571,7 @@ class CANDO(object):
                 ind.compounds = [cmpd for cmpd in ind.compounds if cmpd.id_ not in self.rm_cmpds]
             print('Done filtering indication mapping.\n')
 
-        if compute_distance and not read_rmsds:
+        if compute_distance and not read_dists and (rm_compounds or rm_zeros):
             if self.pathways and not self.indication_pathways:
                 print('Recomputing distances using global pathway signatures...')
                 for c in self.compounds:
@@ -571,10 +585,12 @@ class CANDO(object):
                 snp = np.array(signatures)  # convert to numpy form
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)),
+                                                         n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['correlation', 'euclidean', 'cityblock']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
+                                                         n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
                     distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine']:
@@ -598,7 +614,6 @@ class CANDO(object):
                         c2.similar.append((c1, r))
                         n += 1
                 print('Done recomputing {} distances.\n'.format(self.dist_metric))
-
 
         if adr_map:
             print('Reading ADR mapping file...')
@@ -1025,7 +1040,7 @@ class CANDO(object):
 
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
         """!
-        For a given list of compounds, generate the similar compounds based on rmsd of sigs
+        For a given list of compounds, generate the similar compounds based on dist of sigs
         This is pathways/genes for all intents and purposes
 
         @param cmpds list: Compound objects
@@ -1400,32 +1415,32 @@ class CANDO(object):
                 for cs in c.similar:
                     if adrs:
                         if effect in cs[0].adrs:
-                            cs_rmsd = cs[1]
+                            cs_dist = cs[1]
                         else:
                             continue
                     else:
                         if effect in cs[0].indications:
-                            cs_rmsd = cs[1]
+                            cs_dist = cs[1]
                         else:
                             continue
 
                     value = 0.0 
                     if continuous:
-                        value = cs_rmsd
+                        value = cs_dist
                     elif bottom:
                         if ranking == 'modified':
-                            value = competitive_modified_bottom(c.similar, cs_rmsd)
+                            value = competitive_modified_bottom(c.similar, cs_dist)
                         elif ranking == 'standard':
-                            value = competitive_standard_bottom(c.similar, cs_rmsd)
+                            value = competitive_standard_bottom(c.similar, cs_dist)
                         elif ranking == 'ordinal':
                             value = c.similar.index(cs)
                         else:
                             print("Ranking function {} is incorrect.".format(ranking))
                             exit()
                     elif ranking == 'modified':
-                        value = competitive_modified(c.similar, cs_rmsd)
+                        value = competitive_modified(c.similar, cs_dist)
                     elif ranking == 'standard':
-                        value = competitive_standard(c.similar, cs_rmsd)
+                        value = competitive_standard(c.similar, cs_dist)
                     elif ranking == 'ordinal':
                         value = c.similar.index(cs)
                     else:    
@@ -1793,9 +1808,9 @@ class CANDO(object):
 
         def choose_negatives(efct, neg_set=negative, s=None, hold_out=None, avoid=[], test=None):
             if neg_set == 'inverse':
-                if not self.compute_distance and not self.read_rmsds:
+                if not self.compute_distance and not self.read_dists:
                     print('Please compute all compound-compound distances before using inverse_negatives().\n'
-                          'Re-run with "compute_distance=True" or read in pre-computed distance file "read_rmsds="'
+                          'Re-run with "compute_distance=True" or read in pre-computed distance file "read_dists="'
                           'in the CANDO object instantiation -- quitting.')
                     quit()
             negatives = []
@@ -2351,8 +2366,13 @@ class CANDO(object):
         cmpd = Compound(new_name, i, i)
         cmpd.sig = n_sig
         self.compounds.append(cmpd)
-        for c in self.compounds:
-            self.generate_similar_sigs(c)
+
+        if self.compounds[0].similar_computed or len(self.compounds[0].similar) > 1:
+            dists = self.generate_similar_sigs(cmpd, sort=True)
+            for c, dist in dists:
+                c.similar.append((cmpd, dist))
+                c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+
         print("New compound is " + cmpd.name)
         print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         return cmpd
@@ -2366,13 +2386,13 @@ class CANDO(object):
         """
         return [x.sig for x in self.proteins if x.id_ not in rm]
 
-    def save_rmsds_to_file(self, f):
+    def save_dists_to_file(self, f):
         """!
         Write calculated distances of all compounds to all compounds to file
 
         @param f File name to save distances
         """
-        def rmsds_to_str(cmpd):
+        def dists_to_str(cmpd):
             o = ''
             for s in cmpd.similar:
                 o += '{}\t'.format(s[1])
@@ -2381,7 +2401,7 @@ class CANDO(object):
 
         with open(f, 'w') as srf:
             for c in self.compounds:
-                srf.write(rmsds_to_str(c))
+                srf.write(dists_to_str(c))
 
     def fusion(self, cando_objs, out_file='', method='sum'):
         """!
@@ -2483,10 +2503,10 @@ class CANDO(object):
             return 'CANDO: {0} compounds, {1} proteins, {2} indications\n' \
                    '\tMatrix - {3}\nIndication mapping - {4}\n' \
                    '\tDistances computed - {5}'.format(nc, np, ni, self.matrix, self.i_map, b)
-        elif self.read_rmsds:
+        elif self.read_dists:
             return 'CANDO: {0} compounds, {1} indications\n' \
                    '\tCompound comparison file - {2}\n' \
-                   '\tIndication mapping - {3}'.format(nc, ni, self.read_rmsds, self.i_map)
+                   '\tIndication mapping - {3}'.format(nc, ni, self.read_dists, self.i_map)
         else:
             return 'CANDO: {0} compounds, {1} indications\n' \
                    '\tIndication mapping - {2}'.format(nc, ni, self.i_map)
@@ -2499,13 +2519,13 @@ class Matrix(object):
     Intended for easier handling of matrices.
     Convert between fpt and tsv, as well as distance to similarity (and vice versa)
     """
-    def __init__(self, matrix_file, rmsd=False, convert_to_tsv=False):
+    def __init__(self, matrix_file, dist=False, convert_to_tsv=False):
         ## @var matrix_file
         # str: Path to file with interaction scores
         self.matrix_file = matrix_file
-        ## @var rmsd
-        # bool: if the matrix_file is an rmsd file
-        self.rmsd = rmsd
+        ## @var dist
+        # bool: if the matrix_file is an dist file
+        self.dist = dist
         ## @var convert_to_tsv
         # bool: Convert old matrix format (.fpt) to .tsv
         self.convert_to_tsv = convert_to_tsv
@@ -2526,7 +2546,7 @@ class Matrix(object):
                 curr = l[index]
             return name
 
-        if not rmsd:
+        if not dist:
             with open(matrix_file, 'r') as f:
                 lines = f.readlines()
                 if convert_to_tsv:
@@ -2657,17 +2677,24 @@ class Matrix(object):
 
 
 def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
-                    interaction_score='P', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
+                    interaction_score='P', c_set='nr', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
     Generate a CANDO Matrix 
 
     @param cmpd_scores str: File path to tab-separated scores for all Compounds
     @param prot_scores str: File path to tab-separated scores for all Proteins
-    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
-    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
-    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').
-    @param matrix_file str: File path to where the generated Matrix will be written Default = 'cando_interaction_matrix.tsv'
+    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
+    Default = 0.0
+    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
+    Default = 0.0
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
+    will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular
+    size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
+    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC',
+    'P', 'CxP', 'dCxP').
+    @param c_set str: 'all' uses all 158k ligands from COACH whereas 'nr' uses a subset of 30k non-redundant ligands
+    @param matrix_file str: File path to where the generated Matrix will be written Default =
+    'cando_interaction_matrix.tsv'
     @param ncpus int: Number of cpus to use for parallelization. Default = 1
     """
     def print_time(s):
@@ -2684,12 +2711,14 @@ def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percen
             print("Matrix generation took {:.0f} s to finish.".format(s))
 
     # Check for correct interaction scoring metric
-    if not interaction_score in ['P','C','CxP','dC','dCxP']:
+    if interaction_score not in ['P','C','CxP','dC','dCxP']:
         print("{} is an incorrect interaction score. Exiting.".format(interaction_score))
         exit()
 
     if percentile_cutoff:
         percentile_cutoff = float(percentile_cutoff)
+        if 'dC' not in interaction_score:
+            print('Percentile score not used for chosen scoring protocol, skipping the percentile calculation.')
 
     start = time.time()
 
@@ -2705,7 +2734,8 @@ def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percen
     print("Calculating interaction scores...")
     pool = mp.Pool(ncpus)
     scores_temp = pool.starmap_async(get_scores,
-                                     [(int(c), p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff, percentile_cutoff, interaction_score) for c in c_scores.columns]).get()
+                                     [(int(c), p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff,
+                                       percentile_cutoff, interaction_score, c_set) for c in c_scores.columns]).get()
     pool.close()
     scores = pd.DataFrame(index=range(len(p_scores.index)))
     print("Generating matrix...")
@@ -2773,17 +2803,25 @@ def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
     print("Tanimoto scores written to {}/{}/{}\n".format(out_path, fp_name, out_name))
 
 
-def generate_signature(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff = 0.0, percentile_cutoff=None, interaction_score = 'P', matrix_file=''):
+def generate_signature(cmpd_scores='', prot_scores='', c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
+                       interaction_score='P', c_set='nr', matrix_file=''):
     """!
-    Generate signature
+    Generate signature - NOTE: if parameters do not match input matrix parameters when adding a new compound, this
+    signature will not be comparable.
 
     @param cmpd_scores str: File path to tab-separated scores for all Compounds
     @param prot_scores str: File path to tab-separated scores for all Proteins
+    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
+    Default = 0.0
+    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
+    Default = 0.0
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
+    will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular
+    size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
+    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC',
+    'P', 'CxP', 'dCxP').
+    @param c_set str: 'all' uses all 158k ligands from COACH whereas 'nr' uses a subset of 30k non-redundant ligands
     @param matrix_file str: File path to where the generated Compounds signature will be written
-    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
-    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0). Default = 0.0
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
-    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC', 'P', 'CxP', 'dCxP').    
     """
     def print_time(s):
         if s >= 60:
@@ -2811,7 +2849,8 @@ def generate_signature(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff 
     print("Generating interaction signature...")
     print(c_scores.columns[0])
     c = c_scores.columns[0]
-    scores_temp = get_scores(c, p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff, percentile_cutoff, interaction_score)
+    scores_temp = get_scores(c, p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff,
+                             percentile_cutoff, interaction_score, c_set)
     scores = pd.DataFrame(scores_temp)
     scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
     scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
@@ -2821,31 +2860,42 @@ def generate_signature(cmpd_scores='', prot_scores='', c_cutoff = 0.0, p_cutoff 
     print_time(end-start)
 
 
-def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_score):
+def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_score, c_set='nr'):
     """!
     Get best score for each Compound-Protein interaction
 
-    @param c int: Compound id
-    @param p_scores df: DataFrame of all Protein ligands and corresponding scores
-    @param c_score df: DataFrame of all Compound-ligand scores
+    @param c: int Compound id
+    @param p_scores: DataFrame of all Protein ligands and corresponding scores
+    @param c_score: DataFrame of all Compound-ligand scores
     @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
     @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff will be defined (0.0-100.0). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias due to fingerprinting. This overwrites the use of c_cutoff.
+    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
+    will be defined (0.0-100.0). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias
+    due to fingerprinting. This overwrites the use of c_cutoff.
     @param i_score: The scoring function for the interaction between each Compound-Protein pair. (C, dC, P, CxP, dCxP).
+    @param c_set: 'all' uses all ligands from COACH whereas 'nr' uses a subset of 30.8k non-redundant ligands
     """
     # percentile cutoff only affects Cscore
     if percentile_cutoff:
-        c_cuts = {}
-        all_c_scores = [c_score[i] for i in c_score.index]
-        c_cutoff = np.percentile(all_c_scores,percentile_cutoff)
-    if i_score in ['dC','dCxP']:
-        all_c_scores = [c_score[i] for i in c_score.index]
+        if i_score in ['dC', 'dCxP']:
+            if c_set == 'all':
+                all_c_scores = [c_score[i] for i in c_score.index]
+                c_cutoff = np.percentile(all_c_scores, percentile_cutoff)
+            elif c_set == 'nr':
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/nr_ligand_set_v2.txt'
+                dl_file(url, 'v2.0/mappings/nr_ligand_set_v2.txt')
+                lig_is = list(map(str.strip, open('nr_ligand_set_v2.txt', 'r').readlines()))
+                all_c_scores = [c_score[i] for i in lig_is]
+                c_cutoff = np.percentile(all_c_scores, percentile_cutoff)
+            else:
+                print("Please choose a proper ligand set ('all' or 'nr') -- quitting.")
+                quit()
 
     l = []
     for pdb in p_scores.index:
         temp_cscore = 0.000
         temp_pscore = 0.000
-        all_p_scores = list(zip(str(p_scores[1][pdb]).split(","),str(p_scores[2][pdb]).split(",")))
+        all_p_scores = list(zip(str(p_scores[1][pdb]).split(","), str(p_scores[2][pdb]).split(",")))
         for p,p_score in all_p_scores:
             if float(p_score) < p_cutoff:
                 continue
@@ -2941,6 +2991,7 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 l.append(0.000)
                 continue
     return {cmpd_id: l}
+
 
 def cosine_dist(A):
     similarity = np.dot(A, A.T)
