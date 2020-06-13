@@ -1,4 +1,4 @@
-{% set version = "2.0.2" %}
+{% set version = "2.1" %}
 
 package:
   name: cando
@@ -20,7 +20,7 @@ requirements:
   run:
     - python
     - rdkit
-    - openbabel=2.4.1
+    - openbabel
     - numpy
     - pandas
     - scikit-learn
