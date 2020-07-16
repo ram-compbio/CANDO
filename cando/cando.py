@@ -282,6 +282,7 @@ class CANDO(object):
         self.proteins = []
         self.protein_id_to_index = {}
         self.compounds = []
+        self.compound_ids = []
         self.compound_pairs = []
         self.compound_pair_ids = []
         self.indications = []
@@ -326,6 +327,7 @@ class CANDO(object):
                     status = 'N/A'
                 cm = Compound(name, id_, index, status=status)
                 self.compounds.append(cm)
+                self.compound_ids.append(id_)
 
         # create the indication objects and add indications to the
         # already created compound objects from previous loop
@@ -471,22 +473,28 @@ class CANDO(object):
             if not indication_pathways:
                 self.quantify_pathways()
             print('Done reading pathways.')
-
+           
         if self.ddi_compounds:
             print("Reading compound-compound associations...")
             ddi = pd.read_csv(ddi_compounds,sep='\t')
             for x in ddi.index:
-                self.get_compound(int(ddi.loc[x,'CANDO_ID-1'])).compounds.append(self.get_compound(int(ddi.loc[x,'CANDO_ID-2'])))
-                self.get_compound(int(ddi.loc[x,'CANDO_ID-2'])).compounds.append(self.get_compound(int(ddi.loc[x,'CANDO_ID-1'])))
+                c1 = self.get_compound(int(ddi.loc[x,'CANDO_ID-1']))
+                c2 = self.get_compound(int(ddi.loc[x,'CANDO_ID-2']))
+                if c2 not in c1.compounds:
+                    c1.compounds.append(c2)
+                if c1 not in c2.compounds:
+                    c2.compounds.append(c1)
             print('Done reading compound-compound associations.')
 
         if self.ddi_adrs:
             print("Reading compound-compound adverse events associations...")
             ddi = pd.read_csv(ddi_adrs,sep='\t')
-            for x in ddi.index:
+            for x in ddi.itertuples():
                 #ADRs
-                adr_name = ddi.loc[x,'EVENT_NAME']
-                adr_id = ddi.loc[x,'EVENT_UMLS_ID']
+                #adr_name = ddi.loc[x,'EVENT_NAME']
+                adr_name = x[6]
+                #adr_id = ddi.loc[x,'EVENT_UMLS_ID']
+                adr_id = x[5]
                 if adr_id in self.adr_ids:
                     adr = self.get_adr(adr_id)
                 else:
@@ -494,11 +502,15 @@ class CANDO(object):
                     self.adrs.append(adr)
                     self.adr_ids.append(adr.id_)
                 # Compound pair
-                ids = (int(ddi.loc[x,'CANDO_ID-1']),int(ddi.loc[x,'CANDO_ID-2']))
+                ids = (int(x[1]),int(x[3]))
+                #ids = (int(ddi.loc[x,'CANDO_ID-1']),int(ddi.loc[x,'CANDO_ID-2']))
                 if ids in self.compound_pair_ids:
                     cm_p = self.get_compound_pair(ids)
+                elif (ids[1],ids[0]) in self.compound_pair_ids:
+                    cm_p = self.get_compound_pair((ids[1],ids[0]))
                 else:
                     indices = ids
+                    #names = (x[1],x[3])
                     names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
                     cm_p = Compound_pair(names, ids, indices)
                     self.compound_pairs.append(cm_p)
@@ -506,8 +518,23 @@ class CANDO(object):
                 # Add comppund pair to ADR and vice versa
                 cm_p.add_adr(adr)
                 adr.compound_pairs.append(cm_p)
-            print('Done reading compound-compound adverse event associations.')
-
+            print('Done reading compound-compound adverse event associations.\n')
+            '''
+            print("Generating compound pairs...")
+            for i in range(len(self.compounds)):
+                c1 = self.compounds[i]
+                for j in range(i,len(self.compounds)):
+                    if i == j:
+                        continue
+                    c2 = self.compounds[j]
+                    names = (c1.name,c2.name)
+                    ids = (c1.id_,c2.id_)
+                    idxs = (c1.id_,c2.id_)
+                    cm_p = Compound_pair(names,ids,idxs)
+                    self.compound_pairs.append(cm_p)
+                    self.compound_pair_ids.append(ids)
+            print("Done generating compound pairs.\n")
+            '''
             print("Generating compound-compound signatures...")
             for cm_p in self.compound_pairs:
                 c1 = self.get_compound(cm_p.id_[0])
@@ -515,7 +542,7 @@ class CANDO(object):
                 # Add signatures??
                 cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
                 # max, min, mult?
-            print("Done generating compound-compound signatures.")
+            print("Done generating compound-compound signatures.\n")
 
         if self.indication_proteins:
             print('Reading indication-gene associations...')
@@ -650,7 +677,7 @@ class CANDO(object):
             if self.save_dists:
                 def dists_to_str(cmpd, ci):
                     o = ''
-                    for si in range(len(cmpd.similar)):
+                    for si in range(len(self.compounds)):
                         if ci == si:
                             if self.similarity:
                                 o += '1.0\t'
@@ -675,6 +702,7 @@ class CANDO(object):
             self.compounds = [c for c in self.compounds if c.id_ not in self.rm_cmpds]
             for c in self.compounds:
                 c.similar = [s for s in c.similar if s[0].id_ not in self.rm_cmpds]
+                c.compounds = [s for s in c.compounds if s.id_ not in self.rm_cmpds]
             if self.matrix:
                 for p in self.proteins:
                     p.sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
@@ -840,6 +868,8 @@ class CANDO(object):
         """
         for c in self.compound_pairs:
             if c.id_ == ids:
+                return c
+            elif c.id_ == (ids[1],ids[0]):
                 return c
         print("{0} not in {1}".format(ids, self.c_map))
         return None
@@ -1188,6 +1218,84 @@ class CANDO(object):
         else:
             cmpd.similar_computed = True
             return cmpd.similar
+
+    def generate_similar_sigs_cp(self, cmpd_pair, sort=False, proteins=[], aux=False):
+        """!
+        For a given compound pair, generate the similar compound pairs using distance of sigs.
+
+        @param cmpd_pair object: Compound_pair object
+        @param sort bool: Sort the list of similar compounds
+        @param proteins list: Protein objects to identify a subset of the Compound signature
+        @param aux bool: Use an auxiliary signature (default: False)
+
+        @return Returns list: Similar Compounds to the given Compound
+        """
+        # find index of query compound, collect signatures for both
+        q = 0
+        cp_sig = []
+        if proteins is None:
+            cp_sig = cmpd_pair.sig
+        elif proteins:
+            for pro in proteins:
+                index = self.protein_id_to_index[pro.id_]
+                cp_sig.append(cmpd_pair.sig[index])
+        else:
+            if aux:
+                cp_sig = cmpd_pair.aux_sig
+            else:
+                cp_sig = cmpd_pair.sig
+        ca = np.array([cp_sig])
+
+        other_sigs = []
+        for ci in range(len(self.compound_pairs)):
+            cp = self.compound_pairs[ci]
+            if cmpd_pair.id_ == cp.id_:
+                q = ci
+            other = []
+            if proteins is None:
+                other_sigs.append(cp.sig)
+            elif proteins:
+                for pro in proteins:
+                    index = self.protein_id_to_index[pro.id_]
+                    other.append(cp.sig[index])
+                other_sigs.append(other)
+            else:
+                if aux:
+                    other_sigs.append(cp.aux_sig)
+                else:
+                    other_sigs.append(cp.sig)
+        oa = np.array(other_sigs)
+        
+        # call cdist, speed up with custom RMSD function
+        if self.dist_metric == "rmsd":
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
+        elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
+        else:
+            print("Incorrect distance metric - {}".format(self.dist_metric))
+
+        cmpd_pair.similar = []
+        # step through the cdist list - add RMSDs to Compound.similar list
+        n = len(self.compound_pairs)
+        for i in range(n):
+            c2 = self.compound_pairs[i]
+            if i == q:
+                continue
+            d = distances[0][i]
+            cmpd_pair.similar.append((c2, d))
+            n += 1
+
+        if sort:
+            sorted_scores = sorted(cmpd_pair.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+            cmpd_pair.similar = sorted_scores
+            cmpd_pair.similar_computed = True
+            cmpd_pair.similar_sorted = True
+            return sorted_scores
+        else:
+            cmpd_pair.similar_computed = True
+            return cmpd_pair.similar
+
+
 
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
         """!
@@ -2050,7 +2158,8 @@ class CANDO(object):
 
             for c in cmpd.compounds:
                 for cs in c.similar:
-                    if cmpd in cs[0].compounds:
+                    if cs[0] in cmpd.compounds:
+                    #if cmpd in cs[0].compounds:
                         cs_rmsd = cs[1]
                     else:
                         continue
@@ -3036,6 +3145,107 @@ class CANDO(object):
                 fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], indd.id_, indd.name))
             else:
                 print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+        if save:
+            fo.close()
+        print('')
+
+
+    def canpredict_ddi_cmpds(self, cmpd, n=10, topX=10, save=''):
+        """!
+        @param cmpd Compound: Compound object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Drug-drug Interactions to be printed
+        """
+        if n == -1:
+            n = len(self.compounds)-1
+        if topX == -1:
+            topX = len(self.compounds)-1
+
+        if type(cmpd) is Compound:
+            cmpd = cmpd
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        print("Using CANDO compound {}".format(cmpd.name))
+        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        print("Comparing signature to all CANDO compound signatures...")
+        self.generate_similar_sigs(cmpd, sort=True)
+        print("Generating interaction predictions using top{} most similar compounds...".format(n))
+        i_dct = {}
+        for c in cmpd.similar[0:n]:
+            for itx in c[0].compounds:
+                if itx.id_ not in i_dct:
+                    i_dct[itx.id_] = 1
+                else:
+                    i_dct[itx.id_] += 1
+        sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted indications...\n".format(topX))
+            fo.write("rank\tscore\tcmpd_id\tcompound\n")
+        else:
+            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("rank\tscore\tcmpd_id    \tcompound")
+        topX = min(topX,len(sorted_x))
+        for i in range(topX):
+            itxd = self.get_compound(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], itxd.id_, itxd.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], itxd.id_, itxd.name))
+        if save:
+            fo.close()
+        print('')
+
+
+    def canpredict_ddi_adrs(self, cmpd_pair, n=10, topX=10, save=''):
+        """!
+
+        @param cmpd_pair Compound_pair: Compound_pair object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Indications to be printed
+        """
+        if n == -1:
+            n = len(self.compound_pairs)-1
+        if topX == -1:
+            topX = len(self.adrs)
+
+        if type(cmpd_pair) is Compound_pair:
+            cmpd_pair = cmpd_pair
+        elif type(cmpd_pair) is tuple:
+            cmpd = self.get_compound_pair(cmpd_pair)
+        if type(cmpd_pair) is tuple:
+            c1 = self.get_compound(cmpd_pair[0])
+            c2 = self.get_compound(cmpd_pair[1])
+            cmpd_pair = Compound_pair((c1.name,c2.name),cmpd_pair,cmpd_pair)
+            self.compound_pairs.append(cmpd_pair)
+            self.compound_pair_ids.append(cmpd_pair.id_)
+            cmpd_pair.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+        print("Using CANDO compound pair {}".format(cmpd_pair.name))
+        print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
+        print("Comparing signature to all CANDO compound pair signatures...")
+        self.generate_similar_sigs_cp(cmpd_pair, sort=True)
+        print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
+        a_dct = {}
+        for c in cmpd_pair.similar[0:n]:
+            for adr in c[0].adrs:
+                if adr.id_ not in a_dct:
+                    a_dct[adr.id_] = 1
+                else:
+                    a_dct[adr.id_] += 1
+        sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted indications...\n".format(topX))
+            fo.write("rank\tscore\tadr_id\tadverse_reaction\n")
+        else:
+            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("rank\tscore\tadr_id    \tadverse_reaction")
+        for i in range(topX):
+            adr = self.get_adr(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], adr.id_, adr.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], adr.id_, adr.name))
         if save:
             fo.close()
         print('')
