@@ -93,6 +93,8 @@ class Compound(object):
         # dict: dict of other ids inputted with compound mapping
         self.alt_ids = {}
 
+        self.compounds = []
+
     def add_indication(self, ind):
         """!
         Add an Indication to the list of Indications associated to this Compound
@@ -100,6 +102,48 @@ class Compound(object):
         @param ind object: Indication object to add
         """
         self.indications.append(ind)
+
+
+class Compound_pair(object):
+    """!
+    An object to represent a compound/drug-pair
+    """
+    def __init__(self, name, id_, index):
+        ## @var name
+        # str: Name of the Compound (e.g., 'caffeine')
+        self.name = name
+        ## @var id_
+        # int: CANDO id from mapping file (e.g., 1, 10, 100, ...)
+        self.id_ = id_
+        ## @var index
+        # int: The order in which the Compound appears in the mapping file (e.g, 1, 2, 3, ...)
+        self.index = index
+        ## @var sig
+        # list: Signature is essentially a column of the Matrix
+        self.sig = []
+        ## @var aux_sig
+        # list: Potentially temporary signature for things like pathways, where "c.sig" needs to be preserved
+        self.aux_sig = []
+        ## @var similar
+        # list: This is the ranked list of compounds with the most similar interaction signatures
+        self.similar = []
+        ## @var similar_computed
+        # bool: Have the distances of all Compounds to the given Compound been computed?
+        self.similar_computed = False
+        ## @var similar_sorted
+        # bool: Have the most similar Compounds to the given Compound been sorted?
+        self.similar_sorted = False
+        ## @var adrs
+        # list: List of ADRs associated with this Compound
+        self.adrs = []
+
+    def add_adr(self, adr):
+        """!
+        Add an ADR to the list of Indications associated to this Compound
+
+        @param ind object: Indication object to add
+        """
+        self.adrs.append(adr)
 
 
 class Indication(object):
@@ -158,6 +202,7 @@ class ADR(object):
         # list: Compound objects associated with the given ADR
         self.compounds = []
 
+        self.compound_pairs = []
 
 class CANDO(object):
     """!
@@ -171,7 +216,7 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_dists='', read_dists='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 adr_map='', protein_map='', ncpus=1):
+				 ddi_compounds='', ddi_adrs='', adr_map='', protein_distance=False, protein_map='', ncpus=1):
         ## @var c_map 
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -229,13 +274,21 @@ class CANDO(object):
         ## @var protein_map
         # str: File path to Protein metadata mapping file
         self.protein_map = protein_map
-
+	
+        self.ddi_compounds = ddi_compounds
+        self.ddi_adrs = ddi_adrs
+        self.protein_distance = protein_distance
+	
         self.proteins = []
         self.protein_id_to_index = {}
         self.compounds = []
+        self.compound_ids = []
+        self.compound_pairs = []
+        self.compound_pair_ids = []
         self.indications = []
         self.indication_ids = []
         self.adrs = []
+        self.adr_ids = []
 
         self.short_matrix_path = self.matrix.split('/')[-1]
         self.short_read_dists = read_dists.split('/')[-1]
@@ -274,6 +327,7 @@ class CANDO(object):
                     status = 'N/A'
                 cm = Compound(name, id_, index, status=status)
                 self.compounds.append(cm)
+                self.compound_ids.append(id_)
 
         # create the indication objects and add indications to the
         # already created compound objects from previous loop
@@ -419,6 +473,76 @@ class CANDO(object):
             if not indication_pathways:
                 self.quantify_pathways()
             print('Done reading pathways.')
+           
+        if self.ddi_compounds:
+            print("Reading compound-compound associations...")
+            ddi = pd.read_csv(ddi_compounds,sep='\t')
+            for x in ddi.index:
+                c1 = self.get_compound(int(ddi.loc[x,'CANDO_ID-1']))
+                c2 = self.get_compound(int(ddi.loc[x,'CANDO_ID-2']))
+                if c2 not in c1.compounds:
+                    c1.compounds.append(c2)
+                if c1 not in c2.compounds:
+                    c2.compounds.append(c1)
+            print('Done reading compound-compound associations.')
+
+        if self.ddi_adrs:
+            print("Reading compound-compound adverse events associations...")
+            ddi = pd.read_csv(ddi_adrs,sep='\t')
+            for x in ddi.itertuples():
+                #ADRs
+                #adr_name = ddi.loc[x,'EVENT_NAME']
+                adr_name = x[6]
+                #adr_id = ddi.loc[x,'EVENT_UMLS_ID']
+                adr_id = x[5]
+                if adr_id in self.adr_ids:
+                    adr = self.get_adr(adr_id)
+                else:
+                    adr = ADR(adr_id,adr_name)
+                    self.adrs.append(adr)
+                    self.adr_ids.append(adr.id_)
+                # Compound pair
+                ids = (int(x[1]),int(x[3]))
+                #ids = (int(ddi.loc[x,'CANDO_ID-1']),int(ddi.loc[x,'CANDO_ID-2']))
+                if ids in self.compound_pair_ids:
+                    cm_p = self.get_compound_pair(ids)
+                elif (ids[1],ids[0]) in self.compound_pair_ids:
+                    cm_p = self.get_compound_pair((ids[1],ids[0]))
+                else:
+                    indices = ids
+                    #names = (x[1],x[3])
+                    names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
+                    cm_p = Compound_pair(names, ids, indices)
+                    self.compound_pairs.append(cm_p)
+                    self.compound_pair_ids.append(ids)
+                # Add comppund pair to ADR and vice versa
+                cm_p.add_adr(adr)
+                adr.compound_pairs.append(cm_p)
+            print('Done reading compound-compound adverse event associations.\n')
+            '''
+            print("Generating compound pairs...")
+            for i in range(len(self.compounds)):
+                c1 = self.compounds[i]
+                for j in range(i,len(self.compounds)):
+                    if i == j:
+                        continue
+                    c2 = self.compounds[j]
+                    names = (c1.name,c2.name)
+                    ids = (c1.id_,c2.id_)
+                    idxs = (c1.id_,c2.id_)
+                    cm_p = Compound_pair(names,ids,idxs)
+                    self.compound_pairs.append(cm_p)
+                    self.compound_pair_ids.append(ids)
+            print("Done generating compound pairs.\n")
+            '''
+            print("Generating compound-compound signatures...")
+            for cm_p in self.compound_pairs:
+                c1 = self.get_compound(cm_p.id_[0])
+                c2 = self.get_compound(cm_p.id_[1])
+                # Add signatures??
+                cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+                # max, min, mult?
+            print("Done generating compound-compound signatures.\n")
 
         if self.indication_proteins:
             print('Reading indication-gene associations...')
@@ -508,8 +632,49 @@ class CANDO(object):
                         n += 1
                 print('Done computing {} distances.\n'.format(self.dist_metric))
 
-            if self.save_dists:
+            if ddi_adrs:
+                print('Computing {} distances...'.format(self.dist_metric))
+                # put all compound_pair signatures into 2D-array
+                signatures = []
+                for i in range(0, len(self.compound_pairs)):
+                    signatures.append(self.compound_pairs[i].sig)
+                snp = np.array(signatures)  # convert to numpy form
 
+                # call pairwise_distances, speed up with custom RMSD function and parallelism
+                if self.dist_metric == "rmsd":
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = squareform(distance_matrix)
+                elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
+                    distance_matrix = squareform(distance_matrix, checks=False)
+                else:
+                    print("Incorrect distance metric - {}".format(self.dist_metric))
+                    exit()
+
+                # step through the condensed matrix - add RMSDs to Compound.similar lists
+                nc = len(self.compound_pairs)
+                n = 0
+                for i in range(nc):
+                    for j in range(i, nc):
+                        c1 = self.compound_pairs[i]
+                        c2 = self.compound_pairs[j]
+                        if i == j:
+                            continue
+                        r = distance_matrix[n]
+                        c1.similar.append((c2, r))
+                        c2.similar.append((c1, r))
+                        n += 1
+                print('Done computing {} distances.'.format(self.dist_metric))
+
+                # sort the RMSDs after saving (if desired)
+                for c in self.compound_pairs:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_computed = True
+                    c.similar_sorted = True
+
+            if self.save_dists:
                 def dists_to_str(cmpd, ci):
                     o = ''
                     for si in range(len(cmpd.similar)+1):
@@ -538,6 +703,7 @@ class CANDO(object):
             self.compounds = [c for c in self.compounds if c.id_ not in self.rm_cmpds]
             for c in self.compounds:
                 c.similar = [s for s in c.similar if s[0].id_ not in self.rm_cmpds]
+                c.compounds = [s for s in c.compounds if s.id_ not in self.rm_cmpds]
             if self.matrix:
                 for p in self.proteins:
                     p.sig = [y for x, y in enumerate(p.sig) if x not in self.rm_cmpds]
@@ -693,6 +859,21 @@ class CANDO(object):
                 return None
             else:
                 return self.get_compound(id_d[name])
+
+    def get_compound_pair(self, ids):
+        """!
+        Get Compound object from Compound id
+
+        @param id_ int: Compound id
+        @return Returns object: Compound object
+        """
+        for c in self.compound_pairs:
+            if c.id_ == ids:
+                return c
+            elif c.id_ == (ids[1],ids[0]):
+                return c
+        print("{0} not in {1}".format(ids, self.c_map))
+        return None
 
     def get_protein(self, protein_id):
         """!
@@ -1038,6 +1219,84 @@ class CANDO(object):
         else:
             cmpd.similar_computed = True
             return cmpd.similar
+
+    def generate_similar_sigs_cp(self, cmpd_pair, sort=False, proteins=[], aux=False):
+        """!
+        For a given compound pair, generate the similar compound pairs using distance of sigs.
+
+        @param cmpd_pair object: Compound_pair object
+        @param sort bool: Sort the list of similar compounds
+        @param proteins list: Protein objects to identify a subset of the Compound signature
+        @param aux bool: Use an auxiliary signature (default: False)
+
+        @return Returns list: Similar Compounds to the given Compound
+        """
+        # find index of query compound, collect signatures for both
+        q = 0
+        cp_sig = []
+        if proteins is None:
+            cp_sig = cmpd_pair.sig
+        elif proteins:
+            for pro in proteins:
+                index = self.protein_id_to_index[pro.id_]
+                cp_sig.append(cmpd_pair.sig[index])
+        else:
+            if aux:
+                cp_sig = cmpd_pair.aux_sig
+            else:
+                cp_sig = cmpd_pair.sig
+        ca = np.array([cp_sig])
+
+        other_sigs = []
+        for ci in range(len(self.compound_pairs)):
+            cp = self.compound_pairs[ci]
+            if cmpd_pair.id_ == cp.id_:
+                q = ci
+            other = []
+            if proteins is None:
+                other_sigs.append(cp.sig)
+            elif proteins:
+                for pro in proteins:
+                    index = self.protein_id_to_index[pro.id_]
+                    other.append(cp.sig[index])
+                other_sigs.append(other)
+            else:
+                if aux:
+                    other_sigs.append(cp.aux_sig)
+                else:
+                    other_sigs.append(cp.sig)
+        oa = np.array(other_sigs)
+        
+        # call cdist, speed up with custom RMSD function
+        if self.dist_metric == "rmsd":
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
+        elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
+        else:
+            print("Incorrect distance metric - {}".format(self.dist_metric))
+
+        cmpd_pair.similar = []
+        # step through the cdist list - add RMSDs to Compound.similar list
+        n = len(self.compound_pairs)
+        for i in range(n):
+            c2 = self.compound_pairs[i]
+            if i == q:
+                continue
+            d = distances[0][i]
+            cmpd_pair.similar.append((c2, d))
+            n += 1
+
+        if sort:
+            sorted_scores = sorted(cmpd_pair.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+            cmpd_pair.similar = sorted_scores
+            cmpd_pair.similar_computed = True
+            cmpd_pair.similar_sorted = True
+            return sorted_scores
+        else:
+            cmpd_pair.similar_computed = True
+            return cmpd_pair.similar
+
+
 
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
         """!
@@ -1756,6 +2015,573 @@ class CANDO(object):
         print("Range of cluster sizes = [{},{}]".format(np.min(c_clusters), np.max(c_clusters)))
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
 
+    def compounds_analysed(self, f, metrics):
+        fo = open(f, 'w')
+        cmpds = list(self.accuracies.keys())
+        cmpds_sorted = sorted(cmpds, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
+        l = len(cmpds)
+        final_accs = {}
+        for m in metrics:
+            final_accs[m] = 0.0
+        for cmpd, c in cmpds_sorted:
+            fo.write("{0}\t{1}\t".format(cmpd.id_, c))
+            accs = self.accuracies[(cmpd,c)]
+            for m in metrics:
+                n = accs[m]
+                y = str(n / c * 100)[0:4]
+                fo.write("{}\t".format(y))
+
+                final_accs[m] += n / c / l
+            fo.write("|\t{}\n".format(cmpd.name))
+        fo.close()
+        return final_accs
+
+    def canbenchmark_compounds(self, file_name, indications=[], continuous=False,
+                          bottom=False, ranking='standard', adrs=False):
+        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+            exit()
+
+        if not self.indication_proteins and not self.indication_pathways:
+            if not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_sorted = True
+
+        if not os.path.exists('./results_analysed_named'):
+            print("Directory 'results_analysed_named' does not exist, creating directory")
+            os.system('mkdir results_analysed_named')
+        if not os.path.exists('./raw_results'):
+            print("Directory 'raw_results' does not exist, creating directory")
+            os.system('mkdir raw_results')
+
+        ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-cmpds.tsv'
+        ra = 'raw_results/raw_results_' + file_name + '-cmpds.csv'
+        summ = 'summary_' + file_name + '-cmpds.tsv'
+        ra_out = open(ra, 'w')
+
+        def effect_type():
+            if adrs:
+                return 'ADR'
+            else:
+                return 'disease'
+
+        def competitive_standard_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] > r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        def competitive_modified_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] >= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive modified ranking code
+        def competitive_modified(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] <= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive standard ranking code
+        def competitive_standard(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] < r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        cmpd_dct = {}
+        ss = []
+        c_per_cmpd = 0
+
+        def cont_metrics():
+            all_v = []
+            for c in self.compounds:
+                for s in c.similar:
+                    if s[1] != 0.0:
+                        all_v.append(s[1])
+            avl = len(all_v)
+            all_v_sort = sorted(all_v)
+            # for tuple 10, have to add the '-1' for index out of range reasons
+            metrics = [(1, all_v_sort[int(avl/1000.0)]), (2, all_v_sort[int(avl/400.0)]), (3, all_v_sort[int(avl/200.0)]),
+                       (4, all_v_sort[int(avl/100.0)]), (5, all_v_sort[int(avl/20.0)]), (6, all_v_sort[int(avl/10.0)]),
+                       (7, all_v_sort[int(avl/5.0)]), (8, all_v_sort[int(avl/3.0)]), (9, all_v_sort[int(avl/2.0)]),
+                       (10, all_v_sort[int(avl/1.0)-1])]
+            return metrics
+
+        x = (len(self.compounds)) / 100.0  # changed this...no reason to use similar instead of compounds
+        # had to change from 100.0 to 100.0001 because the int function
+        # would chop off an additional value of 1 for some reason...
+        if continuous:
+            metrics = cont_metrics()
+        else:
+            metrics = [(1, 10), (2, 25), (3, 50), (4, 100), (5, int(x*100.0001)),
+                       (6, int(x*1.0001)), (7, int(x*5.0001)), (8, int(x*10.0001)),
+                       (9, int(x*50.0001)), (10, int(x*100.0001))]
+
+        if continuous:
+            ra_out.write("compound_id,compound_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
+                         "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
+                         "50%({:.3f}),100%({:.3f}),value\n".format(metrics[0][1], metrics[1][1],
+                                                                     metrics[2][1], metrics[3][1], metrics[4][1],
+                                                                     metrics[5][1], metrics[6][1], metrics[7][1],
+                                                                     metrics[8][1], metrics[9][1]))
+        else:
+            ra_out.write("compound_id,compound_id,top10,top25,top50,top100,"
+                         "topAll,top1%,top5%,top10%,top50%,top100%,rank\n")
+
+        for cmpd in self.compounds:
+            count = len(cmpd.compounds)
+            if count < 2:
+                continue
+            c_per_cmpd += count
+            cmpd_dct[(cmpd, count)] = {}
+            for m in metrics:
+                cmpd_dct[(cmpd, count)][m] = 0.0
+            # retrieve the appropriate proteins/pathway indices here, should be
+            # incorporated as part of the ind object during file reading
+            vs = []
+
+            for c in cmpd.compounds:
+                for cs in c.similar:
+                    if cs[0] in cmpd.compounds:
+                    #if cmpd in cs[0].compounds:
+                        cs_rmsd = cs[1]
+                    else:
+                        continue
+
+                    value = 0.0
+                    if continuous:
+                        value = cs_rmsd
+                    elif bottom:
+                        if ranking == 'modified':
+                            value = competitive_modified_bottom(c.similar, cs_rmsd)
+                        elif ranking == 'standard':
+                            value = competitive_standard_bottom(c.similar, cs_rmsd)
+                        elif ranking == 'ordinal':
+                            value = c.similar.index(cs)
+                        else:
+                            print("Ranking function {} is incorrect.".format(ranking))
+                            exit()
+                    elif ranking == 'modified':
+                        value = competitive_modified(c.similar, cs_rmsd)
+                    elif ranking == 'standard':
+                        value = competitive_standard(c.similar, cs_rmsd)
+                    elif ranking == 'ordinal':
+                        value = c.similar.index(cs)
+                    else:
+                        print("Ranking function {} is incorrect.".format(ranking))
+                        exit()
+
+                    s = [str(c.index), str(cmpd.id_)]
+                    for x in metrics:
+                        if value <= x[1]:
+                            cmpd_dct[(cmpd, count)][x] += 1.0
+                            s.append('1')
+                        else:
+                            s.append('0')
+                    if continuous:
+                        s.append(str(value))
+                    else:
+                        s.append(str(value))
+                    ss.append(s)
+                    break
+
+        self.accuracies = cmpd_dct
+        final_accs = self.compounds_analysed(ra_named, metrics)
+        ss = sorted(ss, key=lambda xx: int(xx[0]))
+        top_pairwise = [0.0] * 10
+        for s in ss:
+            if s[2] == '1':
+                top_pairwise[0] += 1.0
+            if s[3] == '1':
+                top_pairwise[1] += 1.0
+            if s[4] == '1':
+                top_pairwise[2] += 1.0
+            if s[5] == '1':
+                top_pairwise[3] += 1.0
+            if s[6] == '1':
+                top_pairwise[4] += 1.0
+            if s[7] == '1':
+                top_pairwise[5] += 1.0
+            if s[8] == '1':
+                top_pairwise[6] += 1.0
+            if s[9] == '1':
+                top_pairwise[7] += 1.0
+            if s[10] == '1':
+                top_pairwise[8] += 1.0
+            if s[11] == '1':
+                top_pairwise[9] += 1.0
+            sj = ','.join(s)
+            sj += '\n'
+            ra_out.write(sj)
+        ra_out.close()
+
+        cov = [0] * 10
+        for cmpd, c in list(self.accuracies.keys()):
+            accs = self.accuracies[cmpd, c]
+            for m_i in range(len(metrics)):
+                v = accs[metrics[m_i]]
+                if v > 0.0:
+                    cov[m_i] += 1
+
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', 'top{}'.format(len(self.compounds)),
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        # Create average indication accuracy list in percent
+        ia = []
+        for m in metrics:
+            ia.append(final_accs[m] * 100.0)
+        # Create average pairwise accuracy list in percent
+        pa = [(x * 100.0 / len(ss)) for x in top_pairwise]
+        # Indication coverage
+        cov = map(int, cov)
+        # Append 3 lists to df and write to file
+        with open(summ, 'w') as sf:
+            sf.write("\t" + '\t'.join(headers) + '\n')
+            ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
+            pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
+            cst = "\t".join(map(str, cov)) + '\n'
+            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(ast, pst, cst))
+
+        # pretty print the average indication accuracies
+        cut = 0
+        print("\taia")
+        for m in metrics:
+            print("{}\t{:.3f}".format(headers[cut], final_accs[m] * 100.0))
+            cut += 1
+        print('\n')
+
+
+    def canbenchmark_ddi(self, file_name, indications=[], adrs=[], continuous=False,
+                          bottom=False, ranking='standard'):
+        """!
+        Benchmarks the platform based on compound similarity of those approved for the same diseases
+
+        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
+        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
+        benchmarking
+        @param bottom bool: Reverse the ranking (descending) for the benchmark
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
+        modified, and ordinal)
+        @param adrs bool: ADRs are used as the phenotypic effect instead of Indications
+        """
+
+        adrs = True
+        '''
+        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+            exit()
+        '''
+        if not self.indication_proteins and not self.indication_pathways:
+            if not self.compound_pairs[0].similar_sorted and not associated:
+                for cm_p in self.compound_pairs:
+                    sorted_scores = sorted(cm_p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    cm_p.similar = sorted_scores
+                    cm_p.similar_sorted = True
+
+        if not os.path.exists('./results_analysed_named'):
+            print("Directory 'results_analysed_named' does not exist, creating directory")
+            os.system('mkdir results_analysed_named')
+        if not os.path.exists('./raw_results'):
+            print("Directory 'raw_results' does not exist, creating directory")
+            os.system('mkdir raw_results')
+
+        ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-ddi_adr.tsv'
+        ra = 'raw_results/raw_results_' + file_name + '-ddi_adr.csv'
+        summ = 'summary_' + file_name + '-ddi_adr.tsv'
+        ra_out = open(ra, 'w')
+
+        def effect_type():
+            if adrs:
+                return 'ADR'
+            else:
+                return 'disease'
+
+        def competitive_standard_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] > r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        def competitive_modified_bottom(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] >= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive modified ranking code
+        def competitive_modified(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] <= r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        # Competitive standard ranking code
+        def competitive_standard(sims, r):
+            rank = 0
+            for sim in sims:
+                if sim[1] < r:
+                    rank += 1.0
+                else:
+                    return rank
+            return len(sims)
+
+        effect_dct = {}
+        ss = []
+        c_per_effect = 0
+
+        if indications:
+            effects = list(map(self.get_indication, indications))
+        elif adrs:
+            effects = self.adrs
+        else:
+            effects = self.indications
+
+        def cont_metrics():
+            all_v = []
+            for c in self.compound_pairs:
+                for s in c.similar:
+                    if s[1] != 0.0:
+                        all_v.append(s[1])
+            avl = len(all_v)
+            all_v_sort = sorted(all_v)
+            # for tuple 10, have to add the '-1' for index out of range reasons
+            metrics = [(1, all_v_sort[int(avl/1000.0)]), (2, all_v_sort[int(avl/400.0)]), (3, all_v_sort[int(avl/200.0)]),
+                       (4, all_v_sort[int(avl/100.0)]), (5, all_v_sort[int(avl/20.0)]), (6, all_v_sort[int(avl/10.0)]),
+                       (7, all_v_sort[int(avl/5.0)]), (8, all_v_sort[int(avl/3.0)]), (9, all_v_sort[int(avl/2.0)]),
+                       (10, all_v_sort[int(avl/1.0)-1])]
+            return metrics
+
+        x = (len(self.compound_pairs)) / 100.0  # changed this...no reason to use similar instead of compounds
+        # had to change from 100.0 to 100.0001 because the int function
+        # would chop off an additional value of 1 for some reason...
+        if continuous:
+            metrics = cont_metrics()
+        else:
+            metrics = [(1, 10), (2, 25), (3, 50), (4, 100), (5, int(x*100.0001)),
+                       (6, int(x*1.0001)), (7, int(x*5.0001)), (8, int(x*10.0001)),
+                       (9, int(x*50.0001)), (10, int(x*100.0001))]
+
+        if continuous:
+            ra_out.write("compound_id,{}_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
+                         "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
+                         "50%({:.3f}),100%({:.3f}),value\n".format(effect_type(), metrics[0][1], metrics[1][1],
+                                                                     metrics[2][1], metrics[3][1], metrics[4][1],
+                                                                     metrics[5][1], metrics[6][1], metrics[7][1],
+                                                                     metrics[8][1], metrics[9][1]))
+        else:
+            ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
+                         "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
+
+        print("Running canbenchmark...")
+        for effect in effects:
+            count = len(effect.compound_pairs)
+            if count < 2:
+                continue
+            if not adrs:
+                if self.indication_pathways:
+                    if len(effect.pathways) == 0:
+                        print('No associated pathways for {}, skipping'.format(effect.id_))
+                        continue
+                    elif len(effect.pathways) < 1:
+                        #print('Less than 5 associated pathways for {}, skipping'.format(effect.id_))
+                        continue
+            c_per_effect += count
+            effect_dct[(effect, count)] = {}
+            for m in metrics:
+                effect_dct[(effect, count)][m] = 0.0
+            # retrieve the appropriate proteins/pathway indices here, should be
+            # incorporated as part of the ind object during file reading
+            vs = []
+            if self.pathways:
+                if self.indication_pathways:
+                    if self.pathway_quantifier == 'proteins':
+                        for pw in effect.pathways:
+                            for p in pw.proteins:
+                                if p not in vs:
+                                    vs.append(p)
+                    else:
+                        self.quantify_pathways(indication=effect)
+
+            # Retrieve the appropriate protein indices here, should be
+            # incorporated as part of the ind object during file reading
+            if self.indication_proteins:
+                dg = []
+                for p in effect.proteins:
+                    if p not in dg:
+                        dg.append(p)
+
+            c = effect.compound_pairs
+            if self.pathways:
+                if self.indication_pathways:
+                    if self.pathway_quantifier == 'proteins':
+                        if not vs:
+                            print('Warning: protein list empty for {}, using all proteins'.format(effect.id_))
+                            self.generate_some_similar_sigs(c, sort=True, proteins=None, aux=True)
+                        else:
+                            self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
+                    else:
+                        self.generate_some_similar_sigs(c, sort=True, aux=True)
+            elif self.indication_proteins:
+                if len(dg) < 2:
+                    self.generate_some_similar_sigs(c, sort=True, proteins=None)
+                else:
+                    self.generate_some_similar_sigs(c, sort=True, proteins=dg)
+            # call c.generate_similar_sigs()
+            # use the proteins/pathways specified above
+
+            for c in effect.compound_pairs:
+                for cs in c.similar:
+                    if adrs:
+                        if effect in cs[0].adrs:
+                            cs_rmsd = cs[1]
+                        else:
+                            continue
+                    else:
+                        if effect in cs[0].indications:
+                            cs_rmsd = cs[1]
+                        else:
+                            continue
+
+                    value = 0.0
+                    if continuous:
+                        value = cs_rmsd
+                    elif bottom:
+                        if ranking == 'modified':
+                            value = competitive_modified_bottom(c.similar, cs_rmsd)
+                        elif ranking == 'standard':
+                            value = competitive_standard_bottom(c.similar, cs_rmsd)
+                        elif ranking == 'ordinal':
+                            value = c.similar.index(cs)
+                        else:
+                            print("Ranking function {} is incorrect.".format(ranking))
+                            exit()
+                    elif ranking == 'modified':
+                        value = competitive_modified(c.similar, cs_rmsd)
+                    elif ranking == 'standard':
+                        value = competitive_standard(c.similar, cs_rmsd)
+                    elif ranking == 'ordinal':
+                        value = c.similar.index(cs)
+                    else:
+                        print("Ranking function {} is incorrect.".format(ranking))
+                        exit()
+
+                    if adrs:
+                        s = [str(c.index), effect.name]
+                    else:
+                        s = [str(c.index), effect.id_]
+                    for x in metrics:
+                        if value <= x[1]:
+                            effect_dct[(effect, count)][x] += 1.0
+                            s.append('1')
+                        else:
+                            s.append('0')
+                    if continuous:
+                        s.append(str(value))
+                    else:
+                        s.append(str(int(value)))
+                    ss.append(s)
+                    break
+
+        self.accuracies = effect_dct
+        final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        ss = sorted(ss, key=lambda xx: xx[0])
+        #ss = sorted(ss, key=lambda xx: int(xx[0]))
+        top_pairwise = [0.0] * 10
+        for s in ss:
+            if s[2] == '1':
+                top_pairwise[0] += 1.0
+            if s[3] == '1':
+                top_pairwise[1] += 1.0
+            if s[4] == '1':
+                top_pairwise[2] += 1.0
+            if s[5] == '1':
+                top_pairwise[3] += 1.0
+            if s[6] == '1':
+                top_pairwise[4] += 1.0
+            if s[7] == '1':
+                top_pairwise[5] += 1.0
+            if s[8] == '1':
+                top_pairwise[6] += 1.0
+            if s[9] == '1':
+                top_pairwise[7] += 1.0
+            if s[10] == '1':
+                top_pairwise[8] += 1.0
+            if s[11] == '1':
+                top_pairwise[9] += 1.0
+            sj = ','.join(s)
+            sj += '\n'
+            ra_out.write(sj)
+        ra_out.close()
+
+        cov = [0] * 10
+        for effect, c in list(self.accuracies.keys()):
+            accs = self.accuracies[effect, c]
+            for m_i in range(len(metrics)):
+                v = accs[metrics[m_i]]
+                if v > 0.0:
+                    cov[m_i] += 1
+
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', 'top{}'.format(len(self.compound_pairs)),
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        # Create average indication accuracy list in percent
+        ia = []
+        for m in metrics:
+            ia.append(final_accs[m] * 100.0)
+        # Create average pairwise accuracy list in percent
+        pa = [(x * 100.0 / len(ss)) for x in top_pairwise]
+        # Indication coverage
+        cov = map(int, cov)
+        # Append 3 lists to df and write to file
+        with open(summ, 'w') as sf:
+            sf.write("\t" + '\t'.join(headers) + '\n')
+            ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
+            pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
+            cst = "\t".join(map(str, cov)) + '\n'
+            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(ast, pst, cst))
+
+        # pretty print the average indication accuracies
+        cut = 0
+        print("\taia")
+        for m in metrics:
+            print("{}\t{:.3f}".format(headers[cut], final_accs[m] * 100.0))
+            cut += 1
+        print('\n')
+
+
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], threshold=0.5,
            negative='random', seed=42, out=''):
         """!
@@ -2320,6 +3146,107 @@ class CANDO(object):
                 fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], indd.id_, indd.name))
             else:
                 print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+        if save:
+            fo.close()
+        print('')
+
+
+    def canpredict_ddi_cmpds(self, cmpd, n=10, topX=10, save=''):
+        """!
+        @param cmpd Compound: Compound object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Drug-drug Interactions to be printed
+        """
+        if n == -1:
+            n = len(self.compounds)-1
+        if topX == -1:
+            topX = len(self.compounds)-1
+
+        if type(cmpd) is Compound:
+            cmpd = cmpd
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        print("Using CANDO compound {}".format(cmpd.name))
+        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        print("Comparing signature to all CANDO compound signatures...")
+        self.generate_similar_sigs(cmpd, sort=True)
+        print("Generating interaction predictions using top{} most similar compounds...".format(n))
+        i_dct = {}
+        for c in cmpd.similar[0:n]:
+            for itx in c[0].compounds:
+                if itx.id_ not in i_dct:
+                    i_dct[itx.id_] = 1
+                else:
+                    i_dct[itx.id_] += 1
+        sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted indications...\n".format(topX))
+            fo.write("rank\tscore\tcmpd_id\tcompound\n")
+        else:
+            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("rank\tscore\tcmpd_id    \tcompound")
+        topX = min(topX,len(sorted_x))
+        for i in range(topX):
+            itxd = self.get_compound(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], itxd.id_, itxd.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], itxd.id_, itxd.name))
+        if save:
+            fo.close()
+        print('')
+
+
+    def canpredict_ddi_adrs(self, cmpd_pair, n=10, topX=10, save=''):
+        """!
+
+        @param cmpd_pair Compound_pair: Compound_pair object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Indications to be printed
+        """
+        if n == -1:
+            n = len(self.compound_pairs)-1
+        if topX == -1:
+            topX = len(self.adrs)
+
+        if type(cmpd_pair) is Compound_pair:
+            cmpd_pair = cmpd_pair
+        elif type(cmpd_pair) is tuple:
+            cmpd = self.get_compound_pair(cmpd_pair)
+        if type(cmpd_pair) is tuple:
+            c1 = self.get_compound(cmpd_pair[0])
+            c2 = self.get_compound(cmpd_pair[1])
+            cmpd_pair = Compound_pair((c1.name,c2.name),cmpd_pair,cmpd_pair)
+            self.compound_pairs.append(cmpd_pair)
+            self.compound_pair_ids.append(cmpd_pair.id_)
+            cmpd_pair.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+        print("Using CANDO compound pair {}".format(cmpd_pair.name))
+        print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
+        print("Comparing signature to all CANDO compound pair signatures...")
+        self.generate_similar_sigs_cp(cmpd_pair, sort=True)
+        print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
+        a_dct = {}
+        for c in cmpd_pair.similar[0:n]:
+            for adr in c[0].adrs:
+                if adr.id_ not in a_dct:
+                    a_dct[adr.id_] = 1
+                else:
+                    a_dct[adr.id_] += 1
+        sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted indications...\n".format(topX))
+            fo.write("rank\tscore\tadr_id\tadverse_reaction\n")
+        else:
+            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("rank\tscore\tadr_id    \tadverse_reaction")
+        for i in range(topX):
+            adr = self.get_adr(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], adr.id_, adr.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], adr.id_, adr.name))
         if save:
             fo.close()
         print('')
