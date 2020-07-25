@@ -512,12 +512,13 @@ class CANDO(object):
 
                 def dists_to_str(cmpd, ci):
                     o = ''
-                    for si in range(len(cmpd.similar)):
+                    for si in range(len(cmpd.similar)+1):
                         if ci == si:
                             if self.similarity:
                                 o += '1.0\t'
                             else:
                                 o += '0.0\t'
+                            continue
                         s = cmpd.similar[si]
                         o += '{}\t'.format(s[1])
                     o = o[:-1] + '\n'
