@@ -676,17 +676,19 @@ class CANDO(object):
 
             if self.save_dists:
                 def dists_to_str(cmpd, ci):
-                    o = ''
-                    for si in range(len(cmpd.similar)+1):
+                    o = []
+                    for si in range(len(cmpd.similar)):
                         if ci == si:
                             if self.similarity:
-                                o += '1.0\t'
+                                o.append('1.0')
                             else:
-                                o += '0.0\t'
-                            continue
+                                o.append('0.0')
                         s = cmpd.similar[si]
-                        o += '{}\t'.format(s[1])
-                    o = o[:-1] + '\n'
+                        o.append(str(s[1]))
+                    if len(o) < len(self.compounds):
+                        o.append('0.0')
+                    o = "\t".join(o)
+                    o = o + '\n'
                     return o
 
                 print('Saving {} distances...'.format(self.dist_metric))
@@ -958,7 +960,7 @@ class CANDO(object):
         for nm in nms:
             print("{}\t{}".format(id_d[nm], nm))
 
-    def top_targets(self, cmpd, n=10, negative=False):
+    def top_targets(self, cmpd, n=10, negative=False, save_file=''):
         """!
         Get the top scoring protein targets for a given compound
 
@@ -985,13 +987,21 @@ class CANDO(object):
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
+        if save_file:
+            o = open(save_file,'w')
+            o.write('rank\tscore\tindex\tid\tgene\tname\n')
         print('Compound is {}'.format(cmpd.name))
         print('rank\tscore\tindex\tid\tgene\tname')
         for si in range(n):
             pr = interactions_sorted[si][0]
             print('{}\t{}\t{}\t{}\t{}\t{}'.format(si+1, round(interactions_sorted[si][1], 3),
                                           self.proteins.index(pr), pr.id_, pr.gene, pr.name))
+            if save_file:
+                o.write('{}\t{}\t{}\t{}\t{}\t{}\n'.format(si+1, round(interactions_sorted[si][1], 3),
+                                                self.proteins.index(pr), pr.id_, pr.gene, pr.name))
         print()
+        if save_file:
+            o.close()
         return interactions_sorted[0:n]
 
     def common_targets(self, cmpds_file, n=10, negative=False, save_file=''):
