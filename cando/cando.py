@@ -23,8 +23,6 @@ from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform
 from scipy import stats
 
-print('Working build...')
-
 
 class Protein(object):
     """!
@@ -92,6 +90,15 @@ class Compound(object):
         ## @var alt_ids
         # dict: dict of other ids inputted with compound mapping
         self.alt_ids = {}
+        ## @var metabolites
+        # list: List of all metabolites from the compound
+        self.metabolites = []
+        ## @var is_metabolite
+        # bool: bool if the drug is a metabolite itself
+        self.is_metabolite = False
+        ## @var parent
+        # Compound: Compound object to which this compound is a metabolite
+        self.parent = None
 
         self.compounds = []
 
@@ -216,8 +223,8 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_dists='', read_dists='',
                  pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-				 ddi_compounds='', ddi_adrs='', adr_map='', protein_distance=False, protein_map='', ncpus=1):
-        ## @var c_map 
+                 ddi_compounds='', ddi_adrs='', adr_map='', protein_distance=False, protein_map='', ncpus=1):
+        ## @var c_map
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
         ## @var i_map 
@@ -274,11 +281,11 @@ class CANDO(object):
         ## @var protein_map
         # str: File path to Protein metadata mapping file
         self.protein_map = protein_map
-	
+
         self.ddi_compounds = ddi_compounds
         self.ddi_adrs = ddi_adrs
         self.protein_distance = protein_distance
-	
+
         self.proteins = []
         self.protein_id_to_index = {}
         self.compounds = []
@@ -317,15 +324,20 @@ class CANDO(object):
                 id_ = int(ls[h2i['CANDO_ID']])
                 db_id = ls[h2i['DRUGBANK_ID']]
                 index = id_
+                cm = Compound(name, id_, index)
+
                 if 'DRUG_GROUPS' in h2i:
                     stati = ls[h2i['DRUG_GROUPS']]
                     if 'approved' in stati:
-                        status = 'approved'
+                        cm.status = 'approved'
+                    elif 'metabolite' in stati:
+                        cm.status = 'other'
+                        cm.is_metabolite = True
                     else:
-                        status = 'other'
+                        cm.status = 'other'
                 else:
-                    status = 'N/A'
-                cm = Compound(name, id_, index, status=status)
+                    cm.status = 'N/A'
+
                 self.compounds.append(cm)
                 self.compound_ids.append(id_)
 
@@ -3657,6 +3669,10 @@ def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percen
         percentile_cutoff = float(percentile_cutoff)
         if 'dC' not in interaction_score:
             print('Percentile score not used for chosen scoring protocol, skipping the percentile calculation.')
+    else:
+        if 'dC' in interaction_score:
+            print('No percentile cutoff inputted, defaulting to 0.0.')
+            percentile_cutoff = 0.0
 
     start = time.time()
 
@@ -3822,7 +3838,7 @@ def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_sc
             elif c_set == 'nr':
                 url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/nr_ligand_set_v2.txt'
                 dl_file(url, 'v2.0/mappings/nr_ligand_set_v2.txt')
-                lig_is = list(map(str.strip, open('nr_ligand_set_v2.txt', 'r').readlines()))
+                lig_is = list(map(str.strip, open('v2.0/mappings/nr_ligand_set_v2.txt', 'r').readlines()))
                 all_c_scores = [c_score[i] for i in lig_is]
                 c_cutoff = np.percentile(all_c_scores, percentile_cutoff)
             else:
