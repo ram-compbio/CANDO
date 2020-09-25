@@ -39,8 +39,10 @@ class Protein(object):
         #   List of scores representing each drug interaction with the given protein
         self.sig = sig
         ## @var pathways 
-        #   List of Pathway objects in which the given protein is involved.
+        #   List of Pathway objects in which the given protein is involved
         self.pathways = []
+        #   List of Indication objects to which the protein is associated
+        self.indications = []
         self.name = ''
         self.gene = ''
 
@@ -210,6 +212,7 @@ class ADR(object):
         self.compounds = []
 
         self.compound_pairs = []
+
 
 class CANDO(object):
     """!
@@ -488,7 +491,7 @@ class CANDO(object):
            
         if self.ddi_compounds:
             print("Reading compound-compound associations...")
-            ddi = pd.read_csv(ddi_compounds,sep='\t')
+            ddi = pd.read_csv(ddi_compounds, sep='\t')
             for x in ddi.index:
                 c1 = self.get_compound(int(ddi.loc[x,'CANDO_ID-1']))
                 c2 = self.get_compound(int(ddi.loc[x,'CANDO_ID-2']))
@@ -569,6 +572,7 @@ class CANDO(object):
                             pro = self.proteins[pi]
                             ind = self.get_indication(ind_id)
                             ind.proteins.append(pro)
+                            pro.indications.append(ind)
                         except KeyError:
                             pass
                         except LookupError:
@@ -688,17 +692,19 @@ class CANDO(object):
 
             if self.save_dists:
                 def dists_to_str(cmpd, ci):
-                    o = ''
-                    for si in range(len(cmpd.similar)+1):
+                    o = []
+                    for si in range(len(cmpd.similar)):
                         if ci == si:
                             if self.similarity:
-                                o += '1.0\t'
+                                o.append('1.0')
                             else:
-                                o += '0.0\t'
-                            continue
+                                o.append('0.0')
                         s = cmpd.similar[si]
-                        o += '{}\t'.format(s[1])
-                    o = o[:-1] + '\n'
+                        o.append(str(s[1]))
+                    if len(o) < len(self.compounds):
+                        o.append('0.0')
+                    o = "\t".join(o)
+                    o = o + '\n'
                     return o
 
                 print('Saving {} distances...'.format(self.dist_metric))
@@ -797,12 +803,27 @@ class CANDO(object):
         if adr_map:
             print('Reading ADR mapping file...')
             with open(adr_map, 'r') as amf:
-                for l in amf:
+                lines = amf.readlines()
+                header = lines[0]
+                h2i = {}
+                for i, h in enumerate(header.strip().split('\t')):
+                    h2i[h] = i
+                prev_id = -1
+                lcount = 0
+                for l in lines[1:]:
                     ls = l.strip().split('\t')
-                    c_index = int(ls[1])
-                    cmpd = self.compounds[c_index]
-                    adr_id = ls[4]
-                    adr_name = ls[3]
+                    adr_name = ls[h2i['condition_concept_name']]
+                    c_id = int(ls[h2i['drug_cando_id']])
+                    adr_id = ls[h2i['condition_meddra_id']]
+
+                    if c_id == -1:
+                        continue
+                    if prev_id == c_id:
+                        pass
+                    else:
+                        cmpd = self.get_compound(c_id)
+                        prev_id = c_id
+
                     try:
                         adr = self.get_adr(adr_id)
                         adr.compounds.append(cmpd)
@@ -1580,7 +1601,7 @@ class CANDO(object):
 
         if isinstance(indications, list) and len(indications) >= 1:
             effects = list(map(self.get_indication, indications))
-        elif isinstance(indications, list) and len(indications) == 0:
+        elif isinstance(indications, list) and len(indications) == 0 and not adrs:
             effects = self.indications
         elif adrs:
             effects = self.adrs
@@ -1664,22 +1685,22 @@ class CANDO(object):
                     if p not in dg:
                         dg.append(p)
 
-            c = effect.compounds
+            cmpds = effect.compounds
             if self.pathways:
                 if self.indication_pathways:
                     if self.pathway_quantifier == 'proteins':
                         if not vs:
                             print('Warning: protein list empty for {}, using all proteins'.format(effect.id_))
-                            self.generate_some_similar_sigs(c, sort=True, proteins=None, aux=True)
+                            self.generate_some_similar_sigs(cmpds, sort=True, proteins=None, aux=True)
                         else:
-                            self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
+                            self.generate_some_similar_sigs(cmpds, sort=True, proteins=vs, aux=True)
                     else:
-                        self.generate_some_similar_sigs(c, sort=True, aux=True)
+                        self.generate_some_similar_sigs(cmpds, sort=True, aux=True)
             elif self.indication_proteins:
                 if len(dg) < 2:
-                    self.generate_some_similar_sigs(c, sort=True, proteins=None)
+                    self.generate_some_similar_sigs(cmpds, sort=True, proteins=None)
                 else:
-                    self.generate_some_similar_sigs(c, sort=True, proteins=dg)
+                    self.generate_some_similar_sigs(cmpds, sort=True, proteins=dg)
             # call c.generate_similar_sigs()
             # use the proteins/pathways specified above
 
