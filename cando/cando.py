@@ -13,14 +13,14 @@ import difflib
 import matplotlib.pyplot as plt
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
-from sklearn.metrics import pairwise_distances, roc_curve, roc_auc_score, average_precision_score, ndcg_score
+from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score, ndcg_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
 from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from scipy.spatial.distance import squareform
+from scipy.spatial.distance import squareform, cdist
 from scipy import stats
 
 
@@ -499,11 +499,45 @@ class CANDO(object):
                     c1.compounds.append(c2)
                 if c1 not in c2.compounds:
                     c2.compounds.append(c1)
-            print('Done reading compound-compound associations.')
+            print('Done reading compound-compound associations.\n')
 
         if self.ddi_adrs:
             print("Reading compound-compound adverse events associations...")
             ddi = pd.read_csv(ddi_adrs,sep='\t')
+            # Create a unique set of tuples using CANDO IDs for compound pairs
+            idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
+            idss = list(set(idss))
+            print(len(idss))
+            # Iterate through list of CANDO ID tuples
+            for ids in idss: 
+                if ids in self.compound_pair_ids:
+                    cm_p = self.get_compound_pair(ids)
+                elif (ids[1],ids[0]) in self.compound_pair_ids:
+                    cm_p = self.get_compound_pair((ids[1],ids[0]))
+                else:
+                    names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
+                    cm_p = Compound_pair(names, ids, ids)
+                    self.compound_pairs.append(cm_p)
+                    self.compound_pair_ids.append(ids)
+                # Pull list of ADRs for this compound pair
+                adrs = ddi.loc[(ddi['CANDO_ID-1']==ids[0]) & (ddi['CANDO_ID-2']==ids[1])]
+                # Iterate through ADRs for this compound pair 
+                for x in adrs.index:
+                    #ADRs
+                    adr_name = ddi.loc[x,'CONDITION_MESH_NAME']
+                    adr_id = ddi.loc[x,'CONDITION_MESH_ID']
+                    if adr_id in self.adr_ids:
+                        adr = self.get_adr(adr_id)
+                    else:
+                        adr = ADR(adr_id,adr_name)
+                        self.adrs.append(adr)
+                        self.adr_ids.append(adr.id_)
+                    # Add comppund pair to ADR and vice versa
+                    cm_p.add_adr(adr)
+                    adr.compound_pairs.append(cm_p)
+            print('Done reading compound-compound adverse event associations.\n')
+           
+            '''
             for x in ddi.itertuples():
                 #ADRs
                 #adr_name = ddi.loc[x,'EVENT_NAME']
@@ -524,16 +558,16 @@ class CANDO(object):
                 elif (ids[1],ids[0]) in self.compound_pair_ids:
                     cm_p = self.get_compound_pair((ids[1],ids[0]))
                 else:
-                    indices = ids
                     #names = (x[1],x[3])
                     names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
-                    cm_p = Compound_pair(names, ids, indices)
+                    cm_p = Compound_pair(names, ids, ids)
                     self.compound_pairs.append(cm_p)
                     self.compound_pair_ids.append(ids)
                 # Add comppund pair to ADR and vice versa
                 cm_p.add_adr(adr)
                 adr.compound_pairs.append(cm_p)
             print('Done reading compound-compound adverse event associations.\n')
+            '''
             '''
             print("Generating compound pairs...")
             for i in range(len(self.compounds)):
@@ -607,10 +641,66 @@ class CANDO(object):
 
         # if compute distance is true, generate similar compounds for each
         if compute_distance and not read_dists:
-            if self.pathways and not self.indication_pathways:
+            if self.pathways and not self.indication_pathways and not ddi_adrs:
                 print('Computing distances using global pathway signatures...')
                 for c in self.compounds:
                     self.generate_similar_sigs(c, aux=True)
+            
+            elif ddi_adrs:
+                print('Computing {} distances for compound pairs...'.format(self.dist_metric))
+                # put all compound_pair signatures into 2D-array
+                snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
+                snp = np.array(snp)  # convert to numpy form
+                
+                # call pairwise_distances, speed up with custom RMSD function and parallelism
+                if self.dist_metric == "rmsd":
+                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = squareform(distance_matrix)
+                #elif self.dist_metric in ['cosine']:
+                #    distance_matrix = cosine_dist(snp)
+                #    distance_matrix = squareform(distance_matrix, checks=False)
+                elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+                    distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
+                            force_all_finite=False,
+                            n_jobs=self.ncpus)
+                    distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
+                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
+                    distance_matrix = squareform(distance_matrix, checks=False)
+                    #print(distance_matrix)
+                    '''
+                    for i in range(len(self.compound_pairs)):
+                        d = cdist([snp[i]], snp, self.dist_metric)
+                        self.compound_pairs[i].similar = list(zip(self.compound_pairs, d.flatten().tolist()))
+                        self.compound_pairs[i].similar.pop(i)
+                    '''
+                else:
+                    print("Incorrect distance metric - {}".format(self.dist_metric))
+                    exit()
+
+                # step through the condensed matrix - add RMSDs to Compound.similar lists
+                nc = len(self.compound_pairs)
+                n = 0
+                for i in range(nc):
+                    for j in range(i, nc):
+                        c1 = self.compounds[i]
+                        c2 = self.compounds[j]
+                        if i == j:
+                            continue
+                        r = distance_matrix[n]
+                        c1.similar.append((c2, r))
+                        c2.similar.append((c1, r))
+                        n += 1
+                print('Done computing {} distances.\n'.format(self.dist_metric))
+ 
+
+                # sort the RMSDs after saving (if desired)
+                for c in self.compound_pairs:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_computed = True
+                    c.similar_sorted = True
+
             else:
                 print('Computing {} distances...'.format(self.dist_metric))
                 # put all compound signatures into 2D-array
@@ -622,13 +712,14 @@ class CANDO(object):
                 if self.dist_metric == "rmsd":
                     distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock']:
+                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock', 'cosine']:
                     distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
+                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
                     distance_matrix = squareform(distance_matrix, checks=False)
-                elif self.dist_metric in ['cosine']:
-                    distance_matrix = cosine_dist(snp)
-                    distance_matrix = squareform(distance_matrix, checks=False)
+                #elif self.dist_metric in ['cosine']:
+                #    distance_matrix = cosine_dist(snp)
+                #    distance_matrix = squareform(distance_matrix, checks=False)
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
                     exit()
@@ -647,49 +738,7 @@ class CANDO(object):
                         c2.similar.append((c1, r))
                         n += 1
                 print('Done computing {} distances.\n'.format(self.dist_metric))
-
-            if ddi_adrs:
-                print('Computing {} distances...'.format(self.dist_metric))
-                # put all compound_pair signatures into 2D-array
-                signatures = []
-                for i in range(0, len(self.compound_pairs)):
-                    signatures.append(self.compound_pairs[i].sig)
-                snp = np.array(signatures)  # convert to numpy form
-
-                # call pairwise_distances, speed up with custom RMSD function and parallelism
-                if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
-                    distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
-                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    distance_matrix = squareform(distance_matrix, checks=False)
-                else:
-                    print("Incorrect distance metric - {}".format(self.dist_metric))
-                    exit()
-
-                # step through the condensed matrix - add RMSDs to Compound.similar lists
-                nc = len(self.compound_pairs)
-                n = 0
-                for i in range(nc):
-                    for j in range(i, nc):
-                        c1 = self.compound_pairs[i]
-                        c2 = self.compound_pairs[j]
-                        if i == j:
-                            continue
-                        r = distance_matrix[n]
-                        c1.similar.append((c2, r))
-                        c2.similar.append((c1, r))
-                        n += 1
-                print('Done computing {} distances.'.format(self.dist_metric))
-
-                # sort the RMSDs after saving (if desired)
-                for c in self.compound_pairs:
-                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                    c.similar = sorted_scores
-                    c.similar_computed = True
-                    c.similar_sorted = True
-
+            
             if self.save_dists:
                 def dists_to_str(cmpd, ci):
                     o = []
@@ -708,6 +757,18 @@ class CANDO(object):
                     return o
 
                 print('Saving {} distances...'.format(self.dist_metric))
+                '''
+                if adr_ddi:
+                    with open(self.save_dists, 'w') as srf:
+                        for ci in range(len(self.compound_pairs)):
+                            c = self.compound_pairs[ci]
+                            srf.write(dists_to_str(c, ci))
+                else:
+                    with open(self.save_dists, 'w') as srf:
+                        for ci in range(len(self.compounds)):
+                            c = self.compounds[ci]
+                            srf.write(dists_to_str(c, ci))
+                '''
                 with open(self.save_dists, 'w') as srf:
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
@@ -773,9 +834,13 @@ class CANDO(object):
                     distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)),
                                                          n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
-                                                         n_jobs=self.ncpus)
+                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock', 'cosine']:
+                    distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
+                            force_all_finite=False,
+                            n_jobs=self.ncpus)
+                    distance_matrix = np.concatenate(list(distance_matrix), axis=0)                    
+                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
+                    #                                     n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
                     distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine']:
@@ -812,9 +877,12 @@ class CANDO(object):
                 lcount = 0
                 for l in lines[1:]:
                     ls = l.strip().split('\t')
-                    adr_name = ls[h2i['condition_concept_name']]
-                    c_id = int(ls[h2i['drug_cando_id']])
-                    adr_id = ls[h2i['condition_meddra_id']]
+                    adr_name = ls[h2i['CONDITION_MESH_NAME']]
+                    adr_id = ls[h2i['CONDITION_MESH_ID']]
+                    c_id = int(ls[h2i['CANDO_ID']])
+                    #adr_name = ls[h2i['condition_concept_name']]
+                    #c_id = int(ls[h2i['drug_cando_id']])
+                    #adr_id = ls[h2i['condition_meddra_id']]
 
                     if c_id == -1:
                         continue
@@ -3191,6 +3259,57 @@ class CANDO(object):
             fo.close()
         print('')
 
+
+    def canpredict_adr(self, cmpd, n=10, topX=10, save=''):
+        """!
+        This function is the inverse of canpredict_compounds. Input a compound
+        of interest cando_cmpd (or a novel protein signature of interest new_sig)
+        and the most similar compounds to it will be computed. The ADRs
+        associated with the top n most similar compounds to the query compound will
+        be examined to see if any are repeatedly enriched.
+
+        @param cmpd Compound: Compound object to be used
+        @param n int: top number of similar Compounds to be used for prediction
+        @param topX int: top number of predicted Indications to be printed
+        """
+        if n == -1:
+            n = len(self.compounds)-1
+        if topX == -1:
+            topX = len(self.indications)
+
+        if type(cmpd) is Compound:
+            cmpd = cmpd
+        elif type(cmpd) is int:
+            cmpd = self.get_compound(cmpd)
+        print("Using CANDO compound {}".format(cmpd.name))
+        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        print("Comparing signature to all CANDO compound signatures...")
+        self.generate_similar_sigs(cmpd, sort=True)
+        print("Generating indication predictions using top{} most similar compounds...".format(n))
+        a_dct = {}
+        for c in cmpd.similar[0:n]:
+            for adr in c[0].adrs:
+                if adr.id_ not in a_dct:
+                    a_dct[adr.id_] = 1
+                else:
+                    a_dct[adr.id_] += 1
+        sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted ADRs...\n".format(topX))
+            fo.write("rank\tscore\tadr_id\tadr\n")
+        else:
+            print("Printing the {} highest predicted ADRs...\n".format(topX))
+            print("rank\tscore\tadr_id    \tadr")
+        for i in range(topX):
+            adrr = self.get_adr(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], adrr.id_, adrr.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], adrr.id_, adrr.name))
+        if save:
+            fo.close()
+        print('')
 
     def canpredict_ddi_cmpds(self, cmpd, n=10, topX=10, save=''):
         """!
