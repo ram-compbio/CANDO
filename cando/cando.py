@@ -683,8 +683,8 @@ class CANDO(object):
                 n = 0
                 for i in range(nc):
                     for j in range(i, nc):
-                        c1 = self.compounds[i]
-                        c2 = self.compounds[j]
+                        c1 = self.compound_pairs[i]
+                        c2 = self.compound_pairs[j]
                         if i == j:
                             continue
                         r = distance_matrix[n]
