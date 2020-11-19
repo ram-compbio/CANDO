@@ -1,4 +1,4 @@
-import os
+import os, pickle
 import requests
 import random
 import time
@@ -660,26 +660,36 @@ class CANDO(object):
                 #    distance_matrix = cosine_dist(snp)
                 #    distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+                    '''
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
                             force_all_finite=False,
                             n_jobs=self.ncpus)
+                    print("pairwise is done.")
                     distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
-                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                    print("concat is done.")
+                    '''
+                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric,
+                    #        force_all_finite=False,
+                    #        n_jobs=self.ncpus)
+                    
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    distance_matrix = squareform(distance_matrix, checks=False)
-                    #print(distance_matrix)
-                    '''
+                    #distance_matrix = squareform(distance_matrix, checks=False)
+                    #print("squareform is done.")
+                    
                     for i in range(len(self.compound_pairs)):
-                        d = cdist([snp[i]], snp, self.dist_metric)
-                        self.compound_pairs[i].similar = list(zip(self.compound_pairs, d.flatten().tolist()))
+                        #print(distance_matrix[i])
+                        print("{} of {}".format(i,len(self.compound_pairs)))
+                        dists = cdist([snp[i]], snp, dist_metric)[0]
+                        self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
+                        #self.compound_pairs[i].similar = list(zip(self.compound_pairs, distance_matrix[i]))
                         self.compound_pairs[i].similar.pop(i)
-                    '''
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
                     exit()
-
+                '''
                 # step through the condensed matrix - add RMSDs to Compound.similar lists
                 nc = len(self.compound_pairs)
+                print(nc)
                 n = 0
                 for i in range(nc):
                     for j in range(i, nc):
@@ -687,10 +697,13 @@ class CANDO(object):
                         c2 = self.compound_pairs[j]
                         if i == j:
                             continue
+                        print("got both pairs")
                         r = distance_matrix[n]
+                        print(r)
                         c1.similar.append((c2, r))
                         c2.similar.append((c1, r))
                         n += 1
+                '''
                 print('Done computing {} distances.\n'.format(self.dist_metric))
  
 
@@ -1221,13 +1234,14 @@ class CANDO(object):
         @param prots list: UniProt IDs (str)
         @return Returns list: Protein chains (str) matching input UniProt IDs
         """
-        if not os.path.exists('v2.0/mappings/pdb_2_uniprot.csv'):
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
+        if not os.path.exists('{}/mappings/pdb_2_uniprot.csv'.format(pre)):
             print('Downloading UniProt to PDB mapping file...')
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/pdb_2_uniprot.csv'
-            dl_file(url, 'v2.0/mappings/pdb_2_uniprot.csv')
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/pdb_2_uniprot.csv'
+            dl_file(url, '{}/mappings/pdb_2_uniprot.csv'.format(pre))
         pdct = {}
         pdct_rev = {}
-        with open('v2.0/mappings/pdb_2_uniprot.csv', 'r') as u2p:
+        with open('{}/mappings/pdb_2_uniprot.csv'.format(pre), 'r') as u2p:
             for l in u2p.readlines()[1:]:
                 spl = l.strip().split(',')
                 pdb = spl[0] + spl[1]
@@ -3763,7 +3777,7 @@ class Matrix(object):
             for p in range(len(self.proteins)):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
-
+'''
 def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
                     interaction_score='P', c_set='nr', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
     """!
@@ -4083,6 +4097,410 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
                 l.append(0.000)
                 continue
     return {cmpd_id: l}
+'''
+
+def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True, ncpus=1):
+
+    def print_time(s):
+        if s >= 60:
+            m = s / 60.0
+            s -= m * 60.0
+            if m >= 60.0:
+                h = m / 60.0
+                m -= h * 60.0
+                print("Matrix generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+            else:
+                print("Matrix generation took {:.0f} min {:.0f} s to finish.".format(m, s))
+        else:
+            print("Matrix generation took {:.0f} s to finish.".format(s))
+
+    print("Generating CANDO matrix...")
+    start = time.time()
+    pool = mp.Pool(ncpus)
+
+    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    cmpd_path = "{}/cmpds/fps-{}/".format(pre,v)
+    lig_path = "{}/ligs/fps/".format(pre)
+    if out_file == '':
+        if percentile_cutoff != 0.0:
+            out_file = "{}/{}-{}-{}-{}-{}-percentile{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
+        else:
+            out_file = "{}/{}-{}-{}-{}-{}-c{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+    os.makedirs(out_path, exist_ok=True)
+
+    # Remove redundant ligands from full list
+    # Especially important for percentile calculations
+    if nr_ligs:
+        if not os.path.exists("{}/mappings/nr_ligs.csv".format(pre)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/nr_ligs.csv'
+            dl_file(url, '{}/mappings/nr_ligs.csv'.format(pre))
+        nr_ligs = pd.read_csv("{}/mappings/nr_ligs.csv".format(pre),header=None)
+    nr_ligs = nr_ligs[0].values.flatten()
+
+    # Download protein matrix if it does not exist
+    if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+        dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+    p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    
+    # Create dictionary of lists
+    # Keys == proteins
+    # Values == list of predicted bs + bs scores
+    p_dict = {}
+    for p in p_matrix.itertuples():
+        p_dict[p[0]] = list(zip(p[1].split(','),p[2].split(',')))
+
+    if i_score not in ['C','dC','P','CxP','dCxP','avgC','medC','avgP','medP']:
+        print("{} is not an applicable interaction score.".format(i_score))
+        return
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(cmpd_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect))
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(lig_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(lig_path,fp,vect))
+
+    # Load compound and ligand fingerprint pickles
+    with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+        c_fps = pickle.load(f)
+    with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
+        l_fps = pickle.load(f)
+
+    c_list = list(c_fps.keys())
+
+    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
+    scores = {d[0]:d[1] for d in scores}
+
+    mat = pd.DataFrame.from_dict(scores)
+    mat.sort_index(axis=1,inplace=True)
+    mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
+   
+    mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
+    
+    pool.close
+    pool.join
+
+    end = time.time()
+    print("Matrix written to {}/{}.".format(out_path,out_file))
+    print_time(end-start) 
+
+
+def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[]):
+    if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
+        if dist == 'dice':
+            all_scores = DataStructs.BulkDiceSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
+        elif dist == 'tani':
+            all_scores = DataStructs.BulkTanimotoSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
+        elif dist == 'cos':
+            all_scores = DataStructs.BulkCosineSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
+    if percentile_cutoff != 0.0:
+        cscore_cutoff = np.percentile(all_scores,percentile_cutoff)
+    scores = []
+    for p in p_dict.keys():
+        li = p_dict[p]
+        li_bs = [blah[0] for blah in li if blah[0] in l_fps.index and float(blah[1]) >= pscore_cutoff]
+        x = [blah[0] for blah in l_fps.loc[li_bs].values.tolist()]
+        # Pscore
+        if i_score in ['P','CxP','dCxP','avgP','medP']:
+            #Pscore cutoff
+            li_score = [blah[1] for blah in li if blah[0] in l_fps.index and float(blah[1]) >= pscore_cutoff]
+            y = l_fps.loc[li_bs].index.tolist()
+            try:
+                if dist == 'dice':
+                    temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x)))
+                elif dist == 'tani':
+                    temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x)))
+                elif dist == 'cos':
+                    temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x)))
+
+                #Cscore cutoff
+                temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
+
+                if i_score == 'dCxP':
+                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    c_score = stats.percentileofscore(all_scores,temp_c[1])/100.0
+                    p_score = li_score[li_bs.index(temp_c[0])]
+                    scores.append(float(c_score) * float(p_score))
+                elif i_score == 'CxP':
+                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    c_score = temp_c[1]
+                    p_score = li_score[li_bs.index(temp_c[0])]
+                    scores.append(float(c_score) * float(p_score))
+                elif i_score == 'P':
+                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    p_score = li_score[li_bs.index(temp_c[0])]
+                    scores.append(float(p_score))
+                elif i_score == 'avgP':
+                    # Will produce a warning when li_score is empty
+                    # temp_p will then == nan, so we check for that
+                    # append 0.00 if True.
+                    temp_p = np.mean(li_score)
+                    if not np.isnan(temp_p):
+                        scores.append(temp_p)
+                    else:
+                        scores.append(0.000)
+                elif i_score == 'medP':
+                    temp_p = np.median(li_score)
+                    if not np.isnan(temp_p):
+                        scores.append(temp_p)
+                    else:
+                        scores.append(0.000)
+            except:
+                scores.append(0.000)
+        # Cscore
+        elif i_score in ['dC','C','avgC','medC']:
+            try:
+                if dist == 'dice':
+                    temp_scores = DataStructs.BulkDiceSimilarity(c_fps[c],x)
+                elif dist == 'tani':
+                    temp_scores = DataStructs.BulkTanimotoSimilarity(c_fps[c],x)
+                elif dist == 'cos':
+                    temp_scores = DataStructs.BulkCosineSimilarity(c_fps[c],x)
+
+                #Cscore cutoff
+                temp_scores = [i for i in temp_scores if float(i) >= cscore_cutoff]
+
+                if i_score == 'dC':
+                    temp_c = max(temp_scores)
+                    scores.append(stats.percentileofscore(all_scores, temp_c) / 100.0)
+                elif i_score == 'C':
+                    temp_c = max(temp_scores)
+                    scores.append(temp_c)
+                elif i_score == 'avgC':
+                    temp_c = np.mean(temp_scores)
+                    if not np.isnan(temp_c):
+                        scores.append(temp_c)
+                    else:
+                        scores.append(0.000)
+                elif i_score == 'medC':
+                    temp_c = np.median(temp_scores)
+                    if not np.isnan(temp_c):
+                        scores.append(temp_c)
+                    else:
+                        scores.append(0.000)
+            except:
+                scores.append(0.000)
+
+    return (c, scores)
+
+def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True, ncpus=1):
+
+    def print_time(s):
+        if s >= 60:
+            m = s / 60.0
+            s -= m * 60.0
+            if m >= 60.0:
+                h = m / 60.0
+                m -= h * 60.0
+                print("Matrix generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+            else:
+                print("Matrix generation took {:.0f} min {:.0f} s to finish.".format(m, s))
+        else:
+            print("Matrix generation took {:.0f} s to finish.".format(s))
+
+    print("Generating CANDO matrix...")
+    start = time.time()
+    pool = mp.Pool(ncpus)
+
+    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    lig_path = "{}/ligs/fps/".format(pre)
+    if out_file == '':
+        if percentile_cutoff != 0.0:
+            out_file = "{}/cmpd_0-{}-{}-{}-{}-{}-percentile{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
+        else:
+            out_file = "{}/cmpd_0-{}-{}-{}-{}-{}-c{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+    os.makedirs(out_path, exist_ok=True)
+
+    # Remove redundant ligands from full list
+    # Especially important for percentile calculations
+    if nr_ligs:
+        if not os.path.exists("{}/mappings/nr_ligs.csv".format(pre)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/nr_ligs.csv'
+            dl_file(url, '{}/mappings/nr_ligs.csv'.format(pre))
+        nr_ligs = pd.read_csv("{}/mappings/nr_ligs.csv".format(pre),header=None)
+    nr_ligs = nr_ligs[0].values.flatten()
+
+    # Download protein matrix if it does not exist
+    if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+        dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+    p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    
+    # Create dictionary of lists
+    # Keys == proteins
+    # Values == list of predicted bs + bs scores
+    p_dict = {}
+    for p in p_matrix.itertuples():
+        p_dict[p[0]] = list(zip(p[1].split(','),p[2].split(',')))
+
+    if i_score not in ['C','dC','P','CxP','dCxP','avgC','medC','avgP','medP']:
+        print("{} is not an applicable interaction score.".format(i_score))
+        return
+
+    nc = Chem.MolFromMolFile(cmpd_file)
+    nc = Chem.RemoveHs(nc)
+    name = nc.GetProp("_Name")
+
+    c_fps = {}
+    rad = int(int(fp[7:])/2)
+    if fp[3]=='f':
+        features = True
+    else:
+        features = False
+
+    if vect=='int':
+        c_fps[0] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
+    else:
+        bits = int(vect[:4])
+        c_fps[0] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(lig_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(lig_path,fp,vect))
+
+    # Load ligand fingerprint pickles
+    with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
+        l_fps = pickle.load(f)
+
+    c_list = list(c_fps.keys())
+
+    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
+    scores = {d[0]:d[1] for d in scores}
+
+    mat = pd.DataFrame.from_dict(scores)
+    mat.sort_index(axis=1,inplace=True)
+    mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
+   
+    mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
+    
+    pool.close
+    pool.join
+
+    end = time.time()
+    print("Matrix written to {}/{}.".format(out_path,out_file))
+    print_time(end-start) 
+
+
+
+def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):    
+    start = time.time()
+    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+ 
+    # List of new compounds loaded into df
+    ncs = pd.read_csv(cmpd_list, sep='\t', header=None)
+   
+    if v:
+        curr_v = v
+        t = curr_v.split('.')
+        t[-1] = str(int(t[-1])+1)
+        new_v = '.'.join(t)
+        
+        curr_cmpd_path = "{}/cmpds/fps-{}/".format(pre,curr_v)
+        if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,curr_v,fp,vect)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(curr_v,fp,vect)
+            dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,curr_v,fp,vect))
+        cmpd_path = "{}/cmpds/fps-{}/".format(pre,new_v)
+        os.makedirs(cmpd_path, exist_ok=True)
+        os.system("cp {0}/{2}-{3}_vect.pickle {1}/{2}-{3}_vect.pickle".format(curr_cmpd_path,cmpd_path,fp,vect))
+        
+        if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre,curr_v)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(curr_v)
+            dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,curr_v))
+        d_map = pd.read_csv("{}/mappings/drugbank-{}.tsv".format(pre,curr_v),sep='\t')
+        
+        if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre,curr_v)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(curr_v)
+            dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,curr_v))
+        os.system("cp {0}/mappings/drugbank2ctd-{1}.tsv {0}/mappings/drugbank2ctd-{2}.tsv".format(pre,curr_v,new_v))
+
+        if not os.path.exists("{}/cmpds/fps-{}/inchi_keys.pickle".format(pre,curr_v)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/inchi_keys.pickle'.format(curr_v)
+            dl_file(url, '{}/cmpds/fps-{}/inchi_keys.pickle'.format(pre,curr_v))
+  
+        with open('{}/inchi_keys.pickle'.format(curr_cmpd_path), 'rb') as f:
+            inchi_dict = pickle.load(f)
+        cmpd_num = len(inchi_dict)
+
+        for c in ncs.itertuples(index=False):
+            nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+            nc = Chem.RemoveHs(nc)
+            name = nc.GetProp("_Name")
+            inchi_key = Chem.MolToInchiKey(nc)
+            match = inchi_dict.get(inchi_key) or "NO_MATCH"
+            if match != "NO_MATCH":
+                print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
+                continue
+            
+            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+                inchi_dict[inchi_key] = cmpd_num
+                pickle.dump(inchi_dict, f)
+
+            rad = int(int(fp[7:])/2)
+            if fp[3]=='f':
+                features = True
+            else:
+                features = False
+
+            if vect=='int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            else:
+                bits = int(vect[:4])
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            cmpd_num += 1
+
+    else:
+        new_v = "v0.0"
+        print("Creating new version - {}".format(new_v))
+        cmpd_path = "{}/cmpds/fps-{}/".format(pre,new_v)
+        os.makedirs(cmpd_path, exist_ok=True)
+        d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
+        cmpd_num = 0
+        c_fps = {}
+        inchi_dict = {}
+        for c in ncs.itertuples(index=False):
+            nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+            nc = Chem.RemoveHs(nc)
+            name = nc.GetProp("_Name")
+            inchi_key = Chem.MolToInchiKey(nc)
+            match = inchi_dict.get(inchi_key) or "NO_MATCH"
+            if match != "NO_MATCH":
+                print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
+                continue
+            
+            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            
+            rad = int(fp[7:])/2
+            if fp[3]=='f':
+                features = True
+            else:
+                features = False
+
+            if vect=='int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            else:
+                bits = int(vect[:4])
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            cmpd_num += 1
+    d_map.to_csv("{}/mappings/drugbank-{}.tsv".format(pre,new_v),sep='\t',index=False,na_rep='NA')
 
 
 def cosine_dist(A):
@@ -4142,15 +4560,17 @@ def get_fp_lig(fp):
     @param fp str: Fingerprinting method used to compile each binding site ligand fingerprint
     """
     pre = os.path.dirname(__file__)
-    out_file = '{}/v2.0/ligands_fps/{}.tsv'.format(pre, fp)
+    out_file = '{}/v2.2+/ligs/{}.pickle'.format(pre, fp)
     if not os.path.exists(out_file):
         print('Downloading ligand fingerprints for {}...'.format(fp))
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/ligands_fps/{}.tsv'.format(fp)
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/{}.pickle'.format(fp)
         dl_file(url, out_file)
-        print("Ligand fingerprints downloaded.")
+        print("{} ligand fingerprints downloaded.".format(fp))
+    else:
+        print("{} ligand fingerprints have already been downloaded.".format(fp))
+        print("This file can be found at {}".format(out_file))
 
-
-def get_v2(matrix='nrpdb'):
+def get_data(v="v2.2", org='nrpdb'):
     """!
     Download CANDO v2.0 data.
 
@@ -4160,27 +4580,20 @@ def get_v2(matrix='nrpdb'):
         - Scores file for all approved compounds (fingerprint: rd_ecfp4)
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
-    print('Downloading data for v2...')
+    print('Downloading data for {}...'.format(v))
+    pre = os.path.dirname(__file__) + "/data/v2.2+/"
     # Dirs
-    if not os.path.exists('v2.0'):
-        os.mkdir('v2.0')
-    if not os.path.exists('v2.0/mappings'):
-        os.mkdir('v2.0/mappings')
-    if not os.path.exists('v2.0/matrices'):
-        os.mkdir('v2.0/matrices')
-    if not os.path.exists('v2.0/prots'):
-        os.mkdir('v2.0/prots')
-    if not os.path.exists('v2.0/cmpds/'):
-        os.mkdir('v2.0/cmpds')
-    if not os.path.exists('v2.0/cmpds/scores'):
-        os.mkdir('v2.0/cmpds/scores')
+    os.makedirs(pre, exist_ok=True)
+    os.makedirs('{}/mappings'.format(pre), exist_ok=True)
+    os.makedirs('{}/matrices'.format(pre), exist_ok=True)
+    os.makedirs('{}/prots'.format(pre), exist_ok=True)
+    os.makedirs('{}/cmpds'.format(pre), exist_ok=True)
     # Mappings
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-approved.tsv'
-    dl_file(url, 'v2.0/mappings/drugbank-approved.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-all.tsv'
-    dl_file(url, 'v2.0/mappings/drugbank-all.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/ctd_2_drugbank.tsv'
-    dl_file(url, 'v2.0/mappings/ctd_2_drugbank.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/data/mappings/drugbank-{}.tsv'.format(v)
+    dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,v))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
+    dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
+    '''
     # Matrices
     if matrix == 'all':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
@@ -4197,18 +4610,20 @@ def get_v2(matrix='nrpdb'):
     elif matrix == 'human':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
+    '''
     # Proteins
-    if matrix == 'all':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
-        dl_file(url, 'v2.0/prots/nrpdb.tsv')
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/human.tsv'
-        dl_file(url, 'v2.0/prots/human.tsv')
-    elif matrix == 'nrpdb':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/nrpdb.tsv'
-        dl_file(url, 'v2.0/prots/nrpdb.tsv')
-    elif matrix == 'human':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/prots/human.tsv'
-        dl_file(url, 'v2.0/prots/human.tsv')
+    if org == 'all':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb-coach.tsv'
+        dl_file(url, '{}/prots/nrpdb-coach.tsv'.format(pre))
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
+        dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
+    elif org == 'nrpdb':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb.tsv'
+        dl_file(url, '{}/prots/nrpdb-coach.tsv'.format(pre))
+    elif org == 'homo_sapien':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
+        dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
+    '''
     # Compounds
     if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
@@ -4217,7 +4632,7 @@ def get_v2(matrix='nrpdb'):
         os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
     print('All data for v2.0 downloaded.')
-
+    '''
 
 def get_tutorial():
     """!
@@ -4292,35 +4707,40 @@ def get_test():
         - Test Pathways set
     """
     print('Downloading data for test...')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpd_scores.tsv'
-    dl_file(url, 'test/test-cmpd_scores.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-prot_scores.tsv'
-    dl_file(url, 'test/test-prot_scores.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpds.tsv'
-    dl_file(url, 'test/test-cmpds.tsv')
-    with open('test/test-cmpds.tsv', 'r') as f:
+    pre = os.path.dirname(__file__) + "/data/v2.2+/test/"
+    os.makedirs(pre,exist_ok=True)
+    #url = 'http://protinfo.compbio.buffalo.edu/cando/data/test/test-cmpd_scores.tsv'
+    #dl_file(url, '{}/test-cmpd_scores.tsv'.format(pre))
+    #url = 'http://protinfo.compbio.buffalo.edu/cando/data/test/test-prot_scores.tsv'
+    #dl_file(url, '{}/test-prot_scores.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-cmpds.tsv'
+    dl_file(url, '{}/test-cmpds.tsv'.format(pre))
+    with open('{}/test-cmpds.tsv'.format(pre), 'r') as f:
         l = []
+        f.readline()
         for i in f:
             i = i.split('\t')[0]
-            i = "{}.pdb".format(i)
+            i = "{}.mol".format(i)
             l.append(i)
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-cmpds_pdb'
-    out = 'test/test-cmpds_pdb'
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-cmpds_mol'
+    out = '{}/test-cmpds_mol'.format(pre)
     dl_dir(url, out, l)
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-inds.tsv'
-    dl_file(url, 'test/test-inds.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/8100.pdb'
-    dl_file(url, 'test/8100.pdb')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-uniprot_set'
-    dl_file(url, 'test/test-uniprot_set')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/vina64x.fpt'
-    dl_file(url, 'test/vina64x.fpt')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/toy64x.fpt'
-    dl_file(url, 'test/toy64x.fpt')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-pathway-prot.tsv'
-    dl_file(url, 'test/test-pathway-prot.tsv')
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/test/test-pathway-mesh.tsv'
-    dl_file(url, 'test/test-pathway-mesh.tsv')
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-inds.tsv'
+    dl_file(url, '{}/test-inds.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-cmpds_mol/8100.mol'
+    dl_file(url, '{}/test-cmpds_mol/8100.mol'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-uniprot_set.tsv'
+    dl_file(url, '{}/test-uniprot_set.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/vina64x.fpt'
+    dl_file(url, '{}/vina64x.fpt'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/toy64x.fpt'
+    dl_file(url, '{}/toy64x.fpt'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-pathway-prot.tsv'
+    dl_file(url, '{}/test-pathway-prot.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-pathway-mesh.tsv'
+    dl_file(url, '{}/test-pathway-mesh.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-new_cmpds.tsv'
+    dl_file(url, '{}/test-new_cmpds.tsv'.format(pre))
     print('All test data downloaded.\n')
 
 
