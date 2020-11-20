@@ -4413,7 +4413,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
     
     end = time.time()
-    print("Matrix written to {}/{}.".format(out_path,out_file))
+    print("Signature written to {}/{}.".format(out_path,out_file))
     print_time(end-start) 
 
 
