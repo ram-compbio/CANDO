@@ -502,12 +502,12 @@ class CANDO(object):
             print('Done reading compound-compound associations.\n')
 
         if self.ddi_adrs:
-            print("Reading compound-compound adverse events associations...")
+            print("Reading compound pair-adverse events associations...")
             ddi = pd.read_csv(ddi_adrs,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
             idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
             idss = list(set(idss))
-            print(len(idss))
+            print("\t{} compound pair-adverse event associations.".format(len(idss)))
             # Iterate through list of CANDO ID tuples
             for ids in idss: 
                 if ids in self.compound_pair_ids:
@@ -535,7 +535,9 @@ class CANDO(object):
                     # Add comppund pair to ADR and vice versa
                     cm_p.add_adr(adr)
                     adr.compound_pairs.append(cm_p)
-            print('Done reading compound-compound adverse event associations.\n')
+            print("    {} compound pairs.".format(len(self.compound_pairs)))
+            print("    {} adverse events.".format(len(self.adrs)))
+            print('Done reading compound pair-adverse event associations.\n')
            
             '''
             for x in ddi.itertuples():
@@ -660,14 +662,12 @@ class CANDO(object):
                 #    distance_matrix = cosine_dist(snp)
                 #    distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
-                    '''
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
                             force_all_finite=False,
                             n_jobs=self.ncpus)
                     print("pairwise is done.")
                     distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
                     print("concat is done.")
-                    '''
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric,
                     #        force_all_finite=False,
                     #        n_jobs=self.ncpus)
@@ -675,14 +675,35 @@ class CANDO(object):
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
                     #distance_matrix = squareform(distance_matrix, checks=False)
                     #print("squareform is done.")
-                    
-                    for i in range(len(self.compound_pairs)):
+                   
+                    count = 1
+                    cp_ids = [i.id_ for i in self.compound_pairs]
+                    for cp in self.compound_pairs:
+                    #for i in range(len(self.compound_pairs)):
+                        #cp = self.compound_pairs[i]
                         #print(distance_matrix[i])
-                        print("{} of {}".format(i,len(self.compound_pairs)))
-                        dists = cdist([snp[i]], snp, dist_metric)[0]
-                        self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
+                        print("{} of {}".format(count,len(self.compound_pairs)))
+                        #dists = cdist([snp[i]], snp, dist_metric)[0]
+                        # Let us try dicts instead of list of tuples
+                        #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
+                        #del self.compound_pairs[i].similar[self.compound_pairs[i]]
+                        #self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar = list(zip(self.compound_pairs, distance_matrix[i]))
-                        self.compound_pairs[i].similar.pop(i)
+                        #self.compound_pairs[i].similar.pop(i)
+                        cp.similar = dict(zip(self.compound_pairs, distance_matrix[0]))
+                        distance_matrix = np.delete(distance_matrix, 0, 0)
+                        #cp.similar = dict(zip(cp_ids, distance_matrix[i]))
+                        # Remove self similar
+                        del cp.similar[cp]
+                        # Completed simialr calc
+                        cp.similar_computed = True
+                        
+                        # Sort similar
+                        #cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
+                        #cp.similar_sorted = True
+                        count+=1
+                    del distance_matrix
+                
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
                     exit()
@@ -706,13 +727,20 @@ class CANDO(object):
                 '''
                 print('Done computing {} distances.\n'.format(self.dist_metric))
  
-
-                # sort the RMSDs after saving (if desired)
+                # sort the dists after saving (if desired)
+                print('Sorting {} distances...'.format(self.dist_metric))
+                for cp in self.compound_pairs:
+                    cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
+                    #cp.similar = {k: v for k, v in sorted(cp.similar.items(), key=lambda item: item[1])} 
+                    cp.similar_sorted = True
+                print('Done sorting {} distances.\n'.format(self.dist_metric))
+                '''
                 for c in self.compound_pairs:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                     c.similar = sorted_scores
                     c.similar_computed = True
                     c.similar_sorted = True
+                '''
 
             else:
                 print('Computing {} distances...'.format(self.dist_metric))
@@ -2416,10 +2444,12 @@ class CANDO(object):
             exit()
         '''
         if not self.indication_proteins and not self.indication_pathways:
-            if not self.compound_pairs[0].similar_sorted and not associated:
+            if not self.compound_pairs[0].similar_sorted:
+            #if not self.compound_pairs[0].similar_sorted and not associated:
                 for cm_p in self.compound_pairs:
-                    sorted_scores = sorted(cm_p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                    cm_p.similar = sorted_scores
+                    cm_p.similar = {k: v for k, v in sorted(cm_p.similar.items(), key=lambda item: item[1])} 
+                    #sorted_scores = sorted(cm_p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    #cm_p.similar = sorted_scores
                     cm_p.similar_sorted = True
 
         if not os.path.exists('./results_analysed_named'):
@@ -2443,7 +2473,7 @@ class CANDO(object):
         def competitive_standard_bottom(sims, r):
             rank = 0
             for sim in sims:
-                if sim[1] > r:
+                if sims[sim] > r:
                     rank += 1.0
                 else:
                     return rank
@@ -2452,7 +2482,7 @@ class CANDO(object):
         def competitive_modified_bottom(sims, r):
             rank = 0
             for sim in sims:
-                if sim[1] >= r:
+                if sims[sim] >= r:
                     rank += 1.0
                 else:
                     return rank
@@ -2462,7 +2492,7 @@ class CANDO(object):
         def competitive_modified(sims, r):
             rank = 0
             for sim in sims:
-                if sim[1] <= r:
+                if sims[sim] <= r:
                     rank += 1.0
                 else:
                     return rank
@@ -2472,7 +2502,7 @@ class CANDO(object):
         def competitive_standard(sims, r):
             rank = 0
             for sim in sims:
-                if sim[1] < r:
+                if sims[sim] < r:
                     rank += 1.0
                 else:
                     return rank
@@ -2492,9 +2522,10 @@ class CANDO(object):
         def cont_metrics():
             all_v = []
             for c in self.compound_pairs:
-                for s in c.similar:
-                    if s[1] != 0.0:
-                        all_v.append(s[1])
+                for c_sim in c.similar:
+                    c_dist = c.similar[c_sim]
+                    if c_dist != 0.0:
+                        all_v.append(c_dist)
             avl = len(all_v)
             all_v_sort = sorted(all_v)
             # for tuple 10, have to add the '-1' for index out of range reasons
@@ -2583,37 +2614,36 @@ class CANDO(object):
             # use the proteins/pathways specified above
 
             for c in effect.compound_pairs:
-                for cs in c.similar:
+                for c_sim in c.similar:
+                    c_dist = c.similar[c_sim]
                     if adrs:
-                        if effect in cs[0].adrs:
-                            cs_rmsd = cs[1]
-                        else:
+                        if effect not in c_sim.adrs:
                             continue
                     else:
-                        if effect in cs[0].indications:
-                            cs_rmsd = cs[1]
-                        else:
+                        if effect not in c_sim.indications:
                             continue
 
                     value = 0.0
                     if continuous:
-                        value = cs_rmsd
+                        value = c_dist
                     elif bottom:
                         if ranking == 'modified':
-                            value = competitive_modified_bottom(c.similar, cs_rmsd)
+                            value = competitive_modified_bottom(c.similar, c_dist)
                         elif ranking == 'standard':
-                            value = competitive_standard_bottom(c.similar, cs_rmsd)
+                            value = competitive_standard_bottom(c.similar, c_dist)
                         elif ranking == 'ordinal':
-                            value = c.similar.index(cs)
+                            #value = c.similar.index(cs)
+                            value = list(c.similar).index(c_sim)
                         else:
                             print("Ranking function {} is incorrect.".format(ranking))
                             exit()
                     elif ranking == 'modified':
-                        value = competitive_modified(c.similar, cs_rmsd)
+                        value = competitive_modified(c.similar, c_dist)
                     elif ranking == 'standard':
-                        value = competitive_standard(c.similar, cs_rmsd)
+                        value = competitive_standard(c.similar, c_dist)
                     elif ranking == 'ordinal':
-                        value = c.similar.index(cs)
+                        #value = c.similar.index(cs)
+                        value = list(c.similar).index(c_sim)
                     else:
                         print("Ranking function {} is incorrect.".format(ranking))
                         exit()
@@ -4618,7 +4648,7 @@ def get_data(v="v2.2", org='nrpdb'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
         dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
     elif org == 'nrpdb':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb.tsv'
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb-coach.tsv'
         dl_file(url, '{}/prots/nrpdb-coach.tsv'.format(pre))
     elif org == 'homo_sapien':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
