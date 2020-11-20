@@ -506,8 +506,8 @@ class CANDO(object):
             ddi = pd.read_csv(ddi_adrs,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
             idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
+            print("    {} compound pair-adverse event associations.".format(len(idss)))
             idss = list(set(idss))
-            print("\t{} compound pair-adverse event associations.".format(len(idss)))
             # Iterate through list of CANDO ID tuples
             for ids in idss: 
                 if ids in self.compound_pair_ids:
@@ -647,7 +647,9 @@ class CANDO(object):
                 print('Computing distances using global pathway signatures...')
                 for c in self.compounds:
                     self.generate_similar_sigs(c, aux=True)
-            
+           
+            # Still cleaning this code up.
+            # Memory issues with full Twosides is a huge limitation
             elif ddi_adrs:
                 print('Computing {} distances for compound pairs...'.format(self.dist_metric))
                 # put all compound_pair signatures into 2D-array
@@ -666,8 +668,10 @@ class CANDO(object):
                             force_all_finite=False,
                             n_jobs=self.ncpus)
                     print("pairwise is done.")
-                    distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
-                    print("concat is done.")
+                    
+                    #distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
+                    #print("concat is done.")
+                    
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric,
                     #        force_all_finite=False,
                     #        n_jobs=self.ncpus)
@@ -676,13 +680,15 @@ class CANDO(object):
                     #distance_matrix = squareform(distance_matrix, checks=False)
                     #print("squareform is done.")
                    
-                    count = 1
-                    cp_ids = [i.id_ for i in self.compound_pairs]
-                    for cp in self.compound_pairs:
+                    i = 0
+                    #cp_ids = [i.id_ for i in self.compound_pairs]
+                    #for cp in self.compound_pairs:
                     #for i in range(len(self.compound_pairs)):
-                        #cp = self.compound_pairs[i]
+                    for x in distance_matrix:
+                        for y in x:
+                            cp = self.compound_pairs[i]
                         #print(distance_matrix[i])
-                        print("{} of {}".format(count,len(self.compound_pairs)))
+                            print("{} of {}".format(i+1,len(self.compound_pairs)))
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         # Let us try dicts instead of list of tuples
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
@@ -690,19 +696,19 @@ class CANDO(object):
                         #self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar = list(zip(self.compound_pairs, distance_matrix[i]))
                         #self.compound_pairs[i].similar.pop(i)
-                        cp.similar = dict(zip(self.compound_pairs, distance_matrix[0]))
-                        distance_matrix = np.delete(distance_matrix, 0, 0)
+                            cp.similar = dict(zip(self.compound_pairs, y))
+                            #distance_matrix = np.delete(distance_matrix, 0, 0)
                         #cp.similar = dict(zip(cp_ids, distance_matrix[i]))
                         # Remove self similar
-                        del cp.similar[cp]
+                            del cp.similar[cp]
                         # Completed simialr calc
-                        cp.similar_computed = True
-                        
+                            cp.similar_computed = True
+                    
                         # Sort similar
                         #cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
                         #cp.similar_sorted = True
-                        count+=1
-                    del distance_matrix
+                            i+=1
+                    #del distance_matrix
                 
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
@@ -729,10 +735,13 @@ class CANDO(object):
  
                 # sort the dists after saving (if desired)
                 print('Sorting {} distances...'.format(self.dist_metric))
+                i = 1
                 for cp in self.compound_pairs:
+                    print("{} of {}".format(i,len(self.compound_pairs)))
                     cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
                     #cp.similar = {k: v for k, v in sorted(cp.similar.items(), key=lambda item: item[1])} 
                     cp.similar_sorted = True
+                    i+=1
                 print('Done sorting {} distances.\n'.format(self.dist_metric))
                 '''
                 for c in self.compound_pairs:
@@ -4315,7 +4324,7 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
 
     return (c, scores)
 
-def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True, ncpus=1):
+def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True):
 
     def print_time(s):
         if s >= 60:
@@ -4324,15 +4333,14 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
             if m >= 60.0:
                 h = m / 60.0
                 m -= h * 60.0
-                print("Matrix generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+                print("Signature generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
             else:
-                print("Matrix generation took {:.0f} min {:.0f} s to finish.".format(m, s))
+                print("Signature generation took {:.0f} min {:.0f} s to finish.".format(m, s))
         else:
-            print("Matrix generation took {:.0f} s to finish.".format(s))
+            print("signature generation took {:.0f} s to finish.".format(s))
 
-    print("Generating CANDO matrix...")
+    print("Generating CANDO signature...")
     start = time.time()
-    pool = mp.Pool(ncpus)
 
     pre = os.path.dirname(__file__) + "/data/v2.2+/"
     lig_path = "{}/ligs/fps/".format(pre)
@@ -4394,10 +4402,9 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pickle.load(f)
 
-    c_list = list(c_fps.keys())
-
-    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
-    scores = {d[0]:d[1] for d in scores}
+    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs)
+    #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
+    scores = {scores[0]:scores[1]}
 
     mat = pd.DataFrame.from_dict(scores)
     mat.sort_index(axis=1,inplace=True)
@@ -4405,9 +4412,6 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
    
     mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
     
-    pool.close
-    pool.join
-
     end = time.time()
     print("Matrix written to {}/{}.".format(out_path,out_file))
     print_time(end-start) 
