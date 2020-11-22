@@ -4467,11 +4467,11 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
                 continue
             
-            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
             with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
-
+           
+            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
             rad = int(int(fp[7:])/2)
             if fp[3]=='f':
                 features = True
@@ -4500,8 +4500,20 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
         os.makedirs(cmpd_path, exist_ok=True)
         d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
         cmpd_num = 0
+        # Create new fingerprint dict and save it to pickle for future use
         c_fps = {}
+        bits = int(vect[:4])
+        if vect=='int':
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                pickle.dump(c_fps, f)
+        else:
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                pickle.dump(c_fps, f)
+        # Create new inchi dict
         inchi_dict = {}
+        with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+            pickle.dump(inchi_dict, f)
+
         for c in ncs.itertuples(index=False):
             nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
             nc = Chem.RemoveHs(nc)
@@ -4512,6 +4524,10 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
                 continue
             
+            with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+                inchi_dict[inchi_key] = cmpd_num
+                pickle.dump(inchi_dict, f)
+           
             d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
             
             rad = int(fp[7:])/2
@@ -4527,7 +4543,6 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             else:
-                bits = int(vect[:4])
                 with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
                     c_fps = pickle.load(f)
                 c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
