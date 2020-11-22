@@ -4421,15 +4421,20 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):    
     start = time.time()
     pre = os.path.dirname(__file__) + "/data/v2.2+/"
- 
     # List of new compounds loaded into df
     ncs = pd.read_csv(cmpd_list, sep='\t', header=None)
-   
-    if v:
+  
+    vs = ['v2.2','v2.3','v2.4','v2.5','test.0']
+    if v in vs:
+        # Redundant with future lines. 
+        # Remove future lines and implement them into get_data()
+        #get_data(v=v, org=None)
         curr_v = v
+        print("Adding new compounds to compound library {}...".format(curr_v))
         t = curr_v.split('.')
         t[-1] = str(int(t[-1])+1)
         new_v = '.'.join(t)
+        print("New compound library is {}.".format(new_v))
         
         curr_cmpd_path = "{}/cmpds/fps-{}/".format(pre,curr_v)
         if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,curr_v,fp,vect)):
@@ -4442,6 +4447,7 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
         if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre,curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(curr_v)
             dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,curr_v))
+        
         d_map = pd.read_csv("{}/mappings/drugbank-{}.tsv".format(pre,curr_v),sep='\t')
         
         if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre,curr_v)):
@@ -4462,10 +4468,15 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
             nc = Chem.RemoveHs(nc)
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
-            match = inchi_dict.get(inchi_key) or "NO_MATCH"
-            if match != "NO_MATCH":
-                print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
+            try:
+                match = str(inchi_dict[inchi_key])
+            except:
+                match = None
+            if match:
+                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
                 continue
+            else:
+                print("    Adding compound {} - {}".format(cmpd_num,name))
             
             with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
                 inchi_dict[inchi_key] = cmpd_num
@@ -4493,36 +4504,39 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                     pickle.dump(c_fps, f)
             cmpd_num += 1
 
-    else:
+    elif not v:
         new_v = "v0.0"
-        print("Creating new version - {}".format(new_v))
+        print("Creating new compound library {}...".format(new_v))
         cmpd_path = "{}/cmpds/fps-{}/".format(pre,new_v)
         os.makedirs(cmpd_path, exist_ok=True)
         d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
         cmpd_num = 0
         # Create new fingerprint dict and save it to pickle for future use
         c_fps = {}
-        bits = int(vect[:4])
         if vect=='int':
             with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                 pickle.dump(c_fps, f)
         else:
+            bits = int(vect[:4])
             with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                 pickle.dump(c_fps, f)
         # Create new inchi dict
         inchi_dict = {}
-        with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
-            pickle.dump(inchi_dict, f)
 
         for c in ncs.itertuples(index=False):
             nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
             nc = Chem.RemoveHs(nc)
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
-            match = inchi_dict.get(inchi_key) or "NO_MATCH"
-            if match != "NO_MATCH":
-                print("{} is the same as {} - {} in the library".format(name,d_map['GENERIC_NAME'][match], match))
+            try:
+                match = str(inchi_dict[inchi_key])
+            except:
+                match = None
+            if match:
+                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
                 continue
+            else:
+                print("    Adding compound {} - {}".format(cmpd_num,name))
             
             with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
                 inchi_dict[inchi_key] = cmpd_num
@@ -4530,7 +4544,7 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
            
             d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
             
-            rad = int(fp[7:])/2
+            rad = int(int(fp[7:])/2)
             if fp[3]=='f':
                 features = True
             else:
@@ -4549,7 +4563,10 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
+    
     d_map.to_csv("{}/mappings/drugbank-{}.tsv".format(pre,new_v),sep='\t',index=False,na_rep='NA')
+    print("Added compounds to compound library {}.\n".format(new_v))
+    # Need to add functionality to handle loading a new version created by user.
 
 
 def cosine_dist(A):
