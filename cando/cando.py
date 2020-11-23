@@ -4464,8 +4464,12 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
         cmpd_num = len(inchi_dict)
 
         for c in ncs.itertuples(index=False):
-            nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
-            nc = Chem.RemoveHs(nc)
+            try:
+                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                nc = Chem.RemoveHs(nc)
+            except:
+                print("{} cannot load this molecule.".format(c[0]))
+                continue
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
             try:
@@ -4524,8 +4528,12 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
         inchi_dict = {}
 
         for c in ncs.itertuples(index=False):
-            nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
-            nc = Chem.RemoveHs(nc)
+            try:
+                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                nc = Chem.RemoveHs(nc)
+            except:
+                print("{} cannot load this molecule.".format(c[0]))
+                continue
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
             try:
