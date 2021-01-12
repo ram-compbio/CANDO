@@ -23,6 +23,7 @@ ncpus = 3
 print("Test #1 - generate a toy matrix")
 print('-------')
 cnd.generate_matrix(v="test.0", org="test", out_file=matrix_file, ncpus=ncpus)
+cnd.generate_matrix(v="test.0", org="test", out_file="test-matrix_names.tsv", lig_name=True, ncpus=ncpus)
 print('\n')
 
 print("Test #2 - create CANDO object and run canbenchmark test")

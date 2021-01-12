@@ -4138,7 +4138,11 @@ def score_fp(fp, cmpd_file, cmpd_id, bs):
     return {cmpd_id: l}
 '''
 
-def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True, ncpus=1):
+def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", 
+        dist="dice", org="nrpdb", bs="coach", 
+        c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
+        i_score="P", out_file='', out_path=".", 
+        nr_ligs=True, lig_name=False, ncpus=1):
 
     def print_time(s):
         if s >= 60:
@@ -4209,7 +4213,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
 
     c_list = list(c_fps.keys())
 
-    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
+    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]).get()
     scores = {d[0]:d[1] for d in scores}
 
     mat = pd.DataFrame.from_dict(scores)
@@ -4226,7 +4230,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     print_time(end-start) 
 
 
-def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[]):
+def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[],lig_name=False):
     if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
         if dist == 'dice':
             all_scores = DataStructs.BulkDiceSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
@@ -4259,18 +4263,27 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
 
                 if i_score == 'dCxP':
                     temp_c = max(temp_scores, key = lambda i:i[1])
-                    c_score = stats.percentileofscore(all_scores,temp_c[1])/100.0
-                    p_score = li_score[li_bs.index(temp_c[0])]
-                    scores.append(float(c_score) * float(p_score))
+                    if not lig_name:
+                        c_score = stats.percentileofscore(all_scores,temp_c[1])/100.0
+                        p_score = li_score[li_bs.index(temp_c[0])]
+                        scores.append(float(c_score) * float(p_score))
+                    else:
+                        scores.append(temp_c[0])
                 elif i_score == 'CxP':
                     temp_c = max(temp_scores, key = lambda i:i[1])
-                    c_score = temp_c[1]
-                    p_score = li_score[li_bs.index(temp_c[0])]
-                    scores.append(float(c_score) * float(p_score))
+                    if not lig_name:
+                        c_score = temp_c[1]
+                        p_score = li_score[li_bs.index(temp_c[0])]
+                        scores.append(float(c_score) * float(p_score))
+                    else:
+                        scores.append(temp_c[0])
                 elif i_score == 'P':
                     temp_c = max(temp_scores, key = lambda i:i[1])
-                    p_score = li_score[li_bs.index(temp_c[0])]
-                    scores.append(float(p_score))
+                    if not lig_name:
+                        p_score = li_score[li_bs.index(temp_c[0])]
+                        scores.append(float(p_score))
+                    else:
+                        scores.append(temp_c[0])
                 elif i_score == 'avgP':
                     # Will produce a warning when li_score is empty
                     # temp_p will then == nan, so we check for that
@@ -4287,7 +4300,10 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                     else:
                         scores.append(0.000)
             except:
-                scores.append(0.000)
+                if not lig_name:
+                    scores.append(0.000)
+                else:
+                    scores.append("None")
         # Cscore
         elif i_score in ['dC','C','avgC','medC']:
             try:
@@ -4303,10 +4319,16 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
 
                 if i_score == 'dC':
                     temp_c = max(temp_scores)
-                    scores.append(stats.percentileofscore(all_scores, temp_c) / 100.0)
+                    if not lig_name:
+                        scores.append(stats.percentileofscore(all_scores, temp_c) / 100.0)
+                    else:
+                        scores.append(li_bs[li_score.index(temp_c)])
                 elif i_score == 'C':
                     temp_c = max(temp_scores)
-                    scores.append(temp_c)
+                    if not lig_name:
+                        scores.append(temp_c)
+                    else:
+                        scores.append(li_bs[li_score.index(temp_c)])
                 elif i_score == 'avgC':
                     temp_c = np.mean(temp_scores)
                     if not np.isnan(temp_c):
@@ -4320,7 +4342,10 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                     else:
                         scores.append(0.000)
             except:
-                scores.append(0.000)
+                if not lig_name:
+                    scores.append(0.000)
+                else:
+                    scores.append("None")
 
     return (c, scores)
 
