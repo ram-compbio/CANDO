@@ -4688,7 +4688,7 @@ def get_data(v="v2.2", org='nrpdb'):
     os.makedirs('{}/prots'.format(pre), exist_ok=True)
     os.makedirs('{}/cmpds'.format(pre), exist_ok=True)
     # Mappings
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/data/mappings/drugbank-{}.tsv'.format(v)
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,v))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
