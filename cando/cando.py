@@ -664,11 +664,21 @@ class CANDO(object):
                 #    distance_matrix = cosine_dist(snp)
                 #    distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+                    for i in range(len(self.compound_pairs)):
+                        print("{} of {}".format(i+1,len(self.compound_pairs)))
+                        dists = cdist([snp[i]], snp, dist_metric)[0]
+                        self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
+                        self.compound_pairs[i].similar.pop(i)
+                        self.compound_pairs[i].similar_computed = True
+                    
+
+
+                    '''
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
                             force_all_finite=False,
                             n_jobs=self.ncpus)
                     print("pairwise is done.")
-                    
+                    '''
                     #distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
                     #print("concat is done.")
                     
@@ -680,15 +690,22 @@ class CANDO(object):
                     #distance_matrix = squareform(distance_matrix, checks=False)
                     #print("squareform is done.")
                    
-                    i = 0
+                    #i = 0
                     #cp_ids = [i.id_ for i in self.compound_pairs]
                     #for cp in self.compound_pairs:
                     #for i in range(len(self.compound_pairs)):
+                    '''
                     for x in distance_matrix:
                         for y in x:
                             cp = self.compound_pairs[i]
-                        #print(distance_matrix[i])
                             print("{} of {}".format(i+1,len(self.compound_pairs)))
+                            cp.similar = dict(zip(self.compound_pairs, y))
+                            # Remove self similar
+                            del cp.similar[cp]
+                            # Completed simialr calc
+                            cp.similar_computed = True
+                    '''
+                        #print(distance_matrix[i])
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         # Let us try dicts instead of list of tuples
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
@@ -696,18 +713,13 @@ class CANDO(object):
                         #self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar = list(zip(self.compound_pairs, distance_matrix[i]))
                         #self.compound_pairs[i].similar.pop(i)
-                            cp.similar = dict(zip(self.compound_pairs, y))
                             #distance_matrix = np.delete(distance_matrix, 0, 0)
                         #cp.similar = dict(zip(cp_ids, distance_matrix[i]))
-                        # Remove self similar
-                            del cp.similar[cp]
-                        # Completed simialr calc
-                            cp.similar_computed = True
-                    
+                   
                         # Sort similar
                         #cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
                         #cp.similar_sorted = True
-                            i+=1
+                            #i+=1
                     #del distance_matrix
                 
                 else:
@@ -3516,7 +3528,6 @@ class CANDO(object):
 
         print("New compound is " + cmpd.name)
         print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
-        return cmpd
 
     def sigs(self, rm):
         """!
@@ -3816,333 +3827,12 @@ class Matrix(object):
             for p in range(len(self.proteins)):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
-'''
-def generate_matrix(cmpd_scores, prot_scores, c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
-                    interaction_score='P', c_set='nr', matrix_file='cando_interaction_matrix.tsv', ncpus=1):
-    """!
-    Generate a CANDO Matrix 
-
-    @param cmpd_scores str: File path to tab-separated scores for all Compounds
-    @param prot_scores str: File path to tab-separated scores for all Proteins
-    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
-    Default = 0.0
-    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
-    Default = 0.0
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
-    will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular
-    size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
-    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC',
-    'P', 'CxP', 'dCxP').
-    @param c_set str: 'all' uses all 158k ligands from COACH whereas 'nr' uses a subset of 30k non-redundant ligands
-    @param matrix_file str: File path to where the generated Matrix will be written Default =
-    'cando_interaction_matrix.tsv'
-    @param ncpus int: Number of cpus to use for parallelization. Default = 1
-    """
-    def print_time(s):
-        if s >= 60:
-            m = s / 60.0
-            s -= m * 60.0
-            if m >= 60.0:
-                h = m / 60.0
-                m -= h * 60.0
-                print("Matrix generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
-            else:
-                print("Matrix generation took {:.0f} min {:.0f} s to finish.".format(m, s))
-        else:
-            print("Matrix generation took {:.0f} s to finish.".format(s))
-
-    # Check for correct interaction scoring metric
-    if interaction_score not in ['P','C','CxP','dC','dCxP']:
-        print("{} is an incorrect interaction score. Exiting.".format(interaction_score))
-        exit()
-
-    if percentile_cutoff:
-        percentile_cutoff = float(percentile_cutoff)
-        if 'dC' not in interaction_score:
-            print('Percentile score not used for chosen scoring protocol, skipping the percentile calculation.')
-    else:
-        if 'dC' in interaction_score:
-            print('No percentile cutoff inputted, defaulting to 0.0.')
-            percentile_cutoff = 0.0
-
-    start = time.time()
-
-    c_cutoff = float(c_cutoff)
-    p_cutoff = float(p_cutoff)
-        
-    print("Compiling compound scores...")
-    c_scores = pd.read_csv(cmpd_scores, sep='\t', index_col=0)
-
-    print("Compiling binding site scores...")
-    p_scores = pd.read_csv(prot_scores, sep='\t', index_col=0, header=None)
-
-    print("Calculating interaction scores...")
-    pool = mp.Pool(ncpus)
-    scores_temp = pool.starmap_async(get_scores,
-                                     [(int(c), p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff,
-                                       percentile_cutoff, interaction_score, c_set) for c in c_scores.columns]).get()
-    pool.close()
-    scores = pd.DataFrame(index=range(len(p_scores.index)))
-    print("Generating matrix...")
-    for i in scores_temp:
-        scores = scores.join(pd.DataFrame(i))
-    scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
-    scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
-
-    end = time.time()
-    print("Matrix written to {}.".format(matrix_file))
-    print_time(end-start)
-
-
-def generate_scores(fp="rd_ecfp4", cmpd_pdb='', out_path='.'):
-    """!
-    Generate the fingerprint for a new compound and calculate the Tanimoto
-    similarities against all binding site ligands.
-    
-    @param fp str: The fingerprinting software and method used, e.g. 'rd_ecfp4', 'ob_fp2'
-    @param cmpd_pdb str: File path to the PDB
-    @param out_path str: Path to where the scores file will be written
-    """
-    fp_name = fp
-    fp = fp.split("_")
-    # Check for correct fingerprinting method
-    if fp[0] not in ['rd', 'ob']:
-        print("{} is not a correct fingerprinting method.".format(fp_name))
-    else: 
-        if fp[0] == 'ob' and fp[1] not in ['fp4', 'fp2']:
-            print("{} is not a correct fingerprinting method.".format(fp_name))
-        elif fp[0] == 'rd' and fp[1] not in ['daylight', 'ecfp4']:
-            print("{} is not a correct fingerprinting method.".format(fp_name))
-
-    # Pull and read in fingerprints for ligands
-    get_fp_lig(fp_name)
-    pre = os.path.dirname(__file__)
-    bs = pd.read_csv("{}/v2.0/ligands_fps/{}.tsv".format(pre, fp_name), sep='\t', header=None, index_col=0)
-    bs = bs.replace(np.nan, '', regex=True)
-    sites = bs.index
-    print("Generating {} fingerprints and scores...".format('_'.join(fp)))
-    if cmpd_pdb != '':
-        cmpd_name = cmpd_pdb.split('/')[-1].split('.')[0]
-        try:
-            cmpd_id = int(cmpd_name)
-        except ValueError:
-            cmpd_id = 10000
-        out_name = "{}_scores.tsv".format(cmpd_id)
-        scores = [score_fp(fp, cmpd_pdb, cmpd_id, bs)]
-    else:
-        print("cmpd_pdb is empty. Need a PDB file.")
-        return
-    cmpd_scores = pd.DataFrame(index=sites)
-    cmpd_scores = cmpd_scores.T
-    for i in scores:
-        for key, value in i.items():
-            temp = pd.DataFrame({key: value}, index=sites)
-            cmpd_scores = cmpd_scores.append(temp.T)
-    cmpd_scores = cmpd_scores.T
-
-    if not os.path.exists('{}/{}'.format(out_path, fp_name)):
-        os.makedirs('{}/{}'.format(out_path, fp_name))
-
-    cmpd_scores.to_csv('{}/{}/{}'.format(out_path, fp_name, out_name), index=True,
-                       header=True, sep='\t', float_format='%.3f')
-    print("Tanimoto scores written to {}/{}/{}\n".format(out_path, fp_name, out_name))
-
-
-def generate_signature(cmpd_scores='', prot_scores='', c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=None,
-                       interaction_score='P', c_set='nr', matrix_file=''):
-    """!
-    Generate signature - NOTE: if parameters do not match input matrix parameters when adding a new compound, this
-    signature will not be comparable.
-
-    @param cmpd_scores str: File path to tab-separated scores for all Compounds
-    @param prot_scores str: File path to tab-separated scores for all Proteins
-    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
-    Default = 0.0
-    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
-    Default = 0.0
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
-    will be defined (0.0-100.0 or None). This makes the hard c_cutoff variable for each Compound to avoid molecular
-    size bias due to fingerprinting. This overwrites the use of c_cutoff. Default = None
-    @param interaction_score: The scoring function for the interaction between each Compound-Protein pair. ('C', 'dC',
-    'P', 'CxP', 'dCxP').
-    @param c_set str: 'all' uses all 158k ligands from COACH whereas 'nr' uses a subset of 30k non-redundant ligands
-    @param matrix_file str: File path to where the generated Compounds signature will be written
-    """
-    def print_time(s):
-        if s >= 60:
-            m = s / 60.0
-            s -= m * 60.0
-            if m >= 60.0:
-                h = m / 60.0
-                m -= h * 60.0
-                print("Signature generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
-            else:
-                print("Signature generation took {:.0f} min {:.0f} s to finish.".format(m, s))
-        else:
-            print("Signature generation took {:.0f} s to finish.".format(s))
-
-    if matrix_file == '':
-        matrix_file = "{}_signature.tsv".format(cmpd_scores.split('/')[-1].split('.')[0].split('_')[0])
-    start = time.time()
-    
-    print("Compiling compound scores...")
-    c_scores = pd.read_csv(cmpd_scores, sep='\t', index_col=0)
-    
-    print("Compiling binding site scores...")
-    p_scores = pd.read_csv(prot_scores, sep='\t', index_col=0, header=None)
-
-    print("Generating interaction signature...")
-    print(c_scores.columns[0])
-    c = c_scores.columns[0]
-    scores_temp = get_scores(c, p_scores, c_scores.loc[:, c], c_cutoff, p_cutoff,
-                             percentile_cutoff, interaction_score, c_set)
-    scores = pd.DataFrame(scores_temp)
-    scores.rename(index=dict(zip(range(len(p_scores.index)), p_scores.index)), inplace=True)
-    scores.to_csv(matrix_file, sep='\t', header=None, float_format='%.3f')
-
-    end = time.time()
-    print("Signature written to {}.".format(matrix_file))
-    print_time(end-start)
-
-
-def get_scores(c, p_scores, c_score, c_cutoff, p_cutoff, percentile_cutoff, i_score, c_set='nr'):
-    """!
-    Get best score for each Compound-Protein interaction
-
-    @param c: int Compound id
-    @param p_scores: DataFrame of all Protein ligands and corresponding scores
-    @param c_score: DataFrame of all Compound-ligand scores
-    @param c_cutoff: Any Cscores below this value will not be considered for the interaction score. (0.0-1.0).
-    @param p_cutoff: Any Pscores below this value will not be considered for the interaction score. (0.0-1.0).
-    @param percentile_cutoff: Percentile of all Compound-ligand Cscores for each Compound by which the Cscore cutoff
-    will be defined (0.0-100.0). This makes the hard c_cutoff variable for each Compound to avoid molecular size bias
-    due to fingerprinting. This overwrites the use of c_cutoff.
-    @param i_score: The scoring function for the interaction between each Compound-Protein pair. (C, dC, P, CxP, dCxP).
-    @param c_set: 'all' uses all ligands from COACH whereas 'nr' uses a subset of 30.8k non-redundant ligands
-    """
-    # percentile cutoff only affects Cscore
-    if percentile_cutoff:
-        if i_score in ['dC', 'dCxP']:
-            if c_set == 'all':
-                all_c_scores = [c_score[i] for i in c_score.index]
-                c_cutoff = np.percentile(all_c_scores, percentile_cutoff)
-            elif c_set == 'nr':
-                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/nr_ligand_set_v2.txt'
-                dl_file(url, 'v2.0/mappings/nr_ligand_set_v2.txt')
-                lig_is = list(map(str.strip, open('v2.0/mappings/nr_ligand_set_v2.txt', 'r').readlines()))
-                all_c_scores = [c_score[i] for i in lig_is]
-                c_cutoff = np.percentile(all_c_scores, percentile_cutoff)
-            else:
-                print("Please choose a proper ligand set ('all' or 'nr') -- quitting.")
-                quit()
-
-    l = []
-    for pdb in p_scores.index:
-        temp_cscore = 0.000
-        temp_pscore = 0.000
-        all_p_scores = list(zip(str(p_scores[1][pdb]).split(","), str(p_scores[2][pdb]).split(",")))
-        for p,p_score in all_p_scores:
-            if float(p_score) < p_cutoff:
-                continue
-            try:
-                if temp_cscore < float(c_score[p]) and float(c_score[p]) >= c_cutoff:
-                    temp_cscore = float(c_score[p])
-                    temp_pscore = float(p_score)
-            except KeyError:
-                continue
-
-        if i_score == 'C':
-            l.append(temp_cscore)
-        elif i_score == 'P':
-            l.append(temp_pscore)
-        elif i_score == 'dC':
-            l.append(stats.percentileofscore(all_c_scores, temp_cscore)/100.0)
-        elif i_score == 'CxP':
-            l.append(temp_cscore*temp_pscore)
-        elif i_score == 'dCxP':
-            l.append(stats.percentileofscore(all_c_scores, temp_cscore)/100.0 * temp_pscore)
-
-    return {c: l}
-
-
-def score_fp(fp, cmpd_file, cmpd_id, bs):
-    """!
-    Generate the scores for a given Compound against all Protein ligands.
-
-    @param fp str: Fingerprinting software and method used, e.g., rd_ecfp4
-    @param cmpd_file str: File path to PDB
-    @param cmpd_id int: Number correspodning to the new Compound id
-    @param bs df: DataFrame of all protein ligand fingerprints for the given fingerprinting method (fp)
-    """
-    l = []
-    # Use RDkit
-    if fp[0] == 'rd':
-        try:
-            cmpd = Chem.MolFromPDBFile(cmpd_file)
-            # ECFP4 - extended connectivity fingerprint
-            if fp[1] == 'ecfp4':
-                cmpd_fp = AllChem.GetMorganFingerprintAsBitVect(cmpd, 2, nBits=1024)
-            # Daylight
-            elif fp[1] == 'daylight':
-                cmpd_fp = rdmolops.RDKFingerprint(cmpd)
-            else:
-                l.append(0.000)
-            bit_fp = DataStructs.BitVectToText(cmpd_fp)
-        except:
-            print ("Reading Exception: ", cmpd_id)
-            for pdb in bs.index:
-                l.append(0.000)
-            return {cmpd_id: l}
-        print("Calculating tanimoto scores for compound {} against all binding site ligands...".format(cmpd_id))
-        for pdb in bs.index:
-            if bs.loc[pdb][1] == '':
-                l.append(0.000)
-                continue
-            try:
-                # Tanimoto similarity
-                score = tanimoto_sparse(bit_fp, str(bs.loc[pdb][1]))
-                l.append(score)
-            except:
-                l.append(0.000)
-                continue
-    # Use OpenBabel
-    elif fp[0] == 'ob':
-        try:
-            cmpd = next(pybel.readfile("pdb", cmpd_file))
-            # FP2 - Daylight
-            if fp[1] == 'fp2':
-                cmpd_fp = cmpd.calcfp('fp2')
-            # FP4 - SMARTS
-            elif fp[1] == 'fp4':
-                cmpd_fp = cmpd.calcfp('fp4')
-        except:
-            for pdb in bs.index:
-                l.append(0.000)
-            return {cmpd_id: l}
-
-        bit_fp = cmpd_fp.bits
-        print("Calculating tanimoto scores for {} against all binding site ligands...".format(cmpd_id))
-        for pdb in bs.index:
-            if bs.loc[pdb][1] == '':
-                l.append(0.000)
-                continue
-            bs_fp = bs.loc[pdb][1].split(',')
-            bs_fp = [int(bs_fp[x]) for x in range(len(bs_fp))]
-            try:
-                # Tanimoto similarity
-                score = tanimoto_dense(bit_fp, bs_fp)
-                l.append(score)
-            except:
-                l.append(0.000)
-                continue
-    return {cmpd_id: l}
-'''
-
 def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", 
         dist="dice", org="nrpdb", bs="coach", 
         c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
         i_score="P", out_file='', out_path=".", 
-        nr_ligs=True, lig_name=False, ncpus=1):
+        nr_ligs=True, approved_only=False, lig_name=False, 
+        lib_path='',ncpus=1):
 
     def print_time(s):
         if s >= 60:
@@ -4159,16 +3849,32 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
 
     print("Generating CANDO matrix...")
     start = time.time()
-    pool = mp.Pool(ncpus)
 
     pre = os.path.dirname(__file__) + "/data/v2.2+/"
-    cmpd_path = "{}/cmpds/fps-{}/".format(pre,v)
-    lig_path = "{}/ligs/fps/".format(pre)
+    lig_path = "{}/ligs/fps".format(pre)
+    if not lib_path:
+        cmpd_path = "{}/cmpds/fps-{}".format(pre,v)
+        map_path = "{}/mappings".format(pre)
+    else:
+        cmpd_path = "{0}/{1}/cmpds/fps-{1}".format(lib_path,v)
+        map_path = "{0}/{1}/mappings".format(lib_path,v)
+
     if out_file == '':
         if percentile_cutoff != 0.0:
-            out_file = "{}/{}-{}-{}-{}-{}-percentile{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
+            if approved_only:
+                out_file = "{}-{}-{}-{}-{}-percentile{}-p{}-{}-approved.tsv".format(fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
+            else:
+                out_file = "{}-{}-{}-{}-{}-percentile{}-p{}-{}.tsv".format(fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
         else:
-            out_file = "{}/{}-{}-{}-{}-{}-c{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+            if approved_only:
+                out_file = "{}-{}-{}-{}-{}-c{}-p{}-{}-approved.tsv".format(fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+            else:
+                out_file = "{}-{}-{}-{}-{}-c{}-p{}-{}.tsv".format(fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+
+    if not out_path and not lib_path:
+        out_path = '{}/matrices/{}'.format(pre,v)
+    elif not out_path and lib_path:
+        out_path = '{}/{}/matrices'.format(lib_path,v)
     os.makedirs(out_path, exist_ok=True)
 
     # Remove redundant ligands from full list
@@ -4211,9 +3917,22 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pickle.load(f)
 
-    c_list = list(c_fps.keys())
+    if approved_only:
+        if not os.path.exists("{}/cmpds-{}-approved.tsv".format(map_path,v)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds-{}-approved.tsv'.format(v)
+            dl_file(url, '{}/cmpds-{}-approved.tsv'.format(map_path,v))
+        approved_df = pd.read_csv('{}/cmpds-{}-approved.tsv'.format(map_path,v),sep='\t',index_col=0)
+        c_list = approved_df.index
+    else:
+        c_list = list(c_fps.keys())
 
-    scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]).get()
+    if ncpus > 1:
+        pool = mp.Pool(ncpus)
+        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]).get()
+        pool.close
+        pool.join
+    else:
+        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]
     scores = {d[0]:d[1] for d in scores}
 
     mat = pd.DataFrame.from_dict(scores)
@@ -4222,9 +3941,6 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
    
     mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
     
-    pool.close
-    pool.join
-
     end = time.time()
     print("Matrix written to {}/{}.".format(out_path,out_file))
     print_time(end-start) 
@@ -4242,14 +3958,17 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
         cscore_cutoff = np.percentile(all_scores,percentile_cutoff)
     scores = []
     for p in p_dict.keys():
-        li = p_dict[p]
-        li_bs = [blah[0] for blah in li if blah[0] in l_fps.index and float(blah[1]) >= pscore_cutoff]
-        x = [blah[0] for blah in l_fps.loc[li_bs].values.tolist()]
+        li = [i[0:2] for i in p_dict[p] if i[0] in l_fps.index and float(i[1]) >= pscore_cutoff]
+        if li:
+            li_bs, li_score = zip(*li)
+            li_bs = list(li_bs)
+            li_score = list(li_score)
+        else:
+            li_bs = li_score = []
+        x = l_fps.loc[li_bs,0].values.tolist()
+        y = l_fps.loc[li_bs].index.tolist()
         # Pscore
         if i_score in ['P','CxP','dCxP','avgP','medP']:
-            #Pscore cutoff
-            li_score = [blah[1] for blah in li if blah[0] in l_fps.index and float(blah[1]) >= pscore_cutoff]
-            y = l_fps.loc[li_bs].index.tolist()
             try:
                 if dist == 'dice':
                     temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x)))
@@ -4275,6 +3994,7 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                         c_score = temp_c[1]
                         p_score = li_score[li_bs.index(temp_c[0])]
                         scores.append(float(c_score) * float(p_score))
+                        continue
                     else:
                         scores.append(temp_c[0])
                 elif i_score == 'P':
@@ -4346,7 +4066,7 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                     scores.append(0.000)
                 else:
                     scores.append("None")
-
+    
     return (c, scores)
 
 def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True):
@@ -4443,7 +4163,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 
 
 
-def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):    
+def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
     start = time.time()
     pre = os.path.dirname(__file__) + "/data/v2.2+/"
     # List of new compounds loaded into df
@@ -4490,12 +4210,17 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
 
         for c in ncs.itertuples(index=False):
             try:
-                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                if file_type=='mol':
+                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                    name = nc.GetProp("_Name")
+                elif file_type=='smi':
+                    nc = Chem.MolFromSmiles("{}".format(c[0]))
+                    name = c[1]
+                    nc.SetProp("_Name", name)
                 nc = Chem.RemoveHs(nc)
             except:
                 print("{} cannot load this molecule.".format(c[0]))
                 continue
-            name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
             try:
                 match = str(inchi_dict[inchi_key])
@@ -4532,11 +4257,82 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
+    elif v and v not in vs:
+        new_v = v
+        print("Creating new compound library {}...".format(new_v))
+        print("The library will be built at {}/{}.".format(os.getcwd(),new_v))
+        os.makedirs(new_v, exist_ok=True)
+        os.makedirs("{}/cmpds".format(new_v), exist_ok=True)
+        os.makedirs("{}/mappings".format(new_v), exist_ok=True)
+        cmpd_path = "{0}/cmpds/fps-{0}/".format(new_v)
+        os.makedirs(cmpd_path, exist_ok=True)
+        d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
+        cmpd_num = 0
+        # Create new fingerprint dict and save it to pickle for future use
+        c_fps = {}
+        if vect=='int':
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                pickle.dump(c_fps, f)
+        else:
+            bits = int(vect[:4])
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                pickle.dump(c_fps, f)
+        # Create new inchi dict
+        inchi_dict = {}
 
+        for c in ncs.itertuples(index=False):
+            try:
+                if file_type=='mol':
+                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                    name = nc.GetProp("_Name")
+                elif file_type=='smi':
+                    nc = Chem.MolFromSmiles("{}".format(c[0]))
+                    name = c[1]
+                    nc.SetProp("_Name", name)
+            except:
+                print("{} cannot load this molecule.".format(c[0]))
+                continue
+            inchi_key = Chem.MolToInchiKey(nc)
+            try:
+                match = str(inchi_dict[inchi_key])
+            except:
+                match = None
+            if match:
+                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
+                continue
+            else:
+                print("    Adding compound {} - {}".format(cmpd_num,name))
+            
+            with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+                inchi_dict[inchi_key] = cmpd_num
+                pickle.dump(inchi_dict, f)
+           
+            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            
+            rad = int(int(fp[7:])/2)
+            if fp[3]=='f':
+                features = True
+            else:
+                features = False
+
+            if vect=='int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            else:
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                    c_fps = pickle.load(f)
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                    pickle.dump(c_fps, f)
+            cmpd_num += 1
+ 
     elif not v:
         new_v = "v0.0"
         print("Creating new compound library {}...".format(new_v))
-        cmpd_path = "{}/cmpds/fps-{}/".format(pre,new_v)
+        cmpd_path = "{0}/cmpds/fps-{0}/".format(new_v)
         os.makedirs(cmpd_path, exist_ok=True)
         d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
         cmpd_num = 0
@@ -4596,8 +4392,8 @@ def add_cmpds(cmpd_list, fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
                 with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
-    
-    d_map.to_csv("{}/mappings/drugbank-{}.tsv".format(pre,new_v),sep='\t',index=False,na_rep='NA')
+    os.makedirs("{}/mappings".format(new_v),exist_ok=True) 
+    d_map.to_csv("{0}/mappings/cmpds-{0}.tsv".format(new_v),sep='\t',index=False,na_rep='NA')
     print("Added compounds to compound library {}.\n".format(new_v))
     # Need to add functionality to handle loading a new version created by user.
 
@@ -4671,7 +4467,7 @@ def get_fp_lig(fp):
 
 def get_data(v="v2.2", org='nrpdb'):
     """!
-    Download CANDO v2.0 data.
+    Download CANDO v2.2+ data.
 
     This data includes: 
         - Compound mapping (approved and all)
@@ -4680,7 +4476,7 @@ def get_data(v="v2.2", org='nrpdb'):
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
     print('Downloading data for {}...'.format(v))
-    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    pre = os.path.dirname(__file__) + "/data/v2.2+"
     # Dirs
     os.makedirs(pre, exist_ok=True)
     os.makedirs('{}/mappings'.format(pre), exist_ok=True)
@@ -4692,8 +4488,8 @@ def get_data(v="v2.2", org='nrpdb'):
     dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,v))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
-    '''
     # Matrices
+    '''
     if matrix == 'all':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
@@ -4730,8 +4526,8 @@ def get_data(v="v2.2", org='nrpdb'):
         os.chdir("v2.0/cmpds/scores")
         os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
-    print('All data for v2.0 downloaded.')
     '''
+    print('All data for {} downloaded.'.format(v))
 
 def get_tutorial():
     """!
@@ -4747,48 +4543,39 @@ def get_tutorial():
         - Example Pathways set
     """
     print('Downloading data for tutorial...')
-    if not os.path.exists('examples'):
-        os.mkdir('examples')
-    # Example matrix (rd_ecfp4 w/ 64 prots x 2,162 drugs)
-    if not os.path.exists('./examples/example-matrix.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-matrix.tsv'
-        dl_file(url, './examples/example-matrix.tsv')
+    pre = os.path.dirname(__file__) + "/data/v2.2+"
+    if not os.path.exists('tutorial'):
+        os.mkdir('tutorial')
+    # Example matrix (rd_ecfp4 w/ 64 prots x 2,450 drugs)
+    if not os.path.exists('./tutorial/tutorial_matrix-all.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial_matrix-all.tsv'
+        dl_file(url, './tutorial/tutorial_matrix-all.tsv')
+    #if not os.path.exists('./tutorial/tutorial_matrix-approved.tsv'):
+    #    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial_matrix-approved.tsv'
+    #    dl_file(url, './tutorial/tutorial_matrix-approved.tsv')
+    # Mappings
+    if not os.path.exists('./tutorial/cmpds-v2.2.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds-v2.2.tsv'
+        dl_file(url, './tutorial/cmpds-v2.2.tsv')
+    #if not os.path.exists('./tutorial/cmpds-v2.2-approved.tsv'):
+    #    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds-v2.2-approved.tsv'
+    #    dl_file(url, './tutorial/cmpds-v2.2-approved.tsv')
+    if not os.path.exists('./tutorial/cmpds2inds-v2.2.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds2inds-v2.2.tsv'
+        dl_file(url, './tutorial/cmpds2inds-v2.2.tsv')
     # Protein scores
-    if not os.path.exists('./examples/example-prots_scores.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-prots_scores.tsv'
-        dl_file(url, './examples/example-prots_scores.tsv')
-
-    if not os.path.exists('v2.0'):
-        os.mkdir('v2.0')
-    if not os.path.exists('v2.0/mappings'):
-        os.mkdir('v2.0/mappings')
-    # Compound mapping
-    if not os.path.exists('v2.0/mappings/drugbank-approved.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/drugbank-approved.tsv'
-        dl_file(url, 'v2.0/mappings/drugbank-approved.tsv')
-    # Compound-indication mapping (CTD)
-    if not os.path.exists('v2.0/mappings/ctd_2_drugbank.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/ctd_2_drugbank.tsv'
-        dl_file(url, 'v2.0/mappings/ctd_2_drugbank.tsv')
-    # Compounds scores
-    if not os.path.exists('v2.0/cmpds/'):
-        os.mkdir('v2.0/cmpds')
-    if not os.path.exists('v2.0/cmpds/scores'):
-        os.mkdir('v2.0/cmpds/scores')
-    if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-        dl_file(url, 'v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
-        os.chdir("v2.0/cmpds/scores")
-        os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
-        os.chdir("../../..")
+    if not os.path.exists('{}/prots/tutorial-coach.tsv'.format(pre)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/tutorial-coach.tsv'
+        dl_file(url, '{}/prots/tutorial-coach.tsv'.format(pre))
     # New compound
-    if not os.path.exists('./examples/8100.pdb'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/8100.pdb'
-        dl_file(url, './examples/8100.pdb')
+    if not os.path.exists('./tutorial/8100.mol'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/8100.mol'
+        dl_file(url, './tutorial/8100.mol')
     # Protein subset
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/examples/example-bac-prots.txt'
-    dl_file(url, './examples/example-bac-prots.txt')
-    print('All data for tutorial downloaded.')
+    if not os.path.exists('./tutorial/tutorial-bac-prots.txt'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial-bac-prots.txt'
+        dl_file(url, './tutorial/tutorial-bac-prots.txt')
+    print('All data for tutorial downloaded.\n')
 
 
 def get_test():
@@ -4797,8 +4584,8 @@ def get_test():
 
     This data includes:
         - Test Matrix (Approved drugs (2,162) and 64 proteins)
-        - v2.0 Compound mapping (approved and all)
-        - v2.0 Indication - Compound mapping
+        - v2.2 Compound mapping (approved and all)
+        - v2.2 Indication - Compound mapping
         - Compound scores file for all approved compounds (fingerprint: rd_ecfp4)
         - Test Protein scores file (64 proteins) for all binding site ligands for each Protein (fingerprint: rd_ecfp4)
         - Test Compound in PDB format to generate a new fingerprint and vector in the Matrix
@@ -4828,6 +4615,8 @@ def get_test():
     dl_file(url, '{}/test-inds.tsv'.format(pre))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-cmpds_mol/8100.mol'
     dl_file(url, '{}/test-cmpds_mol/8100.mol'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test_set.smi'
+    dl_file(url, '{}/tki_set-test.smi'.format(pre))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-uniprot_set.tsv'
     dl_file(url, '{}/test-uniprot_set.tsv'.format(pre))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/vina64x.fpt'
@@ -4897,6 +4686,7 @@ def dl_file(url, out_file):
     @param out_file str: File path to where the file will be downloaded
     """
     if os.path.exists(out_file):
+        print("{} exists.".format(out_file))
         return
     elif not os.path.exists(os.path.dirname(out_file)):
         os.makedirs(os.path.dirname(out_file))
