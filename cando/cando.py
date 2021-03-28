@@ -223,8 +223,8 @@ class CANDO(object):
     or precomputed compound-compound distance matrix (read_rmsds=), but those are optional.
 
     """
-    def __init__(self, c_map, i_map, matrix='', compute_distance=False, save_dists='', read_dists='',
-                 pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
+    def __init__(self, c_map, i_map, matrix='', compound_set='all', compute_distance=False, save_dists='',
+                 read_dists='', pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
                  ddi_compounds='', ddi_adrs='', adr_map='', protein_distance=False, protein_map='', ncpus=1):
         ## @var c_map
@@ -236,6 +236,9 @@ class CANDO(object):
         ## @var matrix 
         # str: File path to the cando matrix file (relative or absolute)
         self.matrix = matrix
+        ## @var compound_set
+        # str or List str: what compounds to use, such as all, approved, experimental, etc
+        self.compound_set = compound_set
         ## @var protein_set
         # str: File path to protein subset file (relative or absolute) 
         self.protein_set = protein_set
@@ -314,6 +317,7 @@ class CANDO(object):
         if self.short_read_dists:
             self.data_name = self.short_read_dists
 
+        ignored_set = []
         # create all of the compound objects from the compound map
         with open(c_map, 'r') as c_f:
             lines = c_f.readlines()
@@ -329,8 +333,28 @@ class CANDO(object):
                 index = id_
                 cm = Compound(name, id_, index)
 
+                include_cmpd = False
+                if self.compound_set == 'all':
+                    include_cmpd = True
+                    tags = None
+                elif isinstance(self.compound_set, str):
+                    tags = [self.compound_set]
+                elif isinstance(self.compound_set, list):
+                    tags = self.compound_set
+                else:
+                    tags = None
+                    print('compound_set flag has wrong input type, please input a string compound category ("all", '
+                          '"approved", etc) or a list of categories (["approved", "experimental"])')
+                    quit()
+
                 if 'DRUG_GROUPS' in h2i:
-                    stati = ls[h2i['DRUG_GROUPS']]
+                    stati = ls[h2i['DRUG_GROUPS']].split(';')
+                    if tags is not None:
+                        if len(list(set(tags) & set(stati))) > 0:
+                            include_cmpd = True
+                        else:
+                            ignored_set.append(id_)
+                            continue
                     if 'approved' in stati:
                         cm.status = 'approved'
                     elif 'metabolite' in stati:
@@ -339,10 +363,19 @@ class CANDO(object):
                     else:
                         cm.status = 'other'
                 else:
+                    if self.compound_set != 'all':
+                        print('This mapping does not have drug groups/approval status - '
+                              'please re-run with compound_set="all".')
+                        quit()
                     cm.status = 'N/A'
 
-                self.compounds.append(cm)
-                self.compound_ids.append(id_)
+                if include_cmpd:
+                    self.compounds.append(cm)
+                    self.compound_ids.append(id_)
+
+        if self.compound_set and len(self.compounds) == 0:
+            print('No compounds passed filtering, please check input parameters.')
+            quit()
 
         # create the indication objects and add indications to the
         # already created compound objects from previous loop
@@ -359,6 +392,8 @@ class CANDO(object):
             for l in lines[1:]:
                 ls = l.strip().split('\t')
                 c_id = int(ls[h2i['CANDO_ID']])
+                if c_id in ignored_set:
+                    continue
                 i_name = ls[h2i['INDICATION_NAME']]
                 ind_id = ls[h2i['MESH_ID']]
                 cm = self.get_compound(c_id)
@@ -1975,7 +2010,7 @@ class CANDO(object):
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = CANDO(self.c_map, self.i_map, self.matrix)
+        cp = CANDO(self.c_map, self.i_map, self.matrix, compound_set=self.compound_set)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
@@ -3513,7 +3548,7 @@ class CANDO(object):
                 [pr, sc] = l.strip().split('\t')
                 pr_i = self.protein_id_to_index[pr]
                 n_sig[pr_i] = sc
-        i = len(self.compounds)
+        i = max([cm.id_ for cm in self.compounds]) + 1
         if not new_name:
             new_name = 'compound_{}'.format(i)
         cmpd = Compound(new_name, i, i)
@@ -4568,9 +4603,9 @@ def get_tutorial():
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/tutorial-coach.tsv'
         dl_file(url, '{}/prots/tutorial-coach.tsv'.format(pre))
     # New compound
-    if not os.path.exists('./tutorial/8100.mol'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/8100.mol'
-        dl_file(url, './tutorial/8100.mol')
+    if not os.path.exists('./tutorial/lm235.mol'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/lmk235.mol'
+        dl_file(url, './tutorial/lmk235.mol')
     # Protein subset
     if not os.path.exists('./tutorial/tutorial-bac-prots.txt'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial-bac-prots.txt'
@@ -4722,3 +4757,10 @@ def dl_file(url, out_file):
             bar.update(i)
             i += 1
         bar.finish()
+
+
+def load_version(v='v2.3', protlib='nrpdb'):
+    pass
+
+
+
