@@ -431,7 +431,7 @@ class CANDO(object):
                     print('Editing signatures according to proteins in {}...'.format(self.protein_set))
                     targets, pdct_rev = self.uniprot_set_index(self.protein_set)
                     new_i = 0
-                    matches = [[], 0]
+                    matches = [0, 0]
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
                         name = vec[0]
@@ -442,12 +442,11 @@ class CANDO(object):
                                       'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
                                 quit()
                             p = Protein(name, scores)
-                            alt = pdct_rev[name]
-                            p.alt_id = alt
-                            if alt in matches[0]:
-                                matches[1] += 1
-                            else:
-                                matches[0].append(alt)
+                            try:
+                                alt = pdct_rev[name]
+                                p.alt_id = alt
+                                matches[0] += 1
+                            except KeyError:
                                 matches[1] += 1
                             self.proteins.append(p)
                             self.protein_id_to_index[name] = new_i
@@ -457,9 +456,9 @@ class CANDO(object):
                             new_i += 1
                         else:
                             continue
-                    print('{} proteins in {} mapped to {} proteins '
-                          'in {}.'.format(len(matches[0]), self.protein_set, matches[1], self.matrix))
-                    if not len(matches[0]):
+                    print('\tDirect UniProt matches:\t{}\n\tDirect PDB matches:    \t{}'
+                          '\n\tNew signature length:  \t{}'.format(matches[1], matches[0], sum(matches)))
+                    if not sum(matches):
                         print('Sorry, the input proteins did not match any proteins in the input matrix -- quitting.')
                         quit()
                 else:
@@ -1337,12 +1336,9 @@ class CANDO(object):
                     pdct[uni] = [pdb]
                 pdct_rev[pdb] = uni
         targets = []
-        #for tgt in prots:
-        #    targets.append(tgt)
-        #    pdct_rev[tgt] = tgt
         with open(prots, 'r') as unisf:
             for lp in unisf:
-                prot = lp.strip().split('\t')[0]
+                prot = lp.strip()
                 targets.append(prot)
                 #pdct_rev[prot] = lp.strip().upper()
                 try:
@@ -3953,10 +3949,10 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
         l_fps = pickle.load(f)
 
     if approved_only:
-        if not os.path.exists("{}/cmpds-{}-approved.tsv".format(map_path,v)):
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds-{}-approved.tsv'.format(v)
-            dl_file(url, '{}/cmpds-{}-approved.tsv'.format(map_path,v))
-        approved_df = pd.read_csv('{}/cmpds-{}-approved.tsv'.format(map_path,v),sep='\t',index_col=0)
+        if not os.path.exists("{}/drugbank-{}-approved.tsv".format(map_path,v)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}-approved.tsv'.format(v)
+            dl_file(url, '{}/drugbank-{}-approved.tsv'.format(map_path,v))
+        approved_df = pd.read_csv('{}/drugbank-{}-approved.tsv'.format(map_path,v),sep='\t',index_col=0)
         c_list = approved_df.index
     else:
         c_list = list(c_fps.keys())
@@ -4103,6 +4099,7 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                     scores.append("None")
     
     return (c, scores)
+
 
 def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True):
 
@@ -4500,6 +4497,7 @@ def get_fp_lig(fp):
         print("{} ligand fingerprints have already been downloaded.".format(fp))
         print("This file can be found at {}".format(out_file))
 
+
 def get_data(v="v2.2", org='nrpdb'):
     """!
     Download CANDO v2.2+ data.
@@ -4521,6 +4519,8 @@ def get_data(v="v2.2", org='nrpdb'):
     # Mappings
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,v))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}-approved.tsv'.format(v)
+    dl_file(url, '{}/mappings/drugbank-{}-approved.tsv'.format(pre, v))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
     # Matrices
@@ -4564,6 +4564,7 @@ def get_data(v="v2.2", org='nrpdb'):
     '''
     print('All data for {} downloaded.'.format(v))
 
+
 def get_tutorial():
     """!
     Download data for tutorial.
@@ -4581,13 +4582,13 @@ def get_tutorial():
     pre = os.path.dirname(__file__) + "/data/v2.2+"
     if not os.path.exists('tutorial'):
         os.mkdir('tutorial')
-    # Example matrix (rd_ecfp4 w/ 64 prots x 2,450 drugs)
+    # Example matrix (rd_ecfp4 w/ 64 prots x 2,449 drugs)
     if not os.path.exists('./tutorial/tutorial_matrix-all.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial_matrix-all.tsv'
         dl_file(url, './tutorial/tutorial_matrix-all.tsv')
-    #if not os.path.exists('./tutorial/tutorial_matrix-approved.tsv'):
-    #    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial_matrix-approved.tsv'
-    #    dl_file(url, './tutorial/tutorial_matrix-approved.tsv')
+    if not os.path.exists('./tutorial/tutorial_matrix-approved.tsv'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tutorial_matrix-approved.tsv'
+        dl_file(url, './tutorial/tutorial_matrix-approved.tsv')
     # Mappings
     if not os.path.exists('./tutorial/cmpds-v2.2.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/cmpds-v2.2.tsv'
@@ -4759,8 +4760,30 @@ def dl_file(url, out_file):
         bar.finish()
 
 
-def load_version(v='v2.3', protlib='nrpdb'):
-    pass
+def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, compute_distance=False,
+                 dist_metric='cosine', protein_set=''):
 
+    # download data for version
+    get_data(v=v, org=protlib)
 
+    # separate matrix file download (for now)
+    app = 'approved' if approved_only else 'all'
+    mat_name = 'rd_ecfp4-{}-{}-{}-int_vect-dice-{}.tsv'.format(protlib, v, app, i_score)
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/matrices/{}'.format(mat_name)
+    dl_file(url, './data/v2.2+/matrices/{}'.format(mat_name))
+
+    # create CANDO object
+    if approved_only:
+        cmpd_map_path = 'data/v2.2+/mappings/drugbank-{}-approved.tsv'.format(v)
+        matrix_path = 'data/v2.2+/matrices/rd_ecfp4-{}-{}-approved-int_vect-dice-{}.tsv'.format(protlib, v, i_score)
+    else:
+        cmpd_map_path = 'data/v2.2+/mappings/drugbank-{}.tsv'.format(v)
+        matrix_path = 'data/v2.2+/matrices/rd_ecfp4-{}-{}-all-int_vect-dice-{}.tsv'.format(protlib, v, i_score)
+
+    ind_map_path = 'data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
+
+    cando = CANDO(cmpd_map_path, ind_map_path, matrix=matrix_path, compound_set=app,
+                  compute_distance=compute_distance, dist_metric=dist_metric, protein_set=protein_set)
+
+    return cando
 
