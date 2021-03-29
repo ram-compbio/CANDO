@@ -4603,6 +4603,10 @@ def get_tutorial():
     if not os.path.exists('{}/prots/tutorial-coach.tsv'.format(pre)):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/tutorial-coach.tsv'
         dl_file(url, '{}/prots/tutorial-coach.tsv'.format(pre))
+    # New compound set
+    if not os.path.exists('./tutorial/tki_set-test.smi'):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/tki_set-test.smi'
+        dl_file(url, './tutorial/tki_set-test.smi')
     # New compound
     if not os.path.exists('./tutorial/lm235.mol'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/tutorial/lmk235.mol'
