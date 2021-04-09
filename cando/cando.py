@@ -366,7 +366,7 @@ class CANDO(object):
                     if self.compound_set != 'all':
                         print('This mapping does not have drug groups/approval status - '
                               'please re-run with compound_set="all".')
-                        quit()
+                        sys.exit()
                     cm.status = 'N/A'
 
                 if include_cmpd:
@@ -4508,6 +4508,15 @@ def get_data(v="v2.2", org='nrpdb'):
         - Scores file for all approved compounds (fingerprint: rd_ecfp4)
         - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
+    # Check v and org before moving on
+    vs = ['v2.2','v2.3','v2.4','v2.5','test.0']
+    orgs = ['nrpdb','homo_sapien','test','tutorial']
+    if v not in vs:
+        print("{} is not a correct version.".format(v))
+        sys.exit()
+    if org not in orgs:
+        print("{} is not a correct organism.".format(org))
+        sys.exit()
     print('Downloading data for {}...'.format(v))
     pre = os.path.dirname(__file__) + "/data/v2.2+"
     # Dirs
