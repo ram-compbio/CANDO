@@ -3863,7 +3863,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
         c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
         i_score="P", out_file='', out_path=".", 
         nr_ligs=True, approved_only=False, lig_name=False, 
-        lib_path='',ncpus=1):
+        lib_path='',prot_path='',ncpus=1):
 
     def print_time(s):
         if s >= 60:
@@ -3918,10 +3918,14 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int",
     nr_ligs = nr_ligs[0].values.flatten()
 
     # Download protein matrix if it does not exist
-    if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
-        dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
-    p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    if not prot_path:
+        if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+            dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+        p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    else:
+        p_matrix = pd.read_csv("{}/{}-{}.tsv".format(prot_path,org,bs),sep='\t',header=None,index_col=0)
+
     
     # Create dictionary of lists
     # Keys == proteins
