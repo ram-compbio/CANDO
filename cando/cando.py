@@ -4502,19 +4502,19 @@ def get_fp_lig(fp):
         print("This file can be found at {}".format(out_file))
 
 
-def get_data(v="v2.2", org='nrpdb'):
+def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     """!
     Download CANDO v2.2+ data.
 
     This data includes: 
         - Compound mapping (approved and all)
         - Indication-compound mapping
-        - Scores file for all approved compounds (fingerprint: rd_ecfp4)
-        - Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
+        X Scores file for all approved compounds (fingerprint: rd_ecfp4)
+        X Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
     """
     # Check v and org before moving on
-    vs = ['v2.2','v2.3','v2.4','v2.5','test.0']
-    orgs = ['nrpdb','homo_sapien','test','tutorial']
+    vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
+    orgs = ['nrpdb','homo_sapien','cryptococcus','test','tutorial']
     if v not in vs:
         print("{} is not a correct version.".format(v))
         sys.exit()
@@ -4526,7 +4526,7 @@ def get_data(v="v2.2", org='nrpdb'):
     # Dirs
     os.makedirs(pre, exist_ok=True)
     os.makedirs('{}/mappings'.format(pre), exist_ok=True)
-    os.makedirs('{}/matrices'.format(pre), exist_ok=True)
+    #os.makedirs('{}/matrices'.format(pre), exist_ok=True)
     os.makedirs('{}/prots'.format(pre), exist_ok=True)
     os.makedirs('{}/cmpds'.format(pre), exist_ok=True)
     # Mappings
@@ -4566,8 +4566,19 @@ def get_data(v="v2.2", org='nrpdb'):
     elif org == 'homo_sapien':
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
         dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
-    '''
+    elif org == 'cryptococcus':
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/cryptococcus-coach.tsv'
+        dl_file(url, '{}/prots/cryptococcus-coach.tsv'.format(pre))
+
     # Compounds
+    if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,v,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
+        dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,v,fp,vect))
+
+    if not os.path.exists("{}/ligs/fps/{}-{}_vect.pickle".format(pre,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/ligs/fps/{}-{}_vect.pickle'.format(pre,fp,vect))
+    '''
     if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
         dl_file(url, 'v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
@@ -4577,6 +4588,10 @@ def get_data(v="v2.2", org='nrpdb'):
     '''
     print('All data for {} downloaded.'.format(v))
 
+def clear_cache():
+    pre = os.path.dirname(__file__) + "/data/"
+    os.system("rm -r {}".format(pre))
+    print("{} directory has been removed.")
 
 def get_tutorial():
     """!
