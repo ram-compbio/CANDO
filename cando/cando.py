@@ -4591,7 +4591,7 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
 def clear_cache():
     pre = os.path.dirname(__file__) + "/data/"
     os.system("rm -r {}".format(pre))
-    print("{} directory has been removed.")
+    print("{} directory has been removed.".format(pre))
 
 def get_tutorial():
     """!
