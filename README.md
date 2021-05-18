@@ -33,4 +33,4 @@ Then you can install CANDO using the following command:
 
 You can test your install by running our script:
 
-[test.py](https://github.com/ram-compbio/CANDO/blob/master/test.py)
+[run_test.py](https://github.com/ram-compbio/CANDO/blob/master/run_test.py)

@@ -1,4 +1,4 @@
-{% set version = "2.1" %}
+{% set version = "2.2" %}
 
 package:
   name: cando
@@ -39,7 +39,7 @@ about:
   summary: "Computational Analysis of Novel Drug Opportunities"
   description: "A unique computational drug discovery, design, and repurposing platform."
   dev_url: https://github.com/ram-compbio/CANDO.git
-  doc_url: http://compbio.org/protinfo/cando/docs/CANDO-{{ version }}.pdf
+  doc_url: http://compbio.org/protinfo/cando/docs/CANDO-v{{ version }}.pdf
   license: BSD-3-Clause
   license_file: LICENSE.md
 
