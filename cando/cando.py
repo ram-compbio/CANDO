@@ -1,4 +1,4 @@
-import os, pickle
+import os, sys, pickle
 import requests
 import random
 import time
@@ -4514,7 +4514,7 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     """
     # Check v and org before moving on
     vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
-    orgs = ['nrpdb','homo_sapien','cryptococcus','test','tutorial']
+    orgs = ['all','nrpdb','homo_sapien','cryptococcus','test','tutorial']
     if v not in vs:
         print("{} is not a correct version.".format(v))
         sys.exit()
@@ -4536,6 +4536,13 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     dl_file(url, '{}/mappings/drugbank-{}-approved.tsv'.format(pre, v))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
     dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
+    # Compounds
+    if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,v,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
+        dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,v,fp,vect))
+    if not os.path.exists("{}/ligs/fps/{}-{}_vect.pickle".format(pre,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/ligs/fps/{}-{}_vect.pickle'.format(pre,fp,vect))
     # Matrices
     '''
     if matrix == 'all':
@@ -4554,30 +4561,18 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
         dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
     '''
+    print('Downloading data for {}...'.format(org))
     # Proteins
-    if org == 'all':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb-coach.tsv'
-        dl_file(url, '{}/prots/nrpdb-coach.tsv'.format(pre))
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
-        dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
-    elif org == 'nrpdb':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/nrpdb-coach.tsv'
-        dl_file(url, '{}/prots/nrpdb-coach.tsv'.format(pre))
-    elif org == 'homo_sapien':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/homo_sapien-coach.tsv'
-        dl_file(url, '{}/prots/homo_sapien-coach.tsv'.format(pre))
-    elif org == 'cryptococcus':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/cryptococcus-coach.tsv'
-        dl_file(url, '{}/prots/cryptococcus-coach.tsv'.format(pre))
+    if org=='all':
+        for o in orgs[1:]:
+            if o=='test' or o=='tutorial':
+                continue
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(o)
+            dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,o))
+    else:
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(org)
+        dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,org))
 
-    # Compounds
-    if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,v,fp,vect)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
-        dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,v,fp,vect))
-
-    if not os.path.exists("{}/ligs/fps/{}-{}_vect.pickle".format(pre,fp,vect)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
-        dl_file(url, '{}/ligs/fps/{}-{}_vect.pickle'.format(pre,fp,vect))
     '''
     if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
@@ -4586,7 +4581,7 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
         os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
         os.chdir("../../..")
     '''
-    print('All data for {} downloaded.'.format(v))
+    print('All data for {} and {} downloaded.'.format(v,org))
 
 def clear_cache():
     pre = os.path.dirname(__file__) + "/data/"
@@ -4661,7 +4656,7 @@ def get_test():
         - Test Pathways set
     """
     print('Downloading data for test...')
-    pre = os.path.dirname(__file__) + "/data/v2.2+/test/"
+    pre = os.path.dirname(__file__) + "/data/v2.2+/test"
     os.makedirs(pre,exist_ok=True)
     #url = 'http://protinfo.compbio.buffalo.edu/cando/data/test/test-cmpd_scores.tsv'
     #dl_file(url, '{}/test-cmpd_scores.tsv'.format(pre))
@@ -4697,6 +4692,7 @@ def get_test():
     dl_file(url, '{}/test-pathway-mesh.tsv'.format(pre))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-new_cmpds.tsv'
     dl_file(url, '{}/test-new_cmpds.tsv'.format(pre))
+    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-uniprot_set.tsv'
     print('All test data downloaded.\n')
 
 
