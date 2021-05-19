@@ -41,9 +41,14 @@ class Protein(object):
         ## @var pathways 
         #   List of Pathway objects in which the given protein is involved
         self.pathways = []
+        ## @var indications
         #   List of Indication objects to which the protein is associated
         self.indications = []
+        ## @var name
+        #   str: the common name of the protein (not currently used)
         self.name = ''
+        ## @var gene
+        #   str: the gene name from which the protein is produced
         self.gene = ''
 
 
@@ -101,7 +106,8 @@ class Compound(object):
         ## @var parent
         # Compound: Compound object to which this compound is a metabolite
         self.parent = None
-
+        ## @var compounds
+        # List Compound: Compound objects to which this compound is associated
         self.compounds = []
 
     def add_indication(self, ind):
@@ -210,7 +216,8 @@ class ADR(object):
         ## @var compounds
         # list: Compound objects associated with the given ADR
         self.compounds = []
-
+        ## @var compounds
+        # List: Compound object pairs (tuples) associated with the given ADR
         self.compound_pairs = []
 
 
@@ -292,14 +299,22 @@ class CANDO(object):
         self.ddi_adrs = ddi_adrs
         self.protein_distance = protein_distance
 
+        ## @var proteins
+        # List: Protein objects in the platform
         self.proteins = []
         self.protein_id_to_index = {}
+        ## @var compounds
+        # List: Compound objects in the platform
         self.compounds = []
         self.compound_ids = []
         self.compound_pairs = []
         self.compound_pair_ids = []
+        ## @var indications
+        # List: Indication objects in the platform
         self.indications = []
         self.indication_ids = []
+        ## @var adrs
+        # List: ADR objects in the platform
         self.adrs = []
         self.adr_ids = []
 
@@ -396,7 +411,7 @@ class CANDO(object):
                     continue
                 i_name = ls[h2i['INDICATION_NAME']]
                 ind_id = ls[h2i['MESH_ID']]
-                cm = self.get_compound(c_id)
+                cm = self.get_compound(c_id, quiet=True)
                 if cm:
                     if ind_id in self.indication_ids:
                         ind = self.get_indication(ind_id)
@@ -1028,7 +1043,7 @@ class CANDO(object):
         for nm in nms:
             print("{}\t{}".format(id_d[nm], nm))
 
-    def get_compound(self, cmpd_id):
+    def get_compound(self, cmpd_id, quiet=False):
         """!
         Get Compound object from Compound id or fuzzy match to Compound name
 
@@ -1039,7 +1054,8 @@ class CANDO(object):
             for c in self.compounds:
                 if c.id_ == cmpd_id:
                     return c
-            print("{0} not in {1}".format(cmpd_id, self.c_map))
+            if not quiet:
+                print("{0} not in {1}".format(cmpd_id, self.c_map))
             return None
         elif type(cmpd_id) is str:
             id_d = {}
@@ -1162,6 +1178,7 @@ class CANDO(object):
         @param cmpd Compound or int: Compound object or int id_ for which to print targets
         @param n int: number of top targets to print/return
         @param negative int: if the interaction scores are negative (stronger) energies
+        @param save_file str: output file for results
         @return Returns list: list of tuples (protein id_, score)
         """
         # print the list of the top targets
@@ -1253,7 +1270,7 @@ class CANDO(object):
         @param negative int: if the interaction scores are negative (stronger) energies
         @param compound_set str: use all Compounds ('all') or only approved Compounds ('approved')
         @param save_file str: save results to file name
-        @return Returns list: list of tuples (compound id_, score)
+        @return Returns None
         """
         if type(protein) is Protein:
             prot = protein
@@ -1499,8 +1516,6 @@ class CANDO(object):
             cmpd_pair.similar_computed = True
             return cmpd_pair.similar
 
-
-
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
         """!
         For a given list of compounds, generate the similar compounds based on dist of sigs
@@ -1567,6 +1582,7 @@ class CANDO(object):
         pathway signature for all pathways in the input file (NOTE: does not compute distances)
 
         @param indication object: Indication object
+        @return Returns None
         """
         pq = self.pathway_quantifier
         if pq == 'max':
@@ -1640,6 +1656,7 @@ class CANDO(object):
         @param f str: File path for results analysed named
         @param metrics list: Cutoffs used for the benchmarking protocol
         @param effect_type str: Defines the effect as either an Indication (disease) or ADR (adverse reaction)
+        @return Returns dct: dict of accuracies at each cutoff
         """
         fo = open(f, 'w')
         effects = list(self.accuracies.keys())
@@ -1670,13 +1687,13 @@ class CANDO(object):
         Benchmarks the platform based on compound similarity of those approved for the same diseases
 
         @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
-        @param indications list or str: List of Indication ids to be used for this benchmark, otherwise all will be used.
-        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
-        benchmarking
+        @param indications list or str: List of Indication ids to be benchmarked, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the benchmarking cutoffs
         @param bottom bool: Reverse the ranking (descending) for the benchmark
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
         modified, and ordinal)
         @param adrs bool: ADRs are used as the Compounds' phenotypic effects instead of Indications
+        @return Returns None
         """
 
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
@@ -2002,8 +2019,10 @@ class CANDO(object):
 
         @param file_name str: Name to be used for the variosu results files (e.g. file_name=test --> summary_test.tsv)
         @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
-        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for benchmarking
-        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard, modified, and ordinal)
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the benchmarking cutoffs
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties.
+        (standard, modified, and ordinal)
+        @return Returns None
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
         cp = CANDO(self.c_map, self.i_map, self.matrix, compound_set=self.compound_set)
@@ -2045,6 +2064,7 @@ class CANDO(object):
         @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
         modified, and ordinal)
+        @return Returns None
         """
         print("Making CANDO copy with reversed compound ordering")
         cp = CANDO(self.c_map, self.i_map, self.matrix)
@@ -2062,8 +2082,13 @@ class CANDO(object):
         
         cp.canbenchmark(file_name=file_name, indications=indications, ranking=ranking, bottom=True)
 
-
     def canbenchmark_ndcg(self, file_name):
+        """!
+        Benchmark using the normalized discounted cumulative gain metric
+
+        @param file_name str: Name to be used for the variosu results files (file_name=test --> summary_ndcg-test.tsv)
+        @return Returns None
+        """
         def dcg(l,k):
             dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
             return np.sum(dcg)
@@ -2149,6 +2174,7 @@ class CANDO(object):
         Benchmark using k-means clustering
 
         @param n_clusters int: Number of clusters for k-means
+        @return Returns None
         """
         def cluster_kmeans(cmpds):
             def f(x):
@@ -2239,8 +2265,20 @@ class CANDO(object):
         fo.close()
         return final_accs
 
-    def canbenchmark_compounds(self, file_name, indications=[], continuous=False,
-                          bottom=False, ranking='standard', adrs=False):
+    def canbenchmark_compounds(self, file_name, adrs=[], continuous=False,
+                          bottom=False, ranking='standard'):
+        """!
+        Benchmarks the platform based on compound similarity of those known to cause ADRs
+
+        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
+        @param adrs list: List of ADR ids to be used for this benchmark, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
+        benchmarking
+        @param bottom bool: Reverse the ranking (descending) for the benchmark
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
+        modified, and ordinal)
+        @return Returns None
+        """
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
             print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
             exit()
@@ -2473,20 +2511,18 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-
-    def canbenchmark_ddi(self, file_name, indications=[], adrs=[], continuous=False,
+    def canbenchmark_ddi(self, file_name, adrs=[], continuous=False,
                           bottom=False, ranking='standard'):
         """!
-        Benchmarks the platform based on compound similarity of those approved for the same diseases
+        Benchmarks the platform based on compound pairs known to cause ADRs
 
-        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
-        @param indications list: List of Indication ids to be used for this benchmark, otherwise all will be used.
+        @param file_name str: Name to be used for the results files (file_name=test --> summary_test-ddi_adr.tsv)
         @param continuous bool: Use the percentile of distances from the similarity matrix as the cutoffs for
         benchmarking
         @param bottom bool: Reverse the ranking (descending) for the benchmark
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
         modified, and ordinal)
-        @param adrs bool: ADRs are used as the phenotypic effect instead of Indications
+        @return Returns None
         """
 
         adrs = True
@@ -2564,9 +2600,7 @@ class CANDO(object):
         ss = []
         c_per_effect = 0
 
-        if indications:
-            effects = list(map(self.get_indication, indications))
-        elif adrs:
+        if adrs:
             effects = self.adrs
         else:
             effects = self.indications
@@ -2786,17 +2820,12 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], threshold=0.5,
            negative='random', seed=42, out=''):
         """!
-        create an ML classifier for a specified indication or all inds (to benchmark)
-        predict (used w/ 'effect=' - indication or ADR) is a list of compounds to classify with the trained ML model
-        out=X saves benchmark SUMMARY->SUMMARY_ml_X; raw results->raw_results/raw_results_ml_X (same for RAN)
-        currently supports random forest ('rf'), support vector machine ('svm'), 1-class SVM ('1csvm'), and logistic
-        regression ('log') models are trained with leave-one-out cross validation during benchmarking
+        Create an ML classifier for a specified indication to make drug-disease predictions or all inds for benchmarking
 
-        @param method str: type of machine learning algorithm to use ('rf', 'svm', '1csvm', and 'log')
+        @param method str: type of machine learning algorithm to use ('rf' or 'log')
         @param effect Indication or ADR: provide a specific Indication or ADR object to train a classifer
         @param benchmark bool: benchmark the ML pipeline by training a classifier with LOOCV for each Indication or ADR
         @param adrs bool: if the models are trained with ADRs instead of Indications
@@ -2806,6 +2835,7 @@ class CANDO(object):
         @param negative str: choose random negative samples (default) or 'inverse' for most opposite signatures
         @param seed int: choose a seed for reproducibility
         @param out str: file name extension for the output of benchmark (note: must have benchmark=True)
+        @return Returns None
         """
 
         if method in ['1csvm', 'svm']:
@@ -3112,6 +3142,7 @@ class CANDO(object):
         @param proteins List str: list of protein IDs from the matrix to use for the sum/count
         @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
         @param save str: name of a file to save results
+        @return Returns None
         """
 
         if ind_id:
@@ -3226,6 +3257,7 @@ class CANDO(object):
         @param keep_associated bool: Print Compounds that are already approved/associated for the Indication
         @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
         @param save str: name of a file to save results
+        @return Returns None
         """
 
         if int(topX) == -1:
@@ -3315,6 +3347,7 @@ class CANDO(object):
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
+        @return Returns None
         """
         if n == -1:
             n = len(self.compounds)-1
@@ -3355,7 +3388,6 @@ class CANDO(object):
             fo.close()
         print('')
 
-
     def canpredict_adr(self, cmpd, n=10, topX=10, save=''):
         """!
         This function is the inverse of canpredict_compounds. Input a compound
@@ -3367,6 +3399,7 @@ class CANDO(object):
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
+        @return Returns None
         """
         if n == -1:
             n = len(self.compounds)-1
@@ -3409,9 +3442,13 @@ class CANDO(object):
 
     def canpredict_ddi_cmpds(self, cmpd, n=10, topX=10, save=''):
         """!
+        Input a compound of interest cando_cmpd and the most similar compounds to it will be computed
+        and outputted as potential drug-drug-interactions.
+
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Drug-drug Interactions to be printed
+        @return Returns None
         """
         if n == -1:
             n = len(self.compounds)-1
@@ -3437,10 +3474,10 @@ class CANDO(object):
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
         if save:
             fo = open(save, 'w')
-            print("Saving the {} highest predicted indications...\n".format(topX))
+            print("Saving the {} highest predicted compounds...\n".format(topX))
             fo.write("rank\tscore\tcmpd_id\tcompound\n")
         else:
-            print("Printing the {} highest predicted indications...\n".format(topX))
+            print("Printing the {} highest predicted compounds...\n".format(topX))
             print("rank\tscore\tcmpd_id    \tcompound")
         topX = min(topX,len(sorted_x))
         for i in range(topX):
@@ -3453,13 +3490,17 @@ class CANDO(object):
             fo.close()
         print('')
 
-
     def canpredict_ddi_adrs(self, cmpd_pair, n=10, topX=10, save=''):
         """!
+        Similarly to canpredict_adrs(), input a compound pair of interest cmpd_pair
+        and the most similar compound pairs to it will be computed. The ADRs associated
+        with the top n most similar compound pairs to the query pair will be examined
+        to see if any are repeatedly enriched.
 
         @param cmpd_pair Compound_pair: Compound_pair object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
+        @return Returns None
         """
         if n == -1:
             n = len(self.compound_pairs)-1
@@ -3514,6 +3555,7 @@ class CANDO(object):
 
         @param cmpd Compound: Compound object
         @param n int: top number of similar Compounds to be used for prediction
+        @return Returns None
         """
         if type(cmpd) is Compound:
             cmpd = cmpd
@@ -3536,7 +3578,7 @@ class CANDO(object):
         
         @param new_sig str: Path to the tab-separated interaction scores
         @param new_name str: Name for the new Compound
-        @return cmpd Compound: Compound object
+        @return Returns None
         """
         with open(new_sig, 'r') as nsf:
             n_sig = [0.00] * len(self.proteins)
@@ -3594,6 +3636,7 @@ class CANDO(object):
         @param cando_objs list: List of CANDO objects
         @param out_file str: Path to where the result will be written
         @param method str: Method of fusion to be used (e.g., sum, mult, etc.)
+        @return Returns CANDO object
         """
         print("Fusing CANDO objects using " + method)
         cnd = CANDO(self.c_map, self.i_map)
@@ -3652,6 +3695,7 @@ class CANDO(object):
         Normalize the distance scores to between [0,1]. Simply divides all scores by the largest distance
         between any two compounds.
 
+        @return Returns None
         """
         if len(self.compounds[0].similar) == 0:
             print('Similar scores not computed yet -- quitting')
@@ -3776,6 +3820,7 @@ class Matrix(object):
         (0.0 means distance to similarity, 1.0 means similarity to distance).
 
         @param out_file str: File path to which write the converted matrix.
+        @return Returns None
         """
         if self.values[0][0] == 0.0:
             metric = 'd'
@@ -3814,6 +3859,7 @@ class Matrix(object):
         scores within the proteomic vector or 'proteins' to normalize for a protein against
         all drug scores.
         @param method str: normalize by the average or max within the vectors
+        @return Returns None
         """
         # dimensions include drugs or features (e.g. "proteins")
         # methods are average ('avg') or max ('max')
@@ -3858,12 +3904,33 @@ class Matrix(object):
             for p in range(len(self.proteins)):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
-def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", 
-        dist="dice", org="nrpdb", bs="coach", 
-        c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
-        i_score="P", out_file='', out_path=".", 
-        nr_ligs=True, approved_only=False, lig_name=False, 
-        lib_path='',prot_path='',ncpus=1):
+
+def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
+                    p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True,
+                    approved_only=False, lig_name=False, lib_path='', prot_path='', ncpus=1):
+    """!
+    Generate a matrix using our in-house protocol BANDOCK.
+
+    @param v str: version to use (supports v2.2 - v2.5)
+    @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
+    @param vect str: integer "int" or binary "bit" vector for fingerprint
+    @param dist str: use Sorenson-Dice "dice" for vect="int" and Tanimoto "tani" for vect="bit"
+    @param org str: protein library to use ('nrpdb' or 'homo_sapien')
+    @param bs str: the method to use, just use "coach"
+    @param c_cutoff float: minimum Cscore (Tanimoto/Dice similarity score) to consider for scoring
+    @param p_cutoff float: minimum Pscore (binding site score from COACH) to consider for scoring
+    @param percentile_cutoff float: %ile cutoff for fingerprint similarity scores in 'dC' scoring protocols
+    @param i_score str: the scoring protocol to use ('P', 'C', 'dC', 'CxP', dCxP')
+    @param out_file str: filename of the output matrix
+    @param out_path str: path to the output matrix
+    @param nr_ligs bool: use only the non-redundant set of ligands for 'dC' scoring protocols (recommended)
+    @param approved_only bool: use only approved drugs to create the matrix
+    @param lig_name bool: output the ligand chosen for the compound-protein interaction score instead of the score
+    @param lib_path str: specify a local compound fingerprint set for custom analyses
+    @param prot_path str: specify a local protein library for custom analyses
+    @param ncpus int: number of cores to run on
+    @return Returns None
+    """
 
     def print_time(s):
         if s >= 60:
@@ -4105,8 +4172,30 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
     return (c, scores)
 
 
-def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True):
+def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
+                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True,
+                       prot_path=''):
+    """!
+       Generate an interaction signature for a query compound using our in-house protocol BANDOCK. Note: the parameters
+       for this function MUST MATCH the parameters used to generate the matrix in use. Otherwise, the scores will be
+       incompatible.
 
+       @param cmpd_file str: filepath to an input mol file
+       @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
+       @param vect str: integer "int" or binary "bit" vector for fingerprint
+       @param dist str: use Sorenson-Dice "dice" for vect="int" and Tanimoto "tani" for vect="bit"
+       @param org str: protein library to use ('nrpdb' or 'homo_sapien')
+       @param bs str: the method to use, just use "coach"
+       @param c_cutoff float: minimum Cscore (Tanimoto/Dice similarity score) to consider for scoring
+       @param p_cutoff float: minimum Pscore (binding site score from COACH) to consider for scoring
+       @param percentile_cutoff float: %ile cutoff for fingerprint similarity scores in 'dC' scoring protocols
+       @param i_score str: the scoring protocol to use ('P', 'C', 'dC', 'CxP', dCxP')
+       @param out_file str: filename of the output signature
+       @param out_path str: path to the output signature
+       @param nr_ligs bool: use only the non-redundant set of ligands for 'dC' scoring protocols (recommended)
+       @param prot_path str: specify a local protein library for custom analyses
+       @return Returns None
+       """
     def print_time(s):
         if s >= 60:
             m = s / 60.0
@@ -4142,10 +4231,13 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     nr_ligs = nr_ligs[0].values.flatten()
 
     # Download protein matrix if it does not exist
-    if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
-        dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
-    p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    if not prot_path:
+        if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+            dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+        p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    else:
+        p_matrix = pd.read_csv("{}/{}-{}.tsv".format(prot_path,org,bs),sep='\t',header=None,index_col=0)
     
     # Create dictionary of lists
     # Keys == proteins
@@ -4198,8 +4290,17 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     print_time(end-start) 
 
 
-
 def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
+    """!
+   Add a block of compounds to the existing CANDO matrix using our in-house protocol BANDOCK.
+
+   @param cmpd_list str: filepath to all input compounds
+   @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
+   @param vect str: integer "int" or binary "bit" vector for fingerprint
+   @param cmpd_dir str: ??
+   @param v str: ??
+   @return Returns None
+   """
     start = time.time()
     pre = os.path.dirname(__file__) + "/data/v2.2+/"
     # List of new compounds loaded into df
@@ -4457,6 +4558,7 @@ def tanimoto_sparse(str1, str2):
 
     @param str1 str: String of 1s and 0s representing the first compound fingerprint
     @param str2 str: String of 1s and 0s representing the second compound fingerprint
+    @return Returns float
     """
     n_c = 0.0
     n_a = 0.0
@@ -4479,6 +4581,7 @@ def tanimoto_dense(list1, list2):
 
     @param list1 list: List of positions that have a 1 in first compound fingerprint
     @param list2 list: List of positions that have a 1 in second compound fingerprint
+    @return Returns float
     """
     c = [common_item for common_item in list1 if common_item in list2]
     return float(len(c))/(len(list1) + len(list2) - len(c))
@@ -4489,6 +4592,7 @@ def get_fp_lig(fp):
     Download precompiled binding site ligand fingerprints using the given fingerprint method.
 
     @param fp str: Fingerprinting method used to compile each binding site ligand fingerprint
+    @return Returns None
     """
     pre = os.path.dirname(__file__)
     out_file = '{}/v2.2+/ligs/{}.pickle'.format(pre, fp)
@@ -4506,11 +4610,12 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     """!
     Download CANDO v2.2+ data.
 
-    This data includes: 
-        - Compound mapping (approved and all)
-        - Indication-compound mapping
-        X Scores file for all approved compounds (fingerprint: rd_ecfp4)
-        X Matrix file for approved drugs (2,162) and all proteins (14,610) (fingerprint: rd_ecfp4)
+    @param v str: version to use (supports v2.2 - v2.5)
+    @param org str: protein library to use ('nrpdb' or 'homo_sapien')
+    @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
+    @param vect str: integer "int" or binary "bit" vector for fingerprint
+
+    @returns Returns None
     """
     # Check v and org before moving on
     vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
@@ -4583,23 +4688,21 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     '''
     print('All data for {} and {} downloaded.'.format(v,org))
 
+
 def clear_cache():
+    """!
+    Clear files in "data/" directory.
+    @returns Returns None
+    """
     pre = os.path.dirname(__file__) + "/data/"
     os.system("rm -r {}".format(pre))
     print("{} directory has been removed.".format(pre))
 
+
 def get_tutorial():
     """!
     Download data for tutorial.
-
-    This data includes:
-        - Example Matrix (Approved drugs (2,162) and 64 proteins)
-        - v2.0 Compound mapping (approved and all)
-        - v2.0 Indication - Compound mapping
-        - Compound scores file for all approved compounds (fingerprint: rd_ecfp4)
-        - Example Protein scores file (64 proteins) for all binding site ligands for each Protein (fingerprint: rd_ecfp4)
-        - Example Compound in PDB format to generate a new fingerprint and vector in the Matrix
-        - Example Pathways set
+    @returns Returns None
     """
     print('Downloading data for tutorial...')
     pre = os.path.dirname(__file__) + "/data/v2.2+"
@@ -4644,16 +4747,7 @@ def get_tutorial():
 def get_test():
     """!
     Download data for test script.
-
-    This data includes:
-        - Test Matrix (Approved drugs (2,162) and 64 proteins)
-        - v2.2 Compound mapping (approved and all)
-        - v2.2 Indication - Compound mapping
-        - Compound scores file for all approved compounds (fingerprint: rd_ecfp4)
-        - Test Protein scores file (64 proteins) for all binding site ligands for each Protein (fingerprint: rd_ecfp4)
-        - Test Compound in PDB format to generate a new fingerprint and vector in the Matrix
-        - Directory of test Compounds in PDB format to generate multiple new fingerprints and vectors in the Matrix
-        - Test Pathways set
+    @returns Returns None
     """
     print('Downloading data for test...')
     pre = os.path.dirname(__file__) + "/data/v2.2+/test"
@@ -4705,6 +4799,7 @@ def dl_dir(url, out, l):
     @param url str: URL of the dir to be downloaded
     @param out str: Path to where the dir will be downloaded
     @param l list: List of files in dir to be downloaded
+    @returns Returns None
     """
     if not os.path.exists(out):
         os.makedirs(out)
@@ -4748,6 +4843,7 @@ def dl_file(url, out_file):
 
     @param url str: URL of the file to be downloaded
     @param out_file str: File path to where the file will be downloaded
+    @returns Returns None
     """
     if os.path.exists(out_file):
         print("{} exists.".format(out_file))
@@ -4789,7 +4885,20 @@ def dl_file(url, out_file):
 
 
 def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, compute_distance=False,
-                 dist_metric='cosine', protein_set=''):
+                 dist_metric='cosine', protein_set='', ncpus=1):
+    """!
+    Directly load a pre-compiled version of CANDO.
+
+    @param v str: version to use (supports v2.2 - v2.5)
+    @param protlib str: protein library to use ('nrpdb' or 'homo_sapien')
+    @param i_score str: the scoring protocol to use ('P', 'C', 'dC', 'CxP', dCxP')
+    @param approved_only bool: use only approved drugs to create the matrix
+    @param compute_distance bool: compute distance between compounds for specified matrix
+    @param dist_metric str: the distance metric to use if compute_distance=True ('cosine', 'rmsd', etc)
+    @param protein_set str: path to a file containing a subset of proteins of interest
+    @param ncpus int: number of cores to run on
+    @return Returns CANDO object
+    """
 
     # download data for version
     get_data(v=v, org=protlib)
@@ -4811,7 +4920,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
     ind_map_path = 'data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
 
     cando = CANDO(cmpd_map_path, ind_map_path, matrix=matrix_path, compound_set=app,
-                  compute_distance=compute_distance, dist_metric=dist_metric, protein_set=protein_set)
+                  compute_distance=compute_distance, dist_metric=dist_metric, protein_set=protein_set, ncpus=ncpus)
 
     return cando
 
