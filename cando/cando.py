@@ -11,6 +11,7 @@ import multiprocessing as mp
 from openbabel import pybel
 import difflib
 import matplotlib.pyplot as plt
+from decimal import Decimal
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
 from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score, ndcg_score
@@ -3118,16 +3119,19 @@ class CANDO(object):
         plt.show()
 
     def canpredict_denovo(self, method='count', threshold=0.0, topX=10, ind_id=None, proteins=None,
-                          cmpd_set='all', save=''):
+                          minimize=None, consensus=True, cmpd_set='all', save=''):
         """!
         This function is used for predicting putative therapeutics for an indication
         of interest by summing/counting the number of interactions above a certain input interaction
         threshold for all proteins or a specified subset of proteins. An indication can be specified to
         mark drugs associated with that indication in the output. The threshold will vary based on the
-        values of the input matrix. Method can either be 'count' (score1), which ranks compounds based on the
-        number of interactions above the threshold, or 'sum' (score2), which ranks the compounds based on the
+        values of the input matrix. Method can be 'count' (score1), which ranks compounds based on the
+        number of interactions above the threshold, 'sum' (score2), which ranks the compounds based on the
         highest total sum for interaction scores above the threshold (these two are highly correlated but can
-        differ for larger sets of proteins or lower thresholds). A third option is 'targets', which inspects
+        differ for larger sets of proteins or lower thresholds), 'min', which first ranks by 'count' then re-ranks
+        based on the summed interactions with the proteins in the input 'minimize' list - this list should contain
+        proteins IDs towards which the user wants low interaction scores - or 'diff', which ranks by the difference of
+        sums and the summed scores from off-targets in 'minimize'. A fifth option is 'targets', which inspects
         and outputs the top protein interactions on an individual basis without summing/counting per drug (the
         output format differs from the other two options). If indication_proteins flag is used for
         the CANDO object instantiation, the proteins associated with the input indication will automatically
@@ -3139,7 +3143,9 @@ class CANDO(object):
         @param threshold float: a interaction score cutoff to use (ignores values for sum/count less than threshold)
         @param topX int: top number of predicted Compounds to be printed/saved
         @param ind_id str: an indication id for marking drug output/ specifying protein set
-        @param proteins List str: list of protein IDs from the matrix to use for the sum/count
+        @param proteins List str: list of protein IDs to use from the matrix
+        @param minimize List str: list of protein IDs to treat as 'off targets' to avoid, ranking
+        @param consensus bool: if True, only compounds with score1 >= 2 will be printed
         @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
         @param save str: name of a file to save results
         @return Returns None
@@ -3149,6 +3155,7 @@ class CANDO(object):
             ind = self.get_indication(ind_id)
         c_dct = {}
         top_hits = []
+        min_hits = []
         if self.indication_proteins and ind_id:
             indices = []
             for p in ind.proteins:
@@ -3164,32 +3171,45 @@ class CANDO(object):
                     indices.append(self.protein_id_to_index[p.id_])
         else:
             indices = range(len(self.proteins))
+        if minimize is None:
+            minimize = []
         for c in self.compounds:
             ss = 0.0
             count = 0
+            min_ss = 0.0
+            min_count = 0
             for pi in indices:
                 si = float(c.sig[pi])
                 p = self.proteins[pi]
                 if si >= threshold:
-                    ss += si
-                    count += 1
-                    top_hits.append((p.id_, c, si))
+                    if p.id_ in minimize:
+                        min_ss += si
+                        min_count += 1
+                        top_hits.append((p.id_, c, si, False))
+                    else:
+                        ss += si
+                        count += 1
+                        top_hits.append((p.id_, c, si, True))
             if ind_id:
                 already_approved = ind in c.indications
             else:
                 already_approved = False  # Not relevant since there is no indication
-            c_dct[c.id_] = [ss, count, already_approved]
+            c_dct[c.id_] = [ss, count, already_approved, min_ss, min_count]
 
         if method == 'sum':
             sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], x[1][1]))[::-1]
         elif method == 'count':
             sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][1], x[1][0]))[::-1]
+        elif method == 'min':
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][1], x[1][3]*-1))[::-1]
+        elif method == 'diff':
+            sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0] - x[1][3]))[::-1]
         elif method == 'targets':
             sp = sorted(top_hits, key=lambda x: x[2])[::-1]
-            print('target  \tscore\tid\tapproved\tname\n')
+            print('target  \tscore\toff_target\tid\tapproved\tname')
             if save:
                 fo = open(save, 'w')
-                fo.write('target  \tscore\tid\tapproved\tname\n')
+                fo.write('target  \tscore\toff_target\tid\tapproved\tname\n')
             for s in sp:
                 co = s[1]
                 if cmpd_set == 'approved':
@@ -3197,25 +3217,33 @@ class CANDO(object):
                         pass
                     else:
                         continue
-                    st = '{}\t{}\t{}\t{}\t{}'.format(s[0].ljust(8), round(s[2], 3), co.id_,
-                                                     (str(co.status == 'approved').lower()).ljust(8), co.name)
+                    st = '{}\t{}\t{}\t{}\t{}\t{}'.format(s[0].ljust(8), round(s[2], 3), co.id_,
+                                                         str(s[3]).lower().ljust(10),
+                                                         (str(co.status == 'approved').lower()).ljust(8), co.name)
                     print(st)
                     fo.write(st + '\n')
             return
 
         else:
+            sorted_x = []
             print('Please enter a valid ranking method -- quitting.')
             quit()
         if save:
             fo = open(save, 'w')
-            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
+            fo.write('rank\tscore1\tscore2\toffhits\tdiff\tid\tapproved\tname\n')
         print("Printing the {} highest predicted compounds...\n".format(topX))
         i = 0
-        print('rank\tscore1\tscore2\tid\tapproved\tname')
+        print('rank\tscore1\tscore2\toffhits\tdiff\tid\tapproved\tname')
         for p in enumerate(sorted_x):
             if i >= topX != -1:
                 break
             else:
+                if consensus and p[1][1][1] <= 1:
+                    if i == 0:
+                        print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+                              '\targuments to include "consensus=False" to print results with\n'
+                              '\tscore1 == 1, or lower the threshold.\n')
+                    break
                 co = self.get_compound(p[1][0])
                 if cmpd_set == 'approved':
                     if co.status != 'approved':
@@ -3227,18 +3255,25 @@ class CANDO(object):
                         else:
                             continue
                 if p[1][1][2]:
-                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7], co.id_,
-                                                         (str(co.status == 'approved').lower() + '+').ljust(8), co.name)
+                    diff = str(round(p[1][1][0] - p[1][1][3], 3))[0:7].ljust(7)
+                    st = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7],
+                                                                 str(round(p[1][1][3], 3))[0:7].ljust(7), diff, co.id_,
+                                                                 (str(co.status == 'approved').lower() + '+').ljust(8),
+                                                                 co.name)
                 else:
-                    st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7], co.id_,
-                                                         (str(co.status == 'approved').lower()).ljust(8), co.name)
+                    diff = str(round(p[1][1][0] - p[1][1][3], 3))[0:7].ljust(7)
+                    st = "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][1], str(round(p[1][1][0], 3))[0:7],
+                                                                 str(round(p[1][1][3], 3))[0:7].ljust(7), diff, co.id_,
+                                                                 (str(co.status == 'approved').lower()).ljust(8),
+                                                                 co.name)
                 print(st)
                 i += 1
                 if save:
                     fo.write(st + '\n')
         return
 
-    def canpredict_compounds(self, ind_id, n=10, topX=10, keep_associated=False, cmpd_set='all', save=''):
+    def canpredict_compounds(self, ind_id, n=10, topX=10, consensus=True, keep_associated=False, cmpd_set='all',
+                             save=''):
         """!
         This function is used for predicting putative therapeutics for an indication
         of interest using a homology-based approach. Input an ind_id id and for each of the
@@ -3254,6 +3289,7 @@ class CANDO(object):
         @param ind_id str: Indication id
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
+        @param consensus bool: if True, only compounds with at least 2 votes will be printed
         @param keep_associated bool: Print Compounds that are already approved/associated for the Indication
         @param cmpd_set str: specify the compound set to use ('all', 'approved', or 'other')
         @param save str: name of a file to save results
@@ -3311,9 +3347,10 @@ class CANDO(object):
         i = 0
         if save:
             fo = open(save, 'w')
-            fo.write('rank\tscore1\tscore2\tid\tapproved\tname\n')
+            fo.write('rank\tscore1\tscore2\tprobability\tid\tapproved\tname\n')
         else:
-            print('rank\tscore1\tscore2\tid\tapproved\tname')
+            print('rank\tscore1\tscore2\tprobability\tid\tapproved\tname')
+        hg_dct = {}
         for p in enumerate(sorted_x):
             if i >= topX != -1:
                 break
@@ -3323,12 +3360,26 @@ class CANDO(object):
                     continue
             if not keep_associated and p[1][1][1]:
                 continue
-            if p[1][1][1]:
-                st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1), co.id_,
-                                                     (str(co.status == 'approved').lower() + '*').ljust(8), co.name)
+            if consensus and p[1][1][0] <= 1:
+                if i == 0:
+                    print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+                          '\targuments to include "consensus=False" to print results with\n'
+                          '\tscore1 == 1, and/or increase "n". \n')
+                break
+            if p[1][1][0] in hg_dct:
+                prb = hg_dct[p[1][1][0]]
             else:
-                st = "{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1), co.id_,
-                                                     (str(co.status == 'approved').lower()).ljust(8), co.name)
+                prb_success = 1 / (len(self.compounds) - 1) * n
+                prb = '%.2e' % Decimal(1.0 - stats.binom.cdf(p[1][1][0], len(ind.compounds), prb_success))
+                hg_dct[p[1][1][0]] = prb
+            if p[1][1][1]:
+                st = "{}\t{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1),
+                                                         prb.ljust(11), co.id_,
+                                                         (str(co.status == 'approved').lower() + '*').ljust(8), co.name)
+            else:
+                st = "{}\t{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1),
+                                                         prb.ljust(11), co.id_,
+                                                         (str(co.status == 'approved').lower()).ljust(8), co.name)
             if save:
                 fo.write(st + '\n')
             else:
@@ -3336,7 +3387,7 @@ class CANDO(object):
             i += 1
         print('\n')
 
-    def canpredict_indications(self, cmpd, n=10, topX=10, save=''):
+    def canpredict_indications(self, cmpd, n=10, topX=10, consensus=True, sorting='prob', save=''):
         """!
         This function is the inverse of canpredict_compounds. Input a compound
         of interest cando_cmpd (or a novel protein signature of interest new_sig)
@@ -3347,6 +3398,8 @@ class CANDO(object):
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
+        @param consensus bool: if True, only indications with at least 2 votes will be printed
+        @param sorting str: whether to sort the indications by probability ('prob') or score ('score')
         @return Returns None
         """
         if n == -1:
@@ -3367,23 +3420,48 @@ class CANDO(object):
         for c in cmpd.similar[0:n]:
             for ind in c[0].indications:
                 if ind.id_ not in i_dct:
-                    i_dct[ind.id_] = 1
+                    i_dct[ind.id_] = [1, len(ind.compounds)]
                 else:
-                    i_dct[ind.id_] += 1
-        sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
+                    i_dct[ind.id_][0] += 1
+
+        i2p_dct = {}
+        for ik in i_dct:
+            [k, n_app] = i_dct[ik]
+            if consensus and k == 1:
+                continue
+            prb = '%.2e' % Decimal(1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n))
+            i2p_dct[ik] = (k, prb)
+
+        if consensus and len(i2p_dct) == 0:
+            print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+                  '\targuments to include "consensus=False" to print results with\n'
+                  '\tscore1 == 1, and/or increase "n".\n')
+            quit()
+
+        if sorting == 'score':
+            sorted_x = sorted(list(i2p_dct.items()), key=lambda x: x[1][0], reverse=True)
+        elif sorting == 'prob':
+            sorted_x = sorted(list(i2p_dct.items()), key=lambda x: x[1][1], reverse=False)
+        else:
+            sorted_x = []
+            print('Please enter proper sorting method: "prob" or "score" -- quitting.')
+            quit()
+
         if save:
             fo = open(save, 'w')
             print("Saving the {} highest predicted indications...\n".format(topX))
-            fo.write("rank\tscore\tind_id\tindication\n")
+            fo.write("rank\tprobability\tscore\tind_id\tindication\n")
         else:
             print("Printing the {} highest predicted indications...\n".format(topX))
-            print("rank\tscore\tind_id    \tindication")
-        for i in range(topX):
+            print("rank\tprobability\tscore\tind_id    \tindication")
+        n_print = topX if len(sorted_x) >= topX else len(sorted_x)
+        for i in range(n_print):
             indd = self.get_indication(sorted_x[i][0])
+            prb = sorted_x[i][1][1]
             if save:
-                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+                fo.write("{}\t{}\t{}\t{}\t{}\n".format(i+1, prb, sorted_x[i][1][0], indd.id_, indd.name))
             else:
-                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], indd.id_, indd.name))
+                print("{}\t{}\t{}\t{}\t{}".format(i+1, prb.ljust(11), sorted_x[i][1][0], indd.id_, indd.name))
         if save:
             fo.close()
         print('')
