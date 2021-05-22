@@ -257,6 +257,9 @@ class CANDO(object):
         ## @var compute_distance
         # bool: Calculate the distance for each Compound against all other Compounds using chosen distance metric
         self.compute_distance = compute_distance
+        ## @var protein_distance
+        # bool: Calculate the distance for each Protein against all other Proteins using chosen distance metric
+        self.protein_distance = protein_distance
         self.clusters = {}
         ## @var rm_zeros
         # bool: Remove Compounds with all-zero signatures from CANDO object
@@ -295,10 +298,12 @@ class CANDO(object):
         ## @var protein_map
         # str: File path to Protein metadata mapping file
         self.protein_map = protein_map
-
+        ## @var ddi_compounds
+        # str: File path to Drug--drug mapping file
         self.ddi_compounds = ddi_compounds
+        ## @var ddi_compounds
+        # str: File path to Drug--Drug--ADE mapping file
         self.ddi_adrs = ddi_adrs
-        self.protein_distance = protein_distance
 
         ## @var proteins
         # List: Protein objects in the platform
@@ -308,6 +313,8 @@ class CANDO(object):
         # List: Compound objects in the platform
         self.compounds = []
         self.compound_ids = []
+        ## @var compound_pairs
+        # List: Compound_pair objects in the platform
         self.compound_pairs = []
         self.compound_pair_ids = []
         ## @var indications
@@ -1076,17 +1083,17 @@ class CANDO(object):
 
     def get_compound_pair(self, ids):
         """!
-        Get Compound object from Compound id
+        Get Compound_pair object from Compound_pair id
 
-        @param id_ int: Compound id
-        @return Returns object: Compound object
+        @param id_ int: Compound_pair id
+        @return Returns object: Compound_pair object
         """
         for c in self.compound_pairs:
             if c.id_ == ids:
                 return c
             elif c.id_ == (ids[1],ids[0]):
                 return c
-        print("{0} not in {1}".format(ids, self.c_map))
+        print("{0} not in {1}".format(ids, self.ddi_adrs))
         return None
 
     def get_protein(self, protein_id):
@@ -1219,9 +1226,9 @@ class CANDO(object):
 
     def common_targets(self, cmpds_file, n=10, negative=False, save_file=''):
         """!
-        Get the top scoring protein targets for a given compound
+        Get the consensus top scoring protein targets for a set of compounds
 
-        @param cmpds_file str: list of Compound IDs for which to search common targets
+        @param cmpds_file str: File containing a list of Compound IDs for which to search common targets
         @param n int: number of top targets to print/return
         @param negative int: if the interaction scores are negative (stronger) energies
         @param save_file str: save results to file name
@@ -1264,7 +1271,7 @@ class CANDO(object):
 
     def virtual_screen(self, protein, n=10, negative=False, compound_set='all', save_file=''):
         """!
-        Get the top scoring protein targets for a given compound
+        Get the top scoring compounds for a given protein
 
         @param protein Protein int or str: Protein (object, int index, or str id_) of which to screen for top scores
         @param n int: number of top compounds to print/return
@@ -2087,7 +2094,7 @@ class CANDO(object):
         """!
         Benchmark using the normalized discounted cumulative gain metric
 
-        @param file_name str: Name to be used for the variosu results files (file_name=test --> summary_ndcg-test.tsv)
+        @param file_name str: Name to be used for the results files (file_name=test --> summary_ndcg-test.tsv)
         @return Returns None
         """
         def dcg(l,k):
@@ -2269,7 +2276,7 @@ class CANDO(object):
     def canbenchmark_compounds(self, file_name, adrs=[], continuous=False,
                           bottom=False, ranking='standard'):
         """!
-        Benchmarks the platform based on compound similarity of those known to cause ADRs
+        Benchmarks the platform based on compound similarity of those known to interact with other compounds.
 
         @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
         @param adrs list: List of ADR ids to be used for this benchmark, otherwise all will be used.
@@ -3570,7 +3577,7 @@ class CANDO(object):
 
     def canpredict_ddi_adrs(self, cmpd_pair, n=10, topX=10, save=''):
         """!
-        Similarly to canpredict_adrs(), input a compound pair of interest cmpd_pair
+        Similarly to canpredict_adrs(), input a compound pair of interest (cmpd_pair)
         and the most similar compound pairs to it will be computed. The ADRs associated
         with the top n most similar compound pairs to the query pair will be examined
         to see if any are repeatedly enriched.
@@ -4370,7 +4377,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 
 def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
     """!
-   Add a block of compounds to the existing CANDO matrix using our in-house protocol BANDOCK.
+   Add new compounds to an existing CANDO Compound library, or create a new Compoun library using our in-house protocol BANDOCK.
 
    @param cmpd_list str: filepath to all input compounds
    @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
