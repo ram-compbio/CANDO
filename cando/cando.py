@@ -4375,15 +4375,17 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     print_time(end-start) 
 
 
-def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
+def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None, map_indications='v2.3'):
     """!
-   Add new compounds to an existing CANDO Compound library, or create a new Compoun library using our in-house protocol BANDOCK.
+   Add new compounds to an existing CANDO Compound library, or create a new Compound library using our in-house protocol
+   BANDOCK.
 
    @param cmpd_list str: filepath to all input compounds
    @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
    @param vect str: integer "int" or binary "bit" vector for fingerprint
    @param cmpd_dir str: ??
    @param v str: ??
+   @param map_indications str: CANDO version number to string match exact names from compound file to existing ind_map
    @return Returns None
    """
     start = time.time()
@@ -4391,7 +4393,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
     # List of new compounds loaded into df
     ncs = pd.read_csv(cmpd_list, sep='\t', header=None)
   
-    vs = ['v2.2','v2.3','v2.4','v2.5','test.0']
+    vs = ['v2.2', 'v2.3', 'v2.4', 'v2.5', 'test.0']
     if v in vs:
         # Redundant with future lines. 
         # Remove future lines and implement them into get_data()
@@ -4403,28 +4405,29 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
         new_v = '.'.join(t)
         print("New compound library is {}.".format(new_v))
         
-        curr_cmpd_path = "{}/cmpds/fps-{}/".format(pre,curr_v)
-        if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,curr_v,fp,vect)):
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(curr_v,fp,vect)
-            dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,curr_v,fp,vect))
-        cmpd_path = "{}/cmpds/fps-{}/".format(pre,new_v)
+        curr_cmpd_path = "{}/cmpds/fps-{}/".format(pre, curr_v)
+        if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre, curr_v, fp, vect)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(curr_v,
+                                                                                                               fp, vect)
+            dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre, curr_v, fp, vect))
+        cmpd_path = "{}/cmpds/fps-{}/".format(pre, new_v)
         os.makedirs(cmpd_path, exist_ok=True)
-        os.system("cp {0}/{2}-{3}_vect.pickle {1}/{2}-{3}_vect.pickle".format(curr_cmpd_path,cmpd_path,fp,vect))
+        os.system("cp {0}/{2}-{3}_vect.pickle {1}/{2}-{3}_vect.pickle".format(curr_cmpd_path, cmpd_path, fp, vect))
         
-        if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre,curr_v)):
+        if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(curr_v)
-            dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,curr_v))
+            dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre, curr_v))
         
-        d_map = pd.read_csv("{}/mappings/drugbank-{}.tsv".format(pre,curr_v),sep='\t')
+        d_map = pd.read_csv("{}/mappings/drugbank-{}.tsv".format(pre, curr_v), sep='\t')
         
-        if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre,curr_v)):
+        if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(curr_v)
-            dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,curr_v))
-        os.system("cp {0}/mappings/drugbank2ctd-{1}.tsv {0}/mappings/drugbank2ctd-{2}.tsv".format(pre,curr_v,new_v))
+            dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre, curr_v))
+        os.system("cp {0}/mappings/drugbank2ctd-{1}.tsv {0}/mappings/drugbank2ctd-{2}.tsv".format(pre, curr_v, new_v))
 
-        if not os.path.exists("{}/cmpds/fps-{}/inchi_keys.pickle".format(pre,curr_v)):
+        if not os.path.exists("{}/cmpds/fps-{}/inchi_keys.pickle".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/inchi_keys.pickle'.format(curr_v)
-            dl_file(url, '{}/cmpds/fps-{}/inchi_keys.pickle'.format(pre,curr_v))
+            dl_file(url, '{}/cmpds/fps-{}/inchi_keys.pickle'.format(pre, curr_v))
   
         with open('{}/inchi_keys.pickle'.format(curr_cmpd_path), 'rb') as f:
             inchi_dict = pickle.load(f)
@@ -4432,10 +4435,10 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
 
         for c in ncs.itertuples(index=False):
             try:
-                if file_type=='mol':
-                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                if file_type == 'mol':
+                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
                     name = nc.GetProp("_Name")
-                elif file_type=='smi':
+                elif file_type == 'smi':
                     nc = Chem.MolFromSmiles("{}".format(c[0]))
                     name = c[1]
                     nc.SetProp("_Name", name)
@@ -4449,7 +4452,9 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             except:
                 match = None
             if match:
-                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
+                print("    {} is the same as {} - {} in the library".format(name, int(match),
+                                                                            d_map.loc[(d_map['CANDO_ID'] == int(match)),
+                                                                                      'GENERIC_NAME'].values[0], match))
                 continue
             else:
                 print("    Adding compound {} - {}".format(cmpd_num,name))
@@ -4458,56 +4463,101 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
            
-            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
+                                 ignore_index=True)
             rad = int(int(fp[7:])/2)
-            if fp[3]=='f':
+            if fp[3] == 'f':
                 features = True
             else:
                 features = False
 
-            if vect=='int':
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+            if vect == 'int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc, rad, useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             else:
                 bits = int(vect[:4])
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc, rad, useFeatures=features, nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
     elif v and v not in vs:
         new_v = v
         print("Creating new compound library {}...".format(new_v))
-        print("The library will be built at {}/{}.".format(os.getcwd(),new_v))
+        print("The library will be built at {}/{}.".format(os.getcwd(), new_v))
         os.makedirs(new_v, exist_ok=True)
         os.makedirs("{}/cmpds".format(new_v), exist_ok=True)
         os.makedirs("{}/mappings".format(new_v), exist_ok=True)
         cmpd_path = "{0}/cmpds/fps-{0}/".format(new_v)
         os.makedirs(cmpd_path, exist_ok=True)
-        d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
+        d_map = pd.DataFrame(columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])
+
+        cid2name = {}
+        cname2inds = {}
+        if map_indications:
+            if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre, map_indications)):
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/' \
+                      'drugbank-{}.tsv'.format(map_indications)
+                dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre, map_indications))
+            if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre, map_indications)):
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/' \
+                      'drugbank2ctd-{}.tsv'.format(map_indications)
+                dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre, map_indications))
+
+            fcm = open('{}/mappings/drugbank-{}.tsv'.format(pre, map_indications), 'r')
+            cmls = fcm.readlines()
+            fcm.close()
+            for cml in cmls[1:]:
+                cls = cml.split('\t')
+                cid = cls[0]
+                cname = cls[2]
+                cid2name[cid] = cname
+
+            fim = open('{}/mappings/drugbank2ctd-{}.tsv'.format(pre, map_indications), 'r')
+            imls = fim.readlines()
+            fim.close()
+            for iml in imls[1:]:
+                ils = iml.split('\t')
+                cid = ils[0]
+                indname = ils[1]
+                indid = ils[2]
+                cname = cid2name[cid]
+                if cname in cname2inds:
+                    if (indname, indid) not in cname2inds[cname]:
+                        cname2inds[cname].append((indname, indid))
+                else:
+                    cname2inds[cname] = [(indname, indid)]
+
         cmpd_num = 0
         # Create new fingerprint dict and save it to pickle for future use
         c_fps = {}
-        if vect=='int':
-            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+        if vect == 'int':
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                 pickle.dump(c_fps, f)
         else:
             bits = int(vect[:4])
-            with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+            with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                 pickle.dump(c_fps, f)
         # Create new inchi dict
         inchi_dict = {}
 
+        if map_indications:
+            foind = open("{0}/mappings/inds-{0}.tsv".format(new_v), 'w')
+            foind.write('CANDO_ID\tINDICATION_NAME\tMESH_ID\tINDICATION_ID\n')
+            ind2id = {}
+            curr_ind_id = 0
+
         for c in ncs.itertuples(index=False):
             try:
-                if file_type=='mol':
-                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                if file_type == 'mol':
+                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
                     name = nc.GetProp("_Name")
-                elif file_type=='smi':
+                elif file_type == 'smi':
                     nc = Chem.MolFromSmiles("{}".format(c[0]))
                     name = c[1]
                     nc.SetProp("_Name", name)
@@ -4520,34 +4570,50 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             except:
                 match = None
             if match:
-                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
+                print("    {} is the same as {} - {} in the library".format(name, int(match),
+                                                                            d_map.loc[(d_map['CANDO_ID'] == int(match)),
+                                                                                      'GENERIC_NAME'].values[0], match))
                 continue
             else:
-                print("    Adding compound {} - {}".format(cmpd_num,name))
+                print("    Adding compound {} - {}".format(cmpd_num, name))
             
             with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
            
-            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
+                                 ignore_index=True)
+
+            if map_indications:
+                if name in cname2inds:
+                    inds = cname2inds[name]
+                    for ind in inds:
+                        if ind in ind2id:
+                            indid = ind2id[ind]
+                        else:
+                            indid = curr_ind_id
+                            ind2id[ind] = curr_ind_id
+                            curr_ind_id += 1
+                        foind.write('{}\t{}\t{}\t{}\n'.format(cmpd_num, ind[0], ind[1], indid))
             
             rad = int(int(fp[7:])/2)
-            if fp[3]=='f':
+            if fp[3] == 'f':
                 features = True
             else:
                 features = False
 
-            if vect=='int':
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+            if vect == 'int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc, rad, useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             else:
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc, rad, useFeatures=features, nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
  
@@ -4556,7 +4622,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
         print("Creating new compound library {}...".format(new_v))
         cmpd_path = "{0}/cmpds/fps-{0}/".format(new_v)
         os.makedirs(cmpd_path, exist_ok=True)
-        d_map = pd.DataFrame(columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS'])
+        d_map = pd.DataFrame(columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])
         cmpd_num = 0
         # Create new fingerprint dict and save it to pickle for future use
         c_fps = {}
@@ -4572,7 +4638,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
 
         for c in ncs.itertuples(index=False):
             try:
-                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir,c[0]))
+                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
                 nc = Chem.RemoveHs(nc)
             except:
                 print("{} cannot load this molecule.".format(c[0]))
@@ -4584,38 +4650,42 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             except:
                 match = None
             if match:
-                print("    {} is the same as {} - {} in the library".format(name, int(match), d_map.loc[(d_map['CANDO_ID']==int(match)),'GENERIC_NAME'].values[0], match))
+                print("    {} is the same as {} - {} in the library".format(name, int(match),
+                                                                            d_map.loc[(d_map['CANDO_ID'] == int(match)),
+                                                                                      'GENERIC_NAME'].values[0], match))
                 continue
             else:
-                print("    Adding compound {} - {}".format(cmpd_num,name))
+                print("    Adding compound {} - {}".format(cmpd_num, name))
             
             with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
            
-            d_map = d_map.append(pd.DataFrame([[cmpd_num,'NA',name,'other']],columns=['CANDO_ID','DRUGBANK_ID','GENERIC_NAME','DRUG_GROUPS']),ignore_index=True)
+            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
+                                 ignore_index=True)
             
             rad = int(int(fp[7:])/2)
-            if fp[3]=='f':
+            if fp[3] == 'f':
                 features = True
             else:
                 features = False
 
-            if vect=='int':
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+            if vect == 'int':
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc, rad, useFeatures=features)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             else:
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
                     c_fps = pickle.load(f)
-                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'wb') as f:
+                c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc, rad, useFeatures=features, nBits=bits)
+                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
                     pickle.dump(c_fps, f)
             cmpd_num += 1
-    os.makedirs("{}/mappings".format(new_v),exist_ok=True) 
-    d_map.to_csv("{0}/mappings/cmpds-{0}.tsv".format(new_v),sep='\t',index=False,na_rep='NA')
+    os.makedirs("{}/mappings".format(new_v), exist_ok=True)
+    d_map.to_csv("{0}/mappings/cmpds-{0}.tsv".format(new_v), sep='\t', index=False, na_rep='NA')
     print("Added compounds to compound library {}.\n".format(new_v))
     # Need to add functionality to handle loading a new version created by user.
 
