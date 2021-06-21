@@ -8,7 +8,6 @@ import progressbar
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
-from openbabel import pybel
 import difflib
 import matplotlib.pyplot as plt
 from decimal import Decimal
@@ -1008,9 +1007,12 @@ class CANDO(object):
                     if prev_id == c_id:
                         pass
                     else:
-                        cmpd = self.get_compound(c_id)
-                        prev_id = c_id
-
+                        cmpd = self.get_compound(c_id, quiet=True)
+                        if cmpd is not None:
+                            prev_id = c_id
+                        else:
+                            # cmpd is not in CANDO - prevents from crashing
+                            continue
                     try:
                         adr = self.get_adr(adr_id)
                         adr.compounds.append(cmpd)
@@ -3407,6 +3409,7 @@ class CANDO(object):
         @param topX int: top number of predicted Indications to be printed
         @param consensus bool: if True, only indications with at least 2 votes will be printed
         @param sorting str: whether to sort the indications by probability ('prob') or score ('score')
+        @param save str: path to file to save the output
         @return Returns None
         """
         if n == -1:
@@ -3436,7 +3439,7 @@ class CANDO(object):
             [k, n_app] = i_dct[ik]
             if consensus and k == 1:
                 continue
-            prb = '%.2e' % Decimal(1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n))
+            prb = 1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n)
             i2p_dct[ik] = (k, prb)
 
         if consensus and len(i2p_dct) == 0:
@@ -3464,7 +3467,7 @@ class CANDO(object):
         n_print = topX if len(sorted_x) >= topX else len(sorted_x)
         for i in range(n_print):
             indd = self.get_indication(sorted_x[i][0])
-            prb = sorted_x[i][1][1]
+            prb = '%.2e' % Decimal(sorted_x[i][1][1])
             if save:
                 fo.write("{}\t{}\t{}\t{}\t{}\n".format(i+1, prb, sorted_x[i][1][0], indd.id_, indd.name))
             else:
@@ -3473,7 +3476,7 @@ class CANDO(object):
             fo.close()
         print('')
 
-    def canpredict_adr(self, cmpd, n=10, topX=10, save=''):
+    def canpredict_adr(self, cmpd, n=10, topX=10, consensus=True, sorting='prob', save=''):
         """!
         This function is the inverse of canpredict_compounds. Input a compound
         of interest cando_cmpd (or a novel protein signature of interest new_sig)
@@ -3484,12 +3487,15 @@ class CANDO(object):
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
         @param topX int: top number of predicted Indications to be printed
+        @param consensus bool: if True, only ADRs with at least 2 votes will be printed
+        @param sorting str: whether to sort the ADRs by probability ('prob') or score ('score')
+        @param save str: path to file to save output
         @return Returns None
         """
         if n == -1:
             n = len(self.compounds)-1
         if topX == -1:
-            topX = len(self.indications)
+            topX = len(self.adrs)
 
         if type(cmpd) is Compound:
             cmpd = cmpd
@@ -3499,28 +3505,53 @@ class CANDO(object):
         print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
         self.generate_similar_sigs(cmpd, sort=True)
-        print("Generating indication predictions using top{} most similar compounds...".format(n))
+        print("Generating ADR predictions using top{} most similar compounds...".format(n))
         a_dct = {}
         for c in cmpd.similar[0:n]:
             for adr in c[0].adrs:
                 if adr.id_ not in a_dct:
-                    a_dct[adr.id_] = 1
+                    a_dct[adr.id_] = [1, len(adr.compounds)]
                 else:
-                    a_dct[adr.id_] += 1
-        sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
+                    a_dct[adr.id_][0] += 1
+
+        a2p_dct = {}
+        for ik in a_dct:
+            [k, n_app] = a_dct[ik]
+            if consensus and k == 1:
+                continue
+            prb = 1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n)
+            a2p_dct[ik] = (k, prb)
+
+        if consensus and len(a2p_dct) == 0:
+            print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+                  '\targuments to include "consensus=False" to print results with\n'
+                  '\tscore1 == 1, and/or increase "n".\n')
+            quit()
+
+        if sorting == 'score':
+            sorted_x = sorted(list(a2p_dct.items()), key=lambda x: x[1][0], reverse=True)
+        elif sorting == 'prob':
+            sorted_x = sorted(list(a2p_dct.items()), key=lambda x: x[1][1], reverse=False)
+        else:
+            sorted_x = []
+            print('Please enter proper sorting method: "prob" or "score" -- quitting.')
+            quit()
+
         if save:
             fo = open(save, 'w')
             print("Saving the {} highest predicted ADRs...\n".format(topX))
-            fo.write("rank\tscore\tadr_id\tadr\n")
+            fo.write("rank\tprobability\tscore\tadr_id\tadr\n")
         else:
             print("Printing the {} highest predicted ADRs...\n".format(topX))
-            print("rank\tscore\tadr_id    \tadr")
-        for i in range(topX):
+            print("rank\tprobability\tscore\tadr_id    \tadr")
+        n_print = topX if len(sorted_x) >= topX else len(sorted_x)
+        for i in range(n_print):
             adrr = self.get_adr(sorted_x[i][0])
+            prb = '%.2e' % Decimal(sorted_x[i][1][1])
             if save:
-                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], adrr.id_, adrr.name))
+                fo.write("{}\t{}\t{}\t{}\t{}\n".format(i+1, prb, sorted_x[i][1][0], adrr.id_, adrr.name))
             else:
-                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], adrr.id_, adrr.name))
+                print("{}\t{}\t{}\t{}\t{}".format(i+1, prb.ljust(11), sorted_x[i][1][0], adrr.id_, adrr.name))
         if save:
             fo.close()
         print('')
@@ -5078,4 +5109,3 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
                   compute_distance=compute_distance, dist_metric=dist_metric, protein_set=protein_set, ncpus=ncpus)
 
     return cando
-
