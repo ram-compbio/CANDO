@@ -3858,6 +3858,106 @@ class Matrix(object):
             for p in range(len(self.proteins)):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
+def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int", 
+        dist="dice", org="nrpdb", bs="coach", 
+        c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
+        i_score="P", nr_ligs=True, approved_only=False, lig_name=False, 
+        lib_path='',prot_path=''):
+
+    def print_time(s):
+        if s >= 60:
+            m = s / 60.0
+            s -= m * 60.0
+            if m >= 60.0:
+                h = m / 60.0
+                m -= h * 60.0
+                print("Interaciton calculation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+            else:
+                print("Interaciton calculation took {:.0f} min {:.0f} s to finish.".format(m, s))
+        else:
+            print("Interaciton calculation took {:.0f} s to finish.".format(s))
+
+    print("Calculating BANDOCK interaction...")
+    start = time.time()
+
+    c_id = int(c_id)
+
+    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    lig_path = "{}/ligs/fps".format(pre)
+    if not lib_path:
+        cmpd_path = "{}/cmpds/fps-{}".format(pre,v)
+        map_path = "{}/mappings".format(pre)
+    else:
+        cmpd_path = "{0}/{1}/cmpds/fps-{1}".format(lib_path,v)
+        map_path = "{0}/{1}/mappings".format(lib_path,v)
+
+    # Remove redundant ligands from full list
+    # Especially important for percentile calculations
+    if nr_ligs:
+        if not os.path.exists("{}/mappings/nr_ligs.csv".format(pre)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/nr_ligs.csv'
+            dl_file(url, '{}/mappings/nr_ligs.csv'.format(pre))
+        nr_ligs = pd.read_csv("{}/mappings/nr_ligs.csv".format(pre),header=None)
+    nr_ligs = nr_ligs[0].values.flatten()
+
+    # Download protein matrix if it does not exist
+    if not prot_path:
+        if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+            dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+        p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    else:
+        p_matrix = pd.read_csv("{}/{}-{}.tsv".format(prot_path,org,bs),sep='\t',header=None,index_col=0)
+
+    
+    # Create dictionary of lists
+    # Keys == proteins
+    # Values == list of predicted bs + bs scores
+    p_dict = {}
+    for p in p_matrix.itertuples():
+        p_dict[p[0]] = list(zip(p[1].split(','),p[2].split(',')))
+    
+    try:
+        p_dict = {p_id: p_dict[p_id]}
+    except:
+        print("{} does not exist in protein library".format(p_id))
+        sys.exit()
+
+    if i_score not in ['C','dC','P','CxP','dCxP','avgC','medC','avgP','medP']:
+        print("{} is not an applicable interaction score.".format(i_score))
+        return
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(cmpd_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect))
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(lig_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(lig_path,fp,vect))
+
+    # Load compound and ligand fingerprint pickles
+    with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
+        c_fps = pickle.load(f)
+    with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
+        l_fps = pickle.load(f)
+
+    try:
+        check = c_fps[c_id]
+    except:
+        print("{} does not exist in compound library".format(c_id))
+        sys.exit()
+
+    print("Interaction between {} and {}.".format(c_id,p_id))
+
+    score = calc_scores(c_id,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name)
+    print("Interaction score between {} and {} = {}".format(c_id,p_id,score[1][0]))
+
+    end = time.time()
+    print_time(end-start) 
+    
+    return(score[1][0])
+
+
 def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", 
         dist="dice", org="nrpdb", bs="coach", 
         c_cutoff=0.0, p_cutoff=0.0, percentile_cutoff=0.0, 
@@ -4196,8 +4296,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     end = time.time()
     print("Signature written to {}/{}.".format(out_path,out_file))
     print_time(end-start) 
-
-
+    return(mat.iloc[:,0].values)
 
 def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None):
     start = time.time()
