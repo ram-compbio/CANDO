@@ -29,6 +29,21 @@ Then you can install CANDO using the following command:
 `conda install -c ram-compbio cando`
 
 
+## Tutorial
+
+There is a CANDO tutorial available as a Jupyter notebook.
+This notebook can be found [here](https://github.com/ram-compbio/CANDO/blob/master/CANDO_tutorial.ipynb) in this repo.
+
+It can also be downloaded from anaconda:
+
+`anaconda download ram-compbio/CANDO_tutorial`
+
+
+## Documentation
+
+CANDO API can be found [here](https://github.com/ram-compbio/CANDO/blob/master/docs)
+
+
 ## Test
 
 You can test your install by running our script:
