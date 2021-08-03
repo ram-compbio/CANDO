@@ -4044,7 +4044,10 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
 
     c_id = int(c_id)
 
-    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    if org=='test':
+        pre = "cando/data/v2.2+/"
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
     lig_path = "{}/ligs/fps".format(pre)
     if not lib_path:
         cmpd_path = "{}/cmpds/fps-{}".format(pre,v)
@@ -4163,7 +4166,11 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     print("Generating CANDO matrix...")
     start = time.time()
 
-    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    if org=='test':
+        pre = "cando/data/v2.2+/"
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
+
     lig_path = "{}/ligs/fps".format(pre)
     if not lib_path:
         cmpd_path = "{}/cmpds/fps-{}".format(pre,v)
@@ -4426,8 +4433,10 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 
     print("Generating CANDO signature...")
     start = time.time()
-
-    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    if org=='test':
+        pre = "cando/data/v2.2+/"
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
     lig_path = "{}/ligs/fps/".format(pre)
     if out_file == '':
         if percentile_cutoff != 0.0:
@@ -4913,7 +4922,10 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
         print("{} is not a correct organism.".format(org))
         sys.exit()
     print('Downloading data for {}...'.format(v))
-    pre = os.path.dirname(__file__) + "/data/v2.2+"
+    if org=='test':
+        pre = "cando/data/v2.2+"
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+"
     # Dirs
     os.makedirs(pre, exist_ok=True)
     os.makedirs('{}/mappings'.format(pre), exist_ok=True)
@@ -5036,7 +5048,8 @@ def get_test():
     @returns Returns None
     """
     print('Downloading data for test...')
-    pre = os.path.dirname(__file__) + "/data/v2.2+/test"
+    pre = "cando/data/v2.2+/test"
+    #pre = os.path.dirname(__file__) + "/data/v2.2+/test"
     os.makedirs(pre,exist_ok=True)
     #url = 'http://protinfo.compbio.buffalo.edu/cando/data/test/test-cmpd_scores.tsv'
     #dl_file(url, '{}/test-cmpd_scores.tsv'.format(pre))

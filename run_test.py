@@ -1,11 +1,17 @@
 import sys, os
 import cando as cnd
-pre = os.path.dirname(cnd.__file__)
-print(pre)
-print('\n')
+#pre = os.path.dirname(cnd.__file__)
+#print(pre)
+#print('\n')
 cnd.get_test()
-cnd.get_data(v='test.0', org='test')
+#cnd.get_data(v='test.0', org='test')
+print(os.listdir())
+print(os.getcwd())
 os.chdir("cando/data/v2.2+/test")
+#os.system("cp -r ${PREFIX}/lib/python3.7/site-packages/cando/data")
+#os.system("cd ${PREFIX}/lib/python3.7/site-packages/cando/data/v2.2+/test")
+print(os.listdir())
+print(os.getcwd())
 print('\n')
 
 # Set all variables
