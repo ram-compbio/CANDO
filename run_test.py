@@ -141,7 +141,9 @@ print('\n')
 
 print("Test #15 - Add and save compound then generate new matrix")
 print('-------')
+print(os.listdir())
 cnd.add_cmpds(new_cmpds, cmpd_dir=cmpd_dir, v="test.0")
+print(os.listdir())
 cnd.generate_matrix(v="test.1", org="test", out_file=matrix_file, ncpus=ncpus)
 print('\n')
 

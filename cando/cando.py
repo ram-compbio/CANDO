@@ -4045,7 +4045,7 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
     c_id = int(c_id)
 
     if org=='test':
-        pre = "cando/data/v2.2+/"
+        pre = "."
     else:
         pre = os.path.dirname(__file__) + "/data/v2.2+/"
     lig_path = "{}/ligs/fps".format(pre)
@@ -4167,7 +4167,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     start = time.time()
 
     if org=='test':
-        pre = "cando/data/v2.2+/"
+        pre = "."
     else:
         pre = os.path.dirname(__file__) + "/data/v2.2+/"
 
@@ -4434,7 +4434,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     print("Generating CANDO signature...")
     start = time.time()
     if org=='test':
-        pre = "cando/data/v2.2+/"
+        pre = "."
     else:
         pre = os.path.dirname(__file__) + "/data/v2.2+/"
     lig_path = "{}/ligs/fps/".format(pre)
@@ -4926,7 +4926,7 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
         sys.exit()
     print('Downloading data for {}...'.format(v))
     if org=='test':
-        pre = "cando/data/v2.2+"
+        pre = "."
     else:
         pre = os.path.dirname(__file__) + "/data/v2.2+"
     # Dirs
