@@ -4529,7 +4529,10 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
    @return Returns None
    """
     start = time.time()
-    pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    if v=='test.0':
+        pre = "cando/data/v2.2+/"
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
     # List of new compounds loaded into df
     ncs = pd.read_csv(cmpd_list, sep='\t', header=None)
   
