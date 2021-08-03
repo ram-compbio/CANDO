@@ -1,16 +1,7 @@
 import sys, os
 import cando as cnd
-#pre = os.path.dirname(cnd.__file__)
-#print(pre)
-#print('\n')
 cnd.get_test()
-#cnd.get_data(v='test.0', org='test')
-print(os.listdir())
-print(os.getcwd())
 os.chdir("cando/data/v2.2+/test")
-#os.system("cp -r ${PREFIX}/lib/python3.7/site-packages/cando/data")
-#os.system("cd ${PREFIX}/lib/python3.7/site-packages/cando/data/v2.2+/test")
-print(os.listdir())
 print(os.getcwd())
 print('\n')
 
@@ -151,7 +142,10 @@ print("Test #16 - Add and save compound to new library then generate new matrix"
 print('-------')
 cnd.add_cmpds(new_cmpds, cmpd_dir=cmpd_dir)
 cnd.generate_matrix(v="v0.0", org="test", lib_path='.', out_file=matrix_file, ncpus=ncpus)
-#os.system("rm -r {}/data/v2.2+/cmpds/fps-v0.0".format(pre))
-#os.system("rm -r {}/data/v2.2+/mappings/*-v0.0.tsv".format(pre))
 print('\n')
+
+print("Cleaning up test data...")
+os.chdir("..")
+os.system("rm -r test")
+print('Done.\n')
 
