@@ -716,9 +716,6 @@ class CANDO(object):
                 if self.dist_metric == "rmsd":
                     distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
-                #elif self.dist_metric in ['cosine']:
-                #    distance_matrix = cosine_dist(snp)
-                #    distance_matrix = squareform(distance_matrix, checks=False)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                     for i in range(len(self.compound_pairs)):
                         print("{} of {}".format(i+1,len(self.compound_pairs)))
@@ -822,26 +819,23 @@ class CANDO(object):
             else:
                 print('Computing {} distances...'.format(self.dist_metric))
                 # put all compound signatures into 2D-array
-                signatures = []
-                for i in range(0, len(self.compounds)):
-                    signatures.append(self.compounds[i].sig)
+                signatures = [self.compounds[i].sig for i in range(len(self.compounds))]
+                #for i in range(0, len(self.compounds)):
+                #    signatures.append(self.compounds[i].sig)
                 snp = np.array(signatures)  # convert to numpy form
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
                     distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
-                    distance_matrix = squareform(distance_matrix)
+                    #distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['correlation', 'euclidean', 'cityblock', 'cosine']:
                     distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
-                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    distance_matrix = squareform(distance_matrix, checks=False)
-                #elif self.dist_metric in ['cosine']:
-                #    distance_matrix = cosine_dist(snp)
-                #    distance_matrix = squareform(distance_matrix, checks=False)
+                    #distance_matrix = squareform(distance_matrix, checks=False)
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
                     exit()
 
+                '''
                 # step through the condensed matrix - add RMSDs to Compound.similar lists
                 nc = len(self.compounds)
                 n = 0
@@ -855,6 +849,14 @@ class CANDO(object):
                         c1.similar.append((c2, r))
                         c2.similar.append((c1, r))
                         n += 1
+                '''
+                # Iterate through the square matrix, zip compounds and scores, 
+                # remove the self value, then set similar list for the compound
+                for i in range(len(self.compounds)):
+                    c = self.compounds[i]
+                    l = list(zip(self.compounds,distance_matrix[i]))
+                    del l[i]
+                    c.similar = l
                 print('Done computing {} distances.\n'.format(self.dist_metric))
             
             if self.save_dists:
@@ -960,9 +962,6 @@ class CANDO(object):
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
                     #                                     n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    distance_matrix = squareform(distance_matrix, checks=False)
-                elif self.dist_metric in ['cosine']:
-                    distance_matrix = cosine_dist(snp)
                     distance_matrix = squareform(distance_matrix, checks=False)
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
@@ -4514,6 +4513,132 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     print_time(end-start) 
     return(mat.iloc[:,0].values)
 
+def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
+                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=False, out_file='', out_path=".", nr_ligs=True,
+                       prot_path=''):
+    """!
+       Generate an interaction signature for a query compound using our in-house protocol BANDOCK. Note: the parameters
+       for this function MUST MATCH the parameters used to generate the matrix in use. Otherwise, the scores will be
+       incompatible.
+
+       @param smi str: SMILES string of compound for which you want to generate a BANDOCK CANDO signature
+       @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
+       @param vect str: integer "int" or binary "bit" vector for fingerprint
+       @param dist str: use Sorenson-Dice "dice" for vect="int" and Tanimoto "tani" for vect="bit"
+       @param org str: protein library to use ('nrpdb' or 'homo_sapien')
+       @param bs str: the method to use, just use "coach"
+       @param c_cutoff float: minimum Cscore (Tanimoto/Dice similarity score) to consider for scoring
+       @param p_cutoff float: minimum Pscore (binding site score from COACH) to consider for scoring
+       @param percentile_cutoff float: %ile cutoff for fingerprint similarity scores in 'dC' scoring protocols
+       @param i_score str: the scoring protocol to use ('P', 'C', 'dC', 'CxP', dCxP')
+       @param save_sig bool: Save signature to file or not. If False then out_file and out_path are not used. (default: False)
+       @param out_file str: filename of the output signature
+       @param out_path str: path to the output signature
+       @param nr_ligs bool: use only the non-redundant set of ligands for 'dC' scoring protocols (recommended)
+       @param prot_path str: specify a local protein library for custom analyses
+       @return Returns None
+       """
+    def print_time(s):
+        if s >= 60:
+            m = s / 60.0
+            s -= m * 60.0
+            if m >= 60.0:
+                h = m / 60.0
+                m -= h * 60.0
+                print("Signature generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+            else:
+                print("Signature generation took {:.0f} min {:.0f} s to finish.".format(m, s))
+        else:
+            print("signature generation took {:.0f} s to finish.".format(s))
+
+    print("Generating CANDO signature...")
+    start = time.time()
+    if org=='test':
+        pre = "."
+    else:
+        pre = os.path.dirname(__file__) + "/data/v2.2+/"
+    lig_path = "{}/ligs/fps/".format(pre)
+    if out_file == '':
+        if percentile_cutoff != 0.0:
+            out_file = "{}/cmpd_0-{}-{}-{}-{}-{}-percentile{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,percentile_cutoff,p_cutoff,i_score)
+        else:
+            out_file = "{}/cmpd_0-{}-{}-{}-{}-{}-c{}-p{}-{}.tsv".format(out_path,fp,vect,dist,org,bs,c_cutoff,p_cutoff,i_score)
+    os.makedirs(out_path, exist_ok=True)
+
+    # Remove redundant ligands from full list
+    # Especially important for percentile calculations
+    if nr_ligs:
+        if not os.path.exists("{}/mappings/nr_ligs.csv".format(pre)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/nr_ligs.csv'
+            dl_file(url, '{}/mappings/nr_ligs.csv'.format(pre))
+        nr_ligs = pd.read_csv("{}/mappings/nr_ligs.csv".format(pre),header=None)
+    nr_ligs = nr_ligs[0].values.flatten()
+
+    # Download protein matrix if it does not exist
+    if not prot_path:
+        if not os.path.exists("{}/prots/{}-{}.tsv".format(pre,org,bs)):
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-{}.tsv'.format(org,bs)
+            dl_file(url, '{}/prots/{}-{}.tsv'.format(pre,org,bs))
+        p_matrix = pd.read_csv("{}/prots/{}-{}.tsv".format(pre,org,bs),sep='\t',header=None,index_col=0)
+    else:
+        p_matrix = pd.read_csv("{}/{}-{}.tsv".format(prot_path,org,bs),sep='\t',header=None,index_col=0)
+    
+    # Create dictionary of lists
+    # Keys == proteins
+    # Values == list of predicted bs + bs scores
+    p_dict = {}
+    for p in p_matrix.itertuples():
+        p_dict[p[0]] = list(zip(p[1].split(','),p[2].split(',')))
+
+    if i_score not in ['C','dC','P','CxP','dCxP','avgC','medC','avgP','medP']:
+        print("{} is not an applicable interaction score.".format(i_score))
+        return
+
+    nc = Chem.MolFromSmiles(smi)
+    #nc = Chem.MolFromMolFile(cmpd_file)
+    nc = Chem.RemoveHs(nc)
+    #name = nc.GetProp("_Name")
+
+    c_fps = {}
+    rad = int(int(fp[7:])/2)
+    if fp[3]=='f':
+        features = True
+    else:
+        features = False
+
+    if vect=='int':
+        c_fps[0] = AllChem.GetMorganFingerprint(nc,rad,useFeatures=features)
+    else:
+        bits = int(vect[:4])
+        c_fps[0] = AllChem.GetMorganFingerprintAsBitVect(nc,rad,useFeatures=features,nBits=bits)
+
+    if not os.path.exists("{}/{}-{}_vect.pickle".format(lig_path,fp,vect)):
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
+        dl_file(url, '{}/{}-{}_vect.pickle'.format(lig_path,fp,vect))
+
+    # Load ligand fingerprint pickles
+    with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
+        l_fps = pickle.load(f)
+
+    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs)
+    #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
+    scores = {scores[0]:scores[1]}
+
+    mat = pd.DataFrame.from_dict(scores)
+    mat.sort_index(axis=1,inplace=True)
+    mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
+    print("Signature generation complete.")
+    
+    if save_sig:
+        mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
+        print("Signature written to {}/{}.".format(out_path,out_file))
+    
+    end = time.time()
+    print_time(end-start) 
+    return(mat)
+    #return(mat.iloc[:,0].values)
+
+
 
 def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".", v=None, map_indications='v2.3'):
     """!
@@ -4833,23 +4958,6 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
     # Need to add functionality to handle loading a new version created by user.
 
 
-def cosine_dist(A):
-    similarity = np.dot(A, A.T)
-    # squared magnitude of preference vectors (number of occurrences)
-    square_mag = np.diag(similarity)
-    # inverse squared magnitude
-    inv_square_mag = 1 / square_mag
-    # if it doesn't occur, set it's inverse magnitude to zero (instead of inf)
-    inv_square_mag[np.isinf(inv_square_mag)] = 0
-    # inverse of the magnitude
-    inv_mag = np.sqrt(inv_square_mag)
-    # cosine similarity (elementwise multiply by inverse magnitudes)
-    cosine = similarity * inv_mag
-    cos_sim = cosine.T * inv_mag
-    cos_dist = [1-i for i in cos_sim]
-    return np.asarray(cos_dist)
-
-
 def tanimoto_sparse(str1, str2):
     """!
     Calculate the tanimoto coefficient for a pair of sparse vectors
@@ -4917,7 +5025,7 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
     """
     # Check v and org before moving on
     vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
-    orgs = ['all','nrpdb','homo_sapien','cryptococcus','test','tutorial']
+    orgs = ['all','nrpdb','homo_sapien','cryptococcus','aspire','test','tutorial']
     if v not in vs:
         print("{} is not a correct version.".format(v))
         sys.exit()
