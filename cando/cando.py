@@ -3221,15 +3221,21 @@ class CANDO(object):
             for s in sp:
                 co = s[1]
                 if cmpd_set == 'approved':
-                    if co.status == 'approved' or (co in ind.compounds):
+                    if co.status == 'approved':
                         pass
+                    elif ind_id:
+                        if co in ind.compounds:
+                            pass
+                        else:
+                            continue
                     else:
                         continue
                     st = '{}\t{}\t{}\t{}\t{}\t{}'.format(s[0].ljust(8), round(s[2], 3), co.id_,
                                                          str(s[3]).lower().ljust(10),
                                                          (str(co.status == 'approved').lower()).ljust(8), co.name)
                     print(st)
-                    fo.write(st + '\n')
+                    if save:
+                        fo.write(st + '\n')
             return
 
         else:
