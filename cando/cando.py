@@ -1420,7 +1420,8 @@ class CANDO(object):
                     other_sigs.append(c.sig)
         oa = np.array(other_sigs)
         
-        # call cdist, speed up with custom RMSD function
+        # call pairwise_distance to enable parallel computing
+        # custom RMSD function
         if self.dist_metric == "rmsd":
             distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
         elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
@@ -1429,7 +1430,7 @@ class CANDO(object):
             print("Incorrect distance metric - {}".format(self.dist_metric))
 
         cmpd.similar = []
-        # step through the cdist list - add RMSDs to Compound.similar list
+        # step through the cdist list - add dists to Compound.similar list
         n = len(self.compounds)
         for i in range(n):
             c2 = self.compounds[i]
@@ -3669,19 +3670,22 @@ class CANDO(object):
             fo.close()
         print('')
 
-    def similar_compounds(self, cmpd, n=10):
+    def similar_compounds(self, cmpd, n=10, save=''):
         """!
         Computes and prints the top n most similar compounds to an input
         Compound object cando_cmpd or input novel signature new_sig
 
         @param cmpd Compound: Compound object
         @param n int: top number of similar Compounds to be used for prediction
+        @param save str: path to the file where the results will be written. If empty then results will only be printed. Default: ''.
         @return Returns None
         """
         if type(cmpd) is Compound:
             cmpd = cmpd
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
+        # Add ability to generate simialr list from an iputted signature
+        #elif type(cmpd) is list:
         print("Using CANDO compound {}".format(cmpd.name))
         print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
         print("Comparing signature to all CANDO compound signatures...")
@@ -3691,6 +3695,13 @@ class CANDO(object):
         for i in range(n+1):
             print("{}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
+        if save:
+            print("Saving top{} most similar compounds...\n".format(n))
+            with open(save, 'w') as o:
+                o.write("rank\tdist\tid\tname")
+                for i in range(n+1):
+                    o.write("{}\t{:.3f}\t{}\t{}\n".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
+            print("Results saved to {}.\n".format(save))
         return
 
     def add_cmpd(self, new_sig, new_name=''):
@@ -4296,43 +4307,45 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
             li_bs = li_score = []
         x = l_fps.loc[li_bs,0].values.tolist()
         y = l_fps.loc[li_bs].index.tolist()
+        z = [float(li_score[li_bs.index(i)]) for i in y]
         # Pscore
         if i_score in ['P','CxP','dCxP','avgP','medP']:
             try:
                 if dist == 'dice':
-                    temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x)))
+                    temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
                 elif dist == 'tani':
-                    temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x)))
+                    temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
                 elif dist == 'cos':
-                    temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x)))
+                    temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
 
                 #Cscore cutoff
                 temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
 
                 if i_score == 'dCxP':
-                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
                     if not lig_name:
-                        c_score = stats.percentileofscore(all_scores,temp_c[1])/100.0
-                        p_score = li_score[li_bs.index(temp_c[0])]
+                        c_score = stats.percentileofscore(all_scores,temp[1])/100.0
+                        p_score = temp[2]
+                        #p_score = li_score[li_bs.index(temp_c[0])]
                         scores.append(float(c_score) * float(p_score))
                     else:
-                        scores.append(temp_c[0])
+                        scores.append(temp[0])
                 elif i_score == 'CxP':
-                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
                     if not lig_name:
-                        c_score = temp_c[1]
-                        p_score = li_score[li_bs.index(temp_c[0])]
+                        c_score = temp[1]
+                        p_score = temp[2]
                         scores.append(float(c_score) * float(p_score))
                         continue
                     else:
-                        scores.append(temp_c[0])
+                        scores.append(temp[0])
                 elif i_score == 'P':
-                    temp_c = max(temp_scores, key = lambda i:i[1])
+                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
                     if not lig_name:
-                        p_score = li_score[li_bs.index(temp_c[0])]
+                        p_score = temp[2]
                         scores.append(float(p_score))
                     else:
-                        scores.append(temp_c[0])
+                        scores.append(temp[0])
                 elif i_score == 'avgP':
                     # Will produce a warning when li_score is empty
                     # temp_p will then == nan, so we check for that
@@ -4367,17 +4380,17 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                 temp_scores = [i for i in temp_scores if float(i) >= cscore_cutoff]
 
                 if i_score == 'dC':
-                    temp_c = max(temp_scores)
+                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
                     if not lig_name:
-                        scores.append(stats.percentileofscore(all_scores, temp_c) / 100.0)
+                        scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
                     else:
-                        scores.append(li_bs[li_score.index(temp_c)])
+                        scores.append(temp[0])
                 elif i_score == 'C':
-                    temp_c = max(temp_scores)
+                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
                     if not lig_name:
-                        scores.append(temp_c)
+                        scores.append(temp[1])
                     else:
-                        scores.append(li_bs[li_score.index(temp_c)])
+                        scores.append(temp[0])
                 elif i_score == 'avgC':
                     temp_c = np.mean(temp_scores)
                     if not np.isnan(temp_c):
@@ -4640,7 +4653,7 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
         print("Signature written to {}/{}.".format(out_path,out_file))
     
     end = time.time()
-    print_time(end-start) 
+    print_time(end-start)
     return(mat)
     #return(mat.iloc[:,0].values)
 
