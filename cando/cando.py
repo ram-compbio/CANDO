@@ -706,7 +706,13 @@ class CANDO(object):
            
             # Still cleaning this code up.
             # Memory issues with full Twosides is a huge limitation
+            ## Do not compute all distances, but rather generate_simialr on the fly
+            ## do not populate the similar list for each Compound_pair object
+            ## This will increase computing time, but decrease mem allocation
             elif ddi_adrs:
+                print('Will not compute {} distances for compound pairs due to memory issues...'.format(self.dist_metric))
+                print('Can compute individually on-the-fly for canpredict and/or canbennchmark.')
+                '''
                 print('Computing {} distances for compound pairs...'.format(self.dist_metric))
                 # put all compound_pair signatures into 2D-array
                 snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
@@ -726,12 +732,10 @@ class CANDO(object):
                     
 
 
-                    '''
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
                             force_all_finite=False,
                             n_jobs=self.ncpus)
                     print("pairwise is done.")
-                    '''
                     #distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
                     #print("concat is done.")
                     
@@ -747,7 +751,6 @@ class CANDO(object):
                     #cp_ids = [i.id_ for i in self.compound_pairs]
                     #for cp in self.compound_pairs:
                     #for i in range(len(self.compound_pairs)):
-                    '''
                     for x in distance_matrix:
                         for y in x:
                             cp = self.compound_pairs[i]
@@ -757,7 +760,6 @@ class CANDO(object):
                             del cp.similar[cp]
                             # Completed simialr calc
                             cp.similar_computed = True
-                    '''
                         #print(distance_matrix[i])
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         # Let us try dicts instead of list of tuples
@@ -774,11 +776,9 @@ class CANDO(object):
                         #cp.similar_sorted = True
                             #i+=1
                     #del distance_matrix
-                
                 else:
                     print("Incorrect distance metric - {}".format(self.dist_metric))
                     exit()
-                '''
                 # step through the condensed matrix - add RMSDs to Compound.similar lists
                 nc = len(self.compound_pairs)
                 print(nc)
@@ -795,7 +795,6 @@ class CANDO(object):
                         c1.similar.append((c2, r))
                         c2.similar.append((c1, r))
                         n += 1
-                '''
                 print('Done computing {} distances.\n'.format(self.dist_metric))
  
                 # sort the dists after saving (if desired)
@@ -808,7 +807,7 @@ class CANDO(object):
                     cp.similar_sorted = True
                     i+=1
                 print('Done sorting {} distances.\n'.format(self.dist_metric))
-                '''
+                
                 for c in self.compound_pairs:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                     c.similar = sorted_scores
@@ -1505,6 +1504,10 @@ class CANDO(object):
         else:
             print("Incorrect distance metric - {}".format(self.dist_metric))
 
+        # DO NOT populate the similar list in the Compound_pair object.
+        # This will cause memory issues with large sets of compounds (TWOSIDES)
+        # Output just the list of similar compounds
+        '''
         cmpd_pair.similar = []
         # step through the cdist list - add RMSDs to Compound.similar list
         n = len(self.compound_pairs)
@@ -1525,6 +1528,19 @@ class CANDO(object):
         else:
             cmpd_pair.similar_computed = True
             return cmpd_pair.similar
+        '''
+        scores = [] 
+        # step through the cdist list - add RMSDs to Compound.similar list
+        for i in range(len(self.compound_pairs)):
+            if i == q:
+                continue
+            scores.append((self.compound_pairs[i],distances[0][i]))
+        if sort:
+            sorted_scores = sorted(scores, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+            return sorted_scores
+        else:
+            return scores
+
 
     def generate_some_similar_sigs(self, cmpds, sort=False, proteins=[], aux=False):
         """!
@@ -2541,6 +2557,7 @@ class CANDO(object):
             print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
             exit()
         '''
+        '''
         if not self.indication_proteins and not self.indication_pathways:
             if not self.compound_pairs[0].similar_sorted:
             #if not self.compound_pairs[0].similar_sorted and not associated:
@@ -2549,7 +2566,7 @@ class CANDO(object):
                     #sorted_scores = sorted(cm_p.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                     #cm_p.similar = sorted_scores
                     cm_p.similar_sorted = True
-
+        '''
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
             os.system('mkdir results_analysed_named')
@@ -2618,8 +2635,11 @@ class CANDO(object):
         def cont_metrics():
             all_v = []
             for c in self.compound_pairs:
-                for c_sim in c.similar:
-                    c_dist = c.similar[c_sim]
+                # Create a sorted similar list on-the-fly for each compound pair
+                c_sorted = self.generate_similar_sigs_cp(c, sort=True)
+                # Iterate through the sorted list
+                for c_sim in c_sorted:
+                    c_dist = c_sorted[c_sim]
                     if c_dist != 0.0:
                         all_v.append(c_dist)
             avl = len(all_v)
@@ -2681,7 +2701,7 @@ class CANDO(object):
                                     vs.append(p)
                     else:
                         self.quantify_pathways(indication=effect)
-
+            ## Need to fix all of this for compound pairs
             # Retrieve the appropriate protein indices here, should be
             # incorporated as part of the ind object during file reading
             if self.indication_proteins:
@@ -2708,10 +2728,13 @@ class CANDO(object):
                     self.generate_some_similar_sigs(c, sort=True, proteins=dg)
             # call c.generate_similar_sigs()
             # use the proteins/pathways specified above
+            ##
 
+            # This has been updated to work with compound_pairs
             for c in effect.compound_pairs:
-                for c_sim in c.similar:
-                    c_dist = c.similar[c_sim]
+                c_sorted = self.generate_similar_sigs_cp(c, sort=True)
+                for c_sim in c_sorted:
+                    c_dist = c_sorted[c_sim]
                     if adrs:
                         if effect not in c_sim.adrs:
                             continue
@@ -2724,22 +2747,21 @@ class CANDO(object):
                         value = c_dist
                     elif bottom:
                         if ranking == 'modified':
-                            value = competitive_modified_bottom(c.similar, c_dist)
+                            value = competitive_modified_bottom(c_sorted, c_dist)
                         elif ranking == 'standard':
-                            value = competitive_standard_bottom(c.similar, c_dist)
+                            value = competitive_standard_bottom(c_sorted, c_dist)
                         elif ranking == 'ordinal':
-                            #value = c.similar.index(cs)
-                            value = list(c.similar).index(c_sim)
+                            value = list(c_sorted).index(c_sim)
                         else:
                             print("Ranking function {} is incorrect.".format(ranking))
                             exit()
                     elif ranking == 'modified':
-                        value = competitive_modified(c.similar, c_dist)
+                        value = competitive_modified(c_sorted, c_dist)
                     elif ranking == 'standard':
-                        value = competitive_standard(c.similar, c_dist)
+                        value = competitive_standard(c_sorted, c_dist)
                     elif ranking == 'ordinal':
                         #value = c.similar.index(cs)
-                        value = list(c.similar).index(c_sim)
+                        value = list(c_sorted).index(c_sim)
                     else:
                         print("Ranking function {} is incorrect.".format(ranking))
                         exit()
