@@ -954,12 +954,12 @@ class CANDO(object):
                                                          n_jobs=self.ncpus)
                     distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['correlation', 'euclidean', 'cityblock', 'cosine']:
-                    distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
-                            force_all_finite=False,
-                            n_jobs=self.ncpus)
-                    distance_matrix = np.concatenate(list(distance_matrix), axis=0)                    
-                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
-                    #                                     n_jobs=self.ncpus)
+                    #distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
+                    #        force_all_finite=False,
+                    #        n_jobs=self.ncpus)
+                    #distance_matrix = np.concatenate(list(distance_matrix), axis=0)                    
+                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False,
+                                                         n_jobs=self.ncpus)
                     # Removed checks in case the diagonal is very small (close to zero) but not zero.
                     distance_matrix = squareform(distance_matrix, checks=False)
                 else:
@@ -4635,10 +4635,17 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
         print("{} is not an applicable interaction score.".format(i_score))
         return
 
-    nc = Chem.MolFromSmiles(smi)
-    #nc = Chem.MolFromMolFile(cmpd_file)
-    nc = Chem.RemoveHs(nc)
-    #name = nc.GetProp("_Name")
+    try:
+        nc = Chem.MolFromSmiles(smi)
+        nc = Chem.RemoveHs(nc)
+        #name = nc.GetProp("_Name")
+    except:
+        print("SMILES string cannot be processed.")
+        sys.exit()
+
+    if nc is None:
+        print("SMILES string cannot be processed.")
+        sys.exit()
 
     c_fps = {}
     rad = int(int(fp[7:])/2)
