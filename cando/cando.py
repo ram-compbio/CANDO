@@ -1531,10 +1531,12 @@ class CANDO(object):
         '''
         scores = [] 
         # step through the cdist list - add RMSDs to Compound.similar list
-        for i in range(len(self.compound_pairs)):
+        n = len(self.compound_pairs)
+        for i in range(n):
             if i == q:
                 continue
             scores.append((self.compound_pairs[i],distances[0][i]))
+            n += 1
         if sort:
             sorted_scores = sorted(scores, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
             return sorted_scores
@@ -2588,7 +2590,7 @@ class CANDO(object):
         def competitive_standard_bottom(sims, r):
             rank = 0
             for sim in sims:
-                if sims[sim] > r:
+                if sim[1] > r:
                     rank += 1.0
                 else:
                     return rank
@@ -2597,7 +2599,7 @@ class CANDO(object):
         def competitive_modified_bottom(sims, r):
             rank = 0
             for sim in sims:
-                if sims[sim] >= r:
+                if sim[1] >= r:
                     rank += 1.0
                 else:
                     return rank
@@ -2607,7 +2609,7 @@ class CANDO(object):
         def competitive_modified(sims, r):
             rank = 0
             for sim in sims:
-                if sims[sim] <= r:
+                if sim[1] <= r:
                     rank += 1.0
                 else:
                     return rank
@@ -2617,7 +2619,7 @@ class CANDO(object):
         def competitive_standard(sims, r):
             rank = 0
             for sim in sims:
-                if sims[sim] < r:
+                if sim[1] < r:
                     rank += 1.0
                 else:
                     return rank
@@ -2733,8 +2735,9 @@ class CANDO(object):
             # This has been updated to work with compound_pairs
             for c in effect.compound_pairs:
                 c_sorted = self.generate_similar_sigs_cp(c, sort=True)
-                for c_sim in c_sorted:
-                    c_dist = c_sorted[c_sim]
+                for idx, cs in enumerate(c_sorted):
+                    c_sim = cs[0]
+                    c_dist = cs[1]
                     if adrs:
                         if effect not in c_sim.adrs:
                             continue
@@ -2751,7 +2754,7 @@ class CANDO(object):
                         elif ranking == 'standard':
                             value = competitive_standard_bottom(c_sorted, c_dist)
                         elif ranking == 'ordinal':
-                            value = list(c_sorted).index(c_sim)
+                            value = list(c_sorted).index(idx)
                         else:
                             print("Ranking function {} is incorrect.".format(ranking))
                             exit()
@@ -2761,7 +2764,7 @@ class CANDO(object):
                         value = competitive_standard(c_sorted, c_dist)
                     elif ranking == 'ordinal':
                         #value = c.similar.index(cs)
-                        value = list(c_sorted).index(c_sim)
+                        value = list(c_sorted).index(idx)
                     else:
                         print("Ranking function {} is incorrect.".format(ranking))
                         exit()
