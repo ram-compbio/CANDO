@@ -1529,14 +1529,10 @@ class CANDO(object):
             cmpd_pair.similar_computed = True
             return cmpd_pair.similar
         '''
-        scores = [] 
-        # step through the cdist list - add RMSDs to Compound.similar list
-        n = len(self.compound_pairs)
-        for i in range(n):
-            if i == q:
-                continue
-            scores.append((self.compound_pairs[i],distances[0][i]))
-            n += 1
+        cps = self.compound_pairs
+        scores = list(zip(cps, distances[0]))
+        del scores[q]
+
         if sort:
             sorted_scores = sorted(scores, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
             return sorted_scores
@@ -2674,6 +2670,29 @@ class CANDO(object):
             ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
                          "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
 
+
+
+        # Calcualte all similar first
+        # But do not populate compound_pair objects with similar
+        #print("Calculating all compound pair distances...")
+        '''
+        signatures = [self.compound_pairs[i].sig for i in range(len(self.compound_pairs))]
+        signatures = np.array(signatures)  # convert to numpy form
+        # call pairwise_distances, speed up with custom RMSD function and parallelism
+        if self.dist_metric == "rmsd":
+            distance_matrix = pairwise_distances(signatures, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+        elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+            distance_matrix = pairwise_distances(signatures, metric=self.dist_metric, n_jobs=self.ncpus)
+        for i in distance_matrix:
+            x = list(zip(self.compound_pairs,i))
+            sorted_distances = sorted(x, key=lambda j: j[1] if not math.isnan(j[1]) else 100000)
+            sorted_distances.append(sorted_distances[1:]) 
+        cp_ids = [self.compound_pairs[i].id_ for i in range(len(self.compound_pairs))]
+        sorted_distances = {cp_ids[i]: sorted_distances[i] for i in range(len(sorted_distances))}
+        '''
+        #sorted_distances = {self.compound_pairs[i].id_: self.generate_similar_sigs_cp(self.compound_pairs[i], sort=True) for i in range(len(self.compound_pairs))}
+        #print("Calculated distances.")
+
         print("Running canbenchmark...")
         for effect in effects:
             count = len(effect.compound_pairs)
@@ -2735,6 +2754,31 @@ class CANDO(object):
             # This has been updated to work with compound_pairs
             for c in effect.compound_pairs:
                 c_sorted = self.generate_similar_sigs_cp(c, sort=True)
+                if bottom:
+                    if ranking == 'modified':
+                        rank_sorted = competitive_modified_bottom(c_sorted, c_dist)
+                    elif ranking == 'standard':
+                        rank_sorted = competitive_standard_bottom(c_sorted, c_dist)
+                    elif ranking == 'ordinal':
+                        rank_sorted = list(c_sorted).index(idx)
+                    else:
+                        print("Ranking function {} is incorrect.".format(ranking))
+                        exit()
+                elif ranking == 'modified':
+                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='min')
+                    #value = competitive_modified(c_sorted, c_dist)
+                elif ranking == 'standard':
+                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='max')
+                    #value = competitive_standard(c_sorted, c_dist)
+                elif ranking == 'ordinal':
+                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='ordinal')
+                    #value = c.similar.index(cs)
+                    #value = list(c_sorted).index(idx)
+                else:
+                    print("Ranking function {} is incorrect.".format(ranking))
+                    exit()
+
+
                 for idx, cs in enumerate(c_sorted):
                     c_sim = cs[0]
                     c_dist = cs[1]
@@ -2748,26 +2792,8 @@ class CANDO(object):
                     value = 0.0
                     if continuous:
                         value = c_dist
-                    elif bottom:
-                        if ranking == 'modified':
-                            value = competitive_modified_bottom(c_sorted, c_dist)
-                        elif ranking == 'standard':
-                            value = competitive_standard_bottom(c_sorted, c_dist)
-                        elif ranking == 'ordinal':
-                            value = list(c_sorted).index(idx)
-                        else:
-                            print("Ranking function {} is incorrect.".format(ranking))
-                            exit()
-                    elif ranking == 'modified':
-                        value = competitive_modified(c_sorted, c_dist)
-                    elif ranking == 'standard':
-                        value = competitive_standard(c_sorted, c_dist)
-                    elif ranking == 'ordinal':
-                        #value = c.similar.index(cs)
-                        value = list(c_sorted).index(idx)
                     else:
-                        print("Ranking function {} is incorrect.".format(ranking))
-                        exit()
+                        value = rank_sorted[idx]
 
                     if adrs:
                         s = [str(c.index), effect.name]
@@ -3370,6 +3396,9 @@ class CANDO(object):
                 if c2[0].status != 'approved' and cmpd_set == 'approved':
                     c2_i += 1
                     continue
+                elif c2[0].is_metabolite and cmpd_set == 'not_metabolite':
+                    c2_i += 1
+                    continue
                 if c2[1] == 0.0:
                     c2_i += 1
                     continue
@@ -3397,6 +3426,9 @@ class CANDO(object):
             co = self.get_compound(p[1][0])
             if cmpd_set == 'approved':
                 if co.status != 'approved':
+                    continue
+            elif cmpd_set == 'not_metabolite':
+                if co.is_metabolite:
                     continue
             if not keep_associated and p[1][1][1]:
                 continue
