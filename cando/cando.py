@@ -23,7 +23,6 @@ from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform, cdist
 from scipy import stats
 
-
 class Protein(object):
     """!
     An object to represent a protein
@@ -1029,6 +1028,7 @@ class CANDO(object):
                 p = self.get_protein(i)
                 p.name = prot_df['uniprotRecommendedName'][i]
                 p.gene = prot_df['geneName'][i]
+                p.method = prot_df['method'][i]
 
     def search_compound(self, name, n=5):
         """!
@@ -4591,7 +4591,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 
 def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
                        p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=False, out_file='', out_path=".", nr_ligs=True,
-                       prot_path=''):
+                       prot_path='', lig_name=False):
     """!
        Generate an interaction signature for a query compound using our in-house protocol BANDOCK. Note: the parameters
        for this function MUST MATCH the parameters used to generate the matrix in use. Otherwise, the scores will be
@@ -4612,6 +4612,7 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
        @param out_path str: path to the output signature
        @param nr_ligs bool: use only the non-redundant set of ligands for 'dC' scoring protocols (recommended)
        @param prot_path str: specify a local protein library for custom analyses
+       @param lig_name bool: output the ligand chosen for the compound-protein interaction score instead of the score
        @return Returns None
        """
     def print_time(s):
@@ -4703,7 +4704,7 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pickle.load(f)
 
-    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs)
+    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name)
     #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
     scores = {scores[0]:scores[1]}
 
@@ -5076,6 +5077,11 @@ def tanimoto_dense(list1, list2):
     return float(len(c))/(len(list1) + len(list2) - len(c))
 
 
+def get_prot_info(p, org='homo_sapien'):
+    pre = os.path.dirname(__file__) + "/data/v2.2+"
+    prots_df = pd.read_csv('{}/prots/{}-metadata.tsv'.format(pre,org),index_col=0,sep='\t')
+    return prots_df.loc[p].to_dict()
+
 def get_fp_lig(fp):
     """!
     Download precompiled binding site ligand fingerprints using the given fingerprint method.
@@ -5166,9 +5172,13 @@ def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
                 continue
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(o)
             dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,o))
+            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-metadata.tsv'.format(o)
+            dl_file(url, '{}/prots/{}-metadata.tsv'.format(pre,o))
     else:
         url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(org)
         dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,org))
+        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-metadata.tsv'.format(org)
+        dl_file(url, '{}/prots/{}-metadata.tsv'.format(pre,org))
 
     '''
     if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
@@ -5416,3 +5426,4 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
                   compute_distance=compute_distance, dist_metric=dist_metric, protein_set=protein_set, ncpus=ncpus)
 
     return cando
+
