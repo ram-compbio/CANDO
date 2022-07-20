@@ -22,6 +22,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform, cdist
 from scipy import stats
+import shutil # change1
 
 class Protein(object):
     """!
@@ -340,7 +341,7 @@ class CANDO(object):
 
         ignored_set = []
         # create all of the compound objects from the compound map
-        with open(c_map, 'r') as c_f:
+        with open(c_map, 'r', encoding="utf8") as c_f:
             lines = c_f.readlines()
             header = lines[0]
             h2i = {}
@@ -404,7 +405,7 @@ class CANDO(object):
         # isn't in the compound mapping file, an error will occur. I
         # had to remove those compounds from the indication mapping in
         # order for it to work
-        with open(i_map, 'r') as i_f:
+        with open(i_map, 'r', encoding="utf8") as i_f:
             lines = i_f.readlines()
             header = lines[0]
             h2i = {}
@@ -432,7 +433,7 @@ class CANDO(object):
         # add proteins, add signatures and such to compounds
         if self.protein_set:
             uniprots = []
-            with open(self.protein_set, 'r') as psf:
+            with open(self.protein_set, 'r', encoding="utf8") as psf:
                 lines = psf.readlines()
                 for line in lines:
                     uni = line.strip()
@@ -446,7 +447,7 @@ class CANDO(object):
                 quit()
             print('Reading signatures from matrix...')
 
-            with open(matrix, 'r') as m_f:
+            with open(matrix, 'r', encoding="utf8") as m_f:
                 m_lines = m_f.readlines()
                 if self.protein_set:
                     print('Editing signatures according to proteins in {}...'.format(self.protein_set))
@@ -503,14 +504,14 @@ class CANDO(object):
             if self.indication_pathways:
                 print('Reading indication-pathway associations...')
                 path_ind = {}
-                with open(indication_pathways, 'r') as ipf:
+                with open(indication_pathways, 'r', encoding="utf8") as ipf:
                     for l in ipf:
                         ls = l.strip().split('\t')
                         pw = ls[0]
                         ind_ids = ls[1:]
                         path_ind[pw] = ind_ids
 
-            with open(pathways, 'r') as pf:
+            with open(pathways, 'r', encoding="utf8") as pf:
                 for l in pf:
                     ls = l.strip().split('\t')
                     pw = ls[0]
@@ -652,7 +653,7 @@ class CANDO(object):
 
         if self.indication_proteins:
             print('Reading indication-gene associations...')
-            with open(indication_proteins, 'r') as igf:
+            with open(indication_proteins, 'r', encoding="utf8") as igf:
                 for l in igf:
                     ls = l.strip().split('\t')
                     ind_id = ls[0]
@@ -672,7 +673,7 @@ class CANDO(object):
 
         if read_dists:
             print('Reading {} distances...'.format(self.dist_metric))
-            with open(read_dists, 'r') as rrs:
+            with open(read_dists, 'r', encoding="utf8") as rrs:
                 lines = rrs.readlines()
                 for i in range(len(lines)):
                     c1 = self.compounds[i]
@@ -887,7 +888,7 @@ class CANDO(object):
                             c = self.compounds[ci]
                             srf.write(dists_to_str(c, ci))
                 '''
-                with open(self.save_dists, 'w') as srf:
+                with open(self.save_dists, 'w', encoding="utf8") as srf:
                     for ci in range(len(self.compounds)):
                         c = self.compounds[ci]
                         srf.write(dists_to_str(c, ci))
@@ -895,7 +896,7 @@ class CANDO(object):
 
         if rm_compounds:
             print('Removing undesired compounds in {}...'.format(rm_compounds))
-            with open(rm_compounds, 'r') as rcf:
+            with open(rm_compounds, 'r', encoding="utf8") as rcf:
                 self.rm_cmpds = [int(line.strip().split('\t')[0]) for line in rcf]
             self.compounds = [c for c in self.compounds if c.id_ not in self.rm_cmpds]
             for c in self.compounds:
@@ -982,7 +983,7 @@ class CANDO(object):
 
         if adr_map:
             print('Reading ADR mapping file...')
-            with open(adr_map, 'r') as amf:
+            with open(adr_map, 'r', encoding="utf8") as amf:
                 lines = amf.readlines()
                 header = lines[0]
                 h2i = {}
@@ -1208,7 +1209,7 @@ class CANDO(object):
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         if save_file:
-            o = open(save_file,'w')
+            o = open(save_file,'w', encoding="utf8")
             o.write('rank\tscore\tindex\tid\tgene\tname\n')
         print('Compound is {}'.format(cmpd.name))
         print('rank\tscore\tindex\tid\tgene\tname')
@@ -1254,7 +1255,7 @@ class CANDO(object):
         else:
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         if save_file:
-            o = open(save_file,'w')
+            o = open(save_file,'w', encoding="utf8")
             o.write('rank\tscore\tindex\tid\tgene\tname\n')
         print('rank\tscore\tindex\tid\tgene\tname')
         for si in range(n):
@@ -1304,7 +1305,7 @@ class CANDO(object):
             interactions_sorted = sorted(all_interactions, key=lambda x: x[1])[::-1]
         print('Protein is {}'.format(prot.id_))
         if save_file:
-            o = open(save_file,'w')
+            o = open(save_file,'w', encoding="utf8")
             o.write('rank\tscore\tid\tapproved\tname\n')
         print('rank\tscore\tid\tapproved\tname')
         printed = 0
@@ -1349,7 +1350,7 @@ class CANDO(object):
             dl_file(url, '{}/mappings/pdb_2_uniprot.csv'.format(pre))
         pdct = {}
         pdct_rev = {}
-        with open('{}/mappings/pdb_2_uniprot.csv'.format(pre), 'r') as u2p:
+        with open('{}/mappings/pdb_2_uniprot.csv'.format(pre), 'r', encoding="utf8") as u2p:
             for l in u2p.readlines()[1:]:
                 spl = l.strip().split(',')
                 pdb = spl[0] + spl[1]
@@ -1361,7 +1362,7 @@ class CANDO(object):
                     pdct[uni] = [pdb]
                 pdct_rev[pdb] = uni
         targets = []
-        with open(prots, 'r') as unisf:
+        with open(prots, 'r', encoding="utf8") as unisf:
             for lp in unisf:
                 prot = lp.strip()
                 targets.append(prot)
@@ -1682,7 +1683,7 @@ class CANDO(object):
         @param effect_type str: Defines the effect as either an Indication (disease) or ADR (adverse reaction)
         @return Returns dct: dict of accuracies at each cutoff
         """
-        fo = open(f, 'w')
+        fo = open(f, 'w', encoding="utf8")
         effects = list(self.accuracies.keys())
         # Write header
         fo.write("{0}_id\tcmpds_per_{0}\ttop10\ttop25\ttop50\ttop100\ttopAll\ttop1%\t"
@@ -1733,15 +1734,17 @@ class CANDO(object):
 
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
-            os.system('mkdir results_analysed_named')
+            os.mkdir('results_analysed_named')
+            #os.system('mkdir results_analysed_named')
         if not os.path.exists('./raw_results'):
             print("Directory 'raw_results' does not exist, creating directory")
-            os.system('mkdir raw_results')
+            os.mkdir('raw_results')
+            #os.system('mkdir raw_results')
 
         ra_named = 'results_analysed_named/results_analysed_named-' + file_name + '.tsv'
         ra = 'raw_results/raw_results-' + file_name + '.csv'
         summ = 'summary-' + file_name + '.tsv'
-        ra_out = open(ra, 'w')
+        ra_out = open(ra, 'w', encoding="utf8")
 
         def effect_type():
             if adrs:
@@ -1792,7 +1795,7 @@ class CANDO(object):
                 url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/group_disease-top_level.tsv'
                 dl_file(url, 'v2.0/mappings/group_disease-top_level.tsv')
             path_ids = ['C01', 'C02', 'C03']
-            with open('v2.0/mappings/group_disease-top_level.tsv', 'r') as fgd:
+            with open('v2.0/mappings/group_disease-top_level.tsv', 'r', encoding="utf8") as fgd:
                 for l in fgd:
                     ls = l.strip().split('\t')
                     if ls[1] in path_ids:
@@ -2021,7 +2024,7 @@ class CANDO(object):
         # Indication coverage
         cov = map(int, cov)
         # Append 3 lists to df and write to file
-        with open(summ, 'w') as sf:
+        with open(summ, 'w', encoding="utf8") as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
             ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
             pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
@@ -2157,8 +2160,9 @@ class CANDO(object):
             nz_counts[k] = len(i_accs_nz)
         # Write NDCG results per indication in results_analysed_named
         if not os.path.exists('./results_analysed_named/'):
-            os.system('mkdir results_analysed_named')
-        with open("results_analysed_named/results_analysed_named_ndcg-{}.tsv".format(file_name), 'w') as o:
+            os.mkdir('results_analysed_named')
+            #os.system('mkdir results_analysed_named')
+        with open("results_analysed_named/results_analysed_named_ndcg-{}.tsv".format(file_name), 'w', encoding="utf8") as o:
             o.write("disease_id\tcmpds_per_disease\ttop10\ttop25\ttop50\ttop100\ttop{}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\tdisease_name\n".format(len(self.compounds)))
             for x in i_accs[0]:
                 o.write("{}\t{}".format(i_accs[0][x][0].id_,len(i_accs[0][x][0].compounds)))
@@ -2167,8 +2171,9 @@ class CANDO(object):
                 o.write("\t{}\n".format(i_accs[0][x][0].name))
         # Write NDCG results per compound-indication pair in raw_results
         if not os.path.exists('./raw_results/'):
-            os.system('mkdir raw_results')
-        with open("raw_results/raw_results_ndcg-{}.csv".format(file_name), 'w') as o:
+            os.mkdir('raw_results')
+            #os.system('mkdir raw_results')
+        with open("raw_results/raw_results_ndcg-{}.csv".format(file_name), 'w', encoding="utf8") as o:
             o.write("compound_id,disease_id,top10,top25,top50,top100,top{},top1%,top5%,top10%,top50%,top100%\n".format(len(self.compounds)))
             for x in range(len(c_accs[0])):
                 o.write("{},{}".format(c_accs[0][x][0],c_accs[0][x][1]))
@@ -2176,7 +2181,7 @@ class CANDO(object):
                     o.write(",{:.3f}".format(c_accs[k][x][2]))
                 o.write("\n")
         # Write a summary file for NDCG
-        with open("summary_ndcg-{}.tsv".format(file_name), 'w') as o:
+        with open("summary_ndcg-{}.tsv".format(file_name), 'w', encoding="utf8") as o:
             o.write("\ttop10\ttop25\ttop50\ttop100\ttop{}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\n".format(len(self.compounds)))
             o.write("ai-ndcg")
             for k in range(len(k_s)):
@@ -2269,7 +2274,7 @@ class CANDO(object):
         print("% Accuracy = {}".format(total_acc / total_count * 100.0))
 
     def compounds_analysed(self, f, metrics):
-        fo = open(f, 'w')
+        fo = open(f, 'w', encoding="utf8")
         cmpds = list(self.accuracies.keys())
         cmpds_sorted = sorted(cmpds, key=lambda x: (len(x[0].compounds), x[0].id_))[::-1]
         l = len(cmpds)
@@ -2316,15 +2321,17 @@ class CANDO(object):
 
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
-            os.system('mkdir results_analysed_named')
+            os.mkdir('results_analysed_named')
+            #os.system('mkdir results_analysed_named')
         if not os.path.exists('./raw_results'):
             print("Directory 'raw_results' does not exist, creating directory")
-            os.system('mkdir raw_results')
+            os.mkdir('raw_results')
+            #os.system('mkdir raw_results')
 
         ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-cmpds.tsv'
         ra = 'raw_results/raw_results_' + file_name + '-cmpds.csv'
         summ = 'summary_' + file_name + '-cmpds.tsv'
-        ra_out = open(ra, 'w')
+        ra_out = open(ra, 'w', encoding="utf8")
 
         def effect_type():
             if adrs:
@@ -2520,7 +2527,7 @@ class CANDO(object):
         # Indication coverage
         cov = map(int, cov)
         # Append 3 lists to df and write to file
-        with open(summ, 'w') as sf:
+        with open(summ, 'w', encoding="utf8") as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
             ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
             pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
@@ -2567,10 +2574,12 @@ class CANDO(object):
         '''
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
-            os.system('mkdir results_analysed_named')
+            #os.system('mkdir results_analysed_named')
+            os.mkdir('results_analysed_named')
         if not os.path.exists('./raw_results'):
             print("Directory 'raw_results' does not exist, creating directory")
-            os.system('mkdir raw_results')
+            #os.system('mkdir raw_results')
+            os.mkdir('raw_results')
 
         ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-ddi_adr.tsv'
         ra = 'raw_results/raw_results_' + file_name + '-ddi_adr.csv'
@@ -3099,9 +3108,11 @@ class CANDO(object):
 
         if out:
             if not os.path.exists('./raw_results/'):
-                os.system('mkdir raw_results')
+                os.mkdir('raw_results')
+                #os.system('mkdir raw_results')
             if not os.path.exists('./results_analysed_named/'):
-                os.system('mkdir results_analysed_named')
+                os.mkdir('results_analysed_named')
+                #os.system('mkdir results_analysed_named')
 
         paired_negs = {}
 
@@ -3208,10 +3219,10 @@ class CANDO(object):
             else:
                 effects = sorted(self.indications, key=lambda x: (len(x.compounds), x.id_))[::-1]
             if out:
-                frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w')
+                frr = open('./raw_results/raw_results_ml_{}'.format(out), 'w', encoding="utf8")
                 frr.write('Compound,Effect,Prob,Neg,Neg_prob\n')
-                fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w')
-                fsum = open('summary_ml-{}'.format(out), 'w')
+                fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w', encoding="utf8")
+                fsum = open('summary_ml-{}'.format(out), 'w', encoding="utf8")
         else:
             if len(effect.compounds) < 1:
                 print('No compounds associated with {} ({}), quitting.'.format(effect.name, effect.id_))
@@ -3335,7 +3346,7 @@ class CANDO(object):
         truth = []
         scores = []
         for rr_file in rr_files:
-            for l in open(rr_file, 'r').readlines()[1:]:
+            for l in open(rr_file, 'r', encoding="utf8").readlines()[1:]:
                 ls = l.strip().split(',')
                 pp = float(ls[2])
                 truth.append(1)
@@ -3462,7 +3473,7 @@ class CANDO(object):
             sp = sorted(top_hits, key=lambda x: x[2])[::-1]
             print('target  \tscore\toff_target\tid\tapproved\tname')
             if save:
-                fo = open(save, 'w')
+                fo = open(save, 'w', encoding="utf8")
                 fo.write('target  \tscore\toff_target\tid\tapproved\tname\n')
             for s in sp:
                 co = s[1]
@@ -3489,7 +3500,7 @@ class CANDO(object):
             print('Please enter a valid ranking method -- quitting.')
             quit()
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             fo.write('rank\tscore1\tscore2\toffhits\tdiff\tid\tapproved\tname\n')
         print("Printing the {} highest predicted compounds...\n".format(topX))
         i = 0
@@ -3609,7 +3620,7 @@ class CANDO(object):
         sorted_x = sorted(c_dct.items(), key=lambda x: (x[1][0], (-1 * (x[1][2] / x[1][0]))))[::-1]
         i = 0
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             fo.write('rank\tscore1\tscore2\tprobability\tid\tapproved\tname\n')
         else:
             print('rank\tscore1\tscore2\tprobability\tid\tapproved\tname')
@@ -3715,7 +3726,7 @@ class CANDO(object):
             quit()
 
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             print("Saving the {} highest predicted indications...\n".format(topX))
             fo.write("rank\tprobability\tscore\tind_id\tindication\n")
         else:
@@ -3795,7 +3806,7 @@ class CANDO(object):
             quit()
 
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             print("Saving the {} highest predicted ADRs...\n".format(topX))
             fo.write("rank\tprobability\tscore\tadr_id\tadr\n")
         else:
@@ -3846,7 +3857,7 @@ class CANDO(object):
                     i_dct[itx.id_] += 1
         sorted_x = sorted(i_dct.items(), key=operator.itemgetter(1), reverse=True)
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             print("Saving the {} highest predicted compounds...\n".format(topX))
             fo.write("rank\tscore\tcmpd_id\tcompound\n")
         else:
@@ -3905,7 +3916,7 @@ class CANDO(object):
                     a_dct[adr.id_] += 1
         sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
         if save:
-            fo = open(save, 'w')
+            fo = open(save, 'w', encoding="utf8")
             print("Saving the {} highest predicted indications...\n".format(topX))
             fo.write("rank\tscore\tadr_id\tadverse_reaction\n")
         else:
@@ -3948,7 +3959,7 @@ class CANDO(object):
         print('\n')
         if save:
             print("Saving top{} most similar compounds...\n".format(n))
-            with open(save, 'w') as o:
+            with open(save, 'w', encoding="utf8") as o:
                 o.write("rank\tdist\tid\tname")
                 for i in range(n+1):
                     o.write("{}\t{:.3f}\t{}\t{}\n".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
@@ -3963,7 +3974,7 @@ class CANDO(object):
         @param new_name str: Name for the new Compound
         @return Returns None
         """
-        with open(new_sig, 'r') as nsf:
+        with open(new_sig, 'r', encoding="utf8") as nsf:
             n_sig = [0.00] * len(self.proteins)
             for l in nsf:
                 [pr, sc] = l.strip().split('\t')
@@ -4007,7 +4018,7 @@ class CANDO(object):
             o = o + '\n'
             return o
 
-        with open(f, 'w') as srf:
+        with open(f, 'w', encoding="utf8") as srf:
             for c in self.compounds:
                 srf.write(dists_to_str(c))
 
@@ -4062,7 +4073,7 @@ class CANDO(object):
                         m *= r
                     c3.similar.append((c4, m))
         if out_file:
-            with open(out_file, 'w') as fo:
+            with open(out_file, 'w', encoding="utf8") as fo:
                 for co in cnd.compounds:
                     s = list(map(str, [x[1] for x in co.similar]))
                     fo.write('\t'.join(s) + '\n')
@@ -4157,14 +4168,14 @@ class Matrix(object):
             return name
 
         if not dist:
-            with open(matrix_file, 'r') as f:
+            with open(matrix_file, 'r', encoding="utf8") as f:
                 lines = f.readlines()
                 if convert_to_tsv:
                     if matrix_file[-4:] == '.fpt':
                         out_file = '.'.join(matrix_file.split('.')[:-1]) + '.tsv'
                     else:
                         out_file = matrix_file + '.tsv'
-                    of = open(out_file, 'w')
+                    of = open(out_file, 'w', encoding="utf8")
                     for l_i in range(len(lines)):
                         name = pro_name(lines[l_i])
                         scores = []
@@ -4190,7 +4201,7 @@ class Matrix(object):
                         self.proteins.append(name)
                         self.values.append(list(map(float, scores)))
         else:
-            with open(matrix_file, 'r') as rrs:
+            with open(matrix_file, 'r', encoding="utf8") as rrs:
                 lines = rrs.readlines()
                 for i in range(len(lines)):
                     scores = list(map(float, lines[i].strip().split('\t')))
@@ -4221,7 +4232,7 @@ class Matrix(object):
         def to_sim(d):
             return 1 / (1 + d)
 
-        of = open(out_file, 'w')
+        of = open(out_file, 'w', encoding="utf8")
         if metric == 'd':
             for vs in self.values:
                 vs = list(map(to_sim, vs))
@@ -4283,7 +4294,7 @@ class Matrix(object):
                 except KeyError:
                     pvs[p] = [new_dvecs[dvi][p]]
 
-        with open(outfile, 'w') as fo:
+        with open(outfile, 'w', encoding="utf8") as fo:
             for p in range(len(self.proteins)):
                 fo.write('{}\t{}\n'.format(self.proteins[p], '\t'.join(list(map(str, pvs[p])))))
 
@@ -4506,7 +4517,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
         c_fps = pickle.load(f)
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
-        l_fps = pickle.load(f)
+        l_fps = pd.read_pickle(f)
 
     if approved_only:
         if not os.path.exists("{}/drugbank-{}-approved.tsv".format(map_path,v)):
@@ -4766,7 +4777,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
 
     # Load ligand fingerprint pickles
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
-        l_fps = pickle.load(f)
+        l_fps = pd.read_pickle(f)
 
     scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs)
     #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
@@ -4958,7 +4969,10 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre, curr_v, fp, vect))
         cmpd_path = "{}/cmpds/fps-{}/".format(pre, new_v)
         os.makedirs(cmpd_path, exist_ok=True)
-        os.system("cp {0}/{2}-{3}_vect.pickle {1}/{2}-{3}_vect.pickle".format(curr_cmpd_path, cmpd_path, fp, vect))
+
+        shutil.copy('{0}/{1}-{2}_vect.pickle'.format(curr_cmpd_path, fp, vect),\
+                    '{0}/{1}-{2}_vect.pickle'.format(cmpd_path, fp, vect))
+        #os.system("cp {0}/{2}-{3}_vect.pickle {1}/{2}-{3}_vect.pickle".format(curr_cmpd_path, cmpd_path, fp, vect))
         
         if not os.path.exists("{}/mappings/drugbank-{}.tsv".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(curr_v)
@@ -4969,7 +4983,10 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
         if not os.path.exists("{}/mappings/drugbank2ctd-{}.tsv".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(curr_v)
             dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre, curr_v))
-        os.system("cp {0}/mappings/drugbank2ctd-{1}.tsv {0}/mappings/drugbank2ctd-{2}.tsv".format(pre, curr_v, new_v))
+
+        shutil.copy('{0}/mappings/drugbank2ctd-{1}.tsv'.format(pre, curr_v),\
+                    '{0}/mappings/drugbank2ctd-{1}.tsv'.format(pre, new_v))
+        #os.system("cp {0}/mappings/drugbank2ctd-{1}.tsv {0}/mappings/drugbank2ctd-{2}.tsv".format(pre, curr_v, new_v))
 
         if not os.path.exists("{}/cmpds/fps-{}/inchi_keys.pickle".format(pre, curr_v)):
             url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/inchi_keys.pickle'.format(curr_v)
@@ -5055,7 +5072,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                       'drugbank2ctd-{}.tsv'.format(map_indications)
                 dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre, map_indications))
 
-            fcm = open('{}/mappings/drugbank-{}.tsv'.format(pre, map_indications), 'r')
+            fcm = open('{}/mappings/drugbank-{}.tsv'.format(pre, map_indications), 'r', encoding="utf8")
             cmls = fcm.readlines()
             fcm.close()
             for cml in cmls[1:]:
@@ -5064,7 +5081,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 cname = cls[2]
                 cid2name[cid] = cname
 
-            fim = open('{}/mappings/drugbank2ctd-{}.tsv'.format(pre, map_indications), 'r')
+            fim = open('{}/mappings/drugbank2ctd-{}.tsv'.format(pre, map_indications), 'r', encoding="utf8")
             imls = fim.readlines()
             fim.close()
             for iml in imls[1:]:
@@ -5093,7 +5110,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
         inchi_dict = {}
 
         if map_indications:
-            foind = open("{0}/mappings/inds-{0}.tsv".format(new_v), 'w')
+            foind = open("{0}/mappings/inds-{0}.tsv".format(new_v), 'w', encoding="utf8")
             foind.write('CANDO_ID\tINDICATION_NAME\tMESH_ID\tINDICATION_ID\n')
             ind2id = {}
             curr_ind_id = 0
@@ -5391,7 +5408,8 @@ def clear_cache():
     @returns Returns None
     """
     pre = os.path.dirname(__file__) + "/data/"
-    os.system("rm -r {}".format(pre))
+    shutil.rmtree(pre) 
+    #os.system("rm -r {}".format(pre))
     print("{} directory has been removed.".format(pre))
 
 
@@ -5455,7 +5473,7 @@ def get_test():
     #dl_file(url, '{}/test-prot_scores.tsv'.format(pre))
     url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/test/test-cmpds.tsv'
     dl_file(url, '{}/test-cmpds.tsv'.format(pre))
-    with open('{}/test-cmpds.tsv'.format(pre), 'r') as f:
+    with open('{}/test-cmpds.tsv'.format(pre), 'r', encoding="utf8") as f:
         l = []
         f.readline()
         for i in f:
