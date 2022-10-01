@@ -13,7 +13,7 @@ Computational Analysis of Novel Drug Opportunities
 
 ## Background
 
-CANDO is an unique and innovative multiscale drug discovery, repurposing, and design platform.
+CANDO is an unique and innovative multiscale therapeutic discovery, repurposing, and design platform.
 
 
 ## Install
