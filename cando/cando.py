@@ -4380,9 +4380,9 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
 
     # Load compound and ligand fingerprint pickles
     with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
-        c_fps = pickle.load(f)
+        c_fps = pd.read_pickle(f)
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
-        l_fps = pickle.load(f)
+        l_fps = pd.read_pickle(f)
 
     try:
         check = c_fps[c_id]
@@ -4515,7 +4515,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
 
     # Load compound and ligand fingerprint pickles
     with open('{}/{}-{}_vect.pickle'.format(cmpd_path,fp,vect), 'rb') as f:
-        c_fps = pickle.load(f)
+        c_fps = pd.read_pickle(f)
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pd.read_pickle(f)
 
@@ -4907,7 +4907,7 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
 
     # Load ligand fingerprint pickles
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
-        l_fps = pickle.load(f)
+        l_fps = pd.read_pickle(f)
 
     scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name)
     #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
