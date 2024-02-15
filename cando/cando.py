@@ -4,6 +4,7 @@ import random
 import time
 import operator
 import math
+import ast
 import progressbar
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ import multiprocessing as mp
 import difflib
 import matplotlib.pyplot as plt
 from decimal import Decimal
+from tqdm import tqdm
 from rdkit import Chem, DataStructs, RDConfig
 from rdkit.Chem import AllChem, rdmolops
 from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score, ndcg_score
@@ -23,6 +25,11 @@ from sklearn.model_selection import train_test_split
 from scipy.spatial.distance import squareform, cdist
 from scipy import stats
 import shutil # change1
+from scipy.stats import hypergeom
+
+import sqlite3, json
+from sqlalchemy import create_engine
+import polars as pl
 
 class Protein(object):
     """!
@@ -140,7 +147,7 @@ class Compound_pair(object):
         # list: Potentially temporary signature for things like pathways, where "c.sig" needs to be preserved
         self.aux_sig = []
         ## @var similar
-        # list: This is the ranked list of compounds with the most similar interaction signatures
+        # list: This is the ranked list of compound_pairs with the most similar interaction signatures
         self.similar = []
         ## @var similar_computed
         # bool: Have the distances of all Compounds to the given Compound been computed?
@@ -216,8 +223,8 @@ class ADR(object):
         ## @var compounds
         # list: Compound objects associated with the given ADR
         self.compounds = []
-        ## @var compounds
-        # List: Compound object pairs (tuples) associated with the given ADR
+        ## @var compound_pairs
+        # List: Compound_pair object pairs (tuples) associated with the given ADR
         self.compound_pairs = []
 
 
@@ -230,10 +237,11 @@ class CANDO(object):
     or precomputed compound-compound distance matrix (read_rmsds=), but those are optional.
 
     """
-    def __init__(self, c_map, i_map, matrix='', compound_set='all', compute_distance=False, save_dists='',
+    def __init__(self, c_map, i_map, matrix='', db_name='', compound_set='all', compute_distance=False, save_dists='',
                  read_dists='', pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 ddi_compounds='', ddi_adrs='', adr_map='', protein_distance=False, protein_map='', ncpus=1):
+                 ddi_compounds='', ddi_adrs='', adr_map='', sig_fusion='sum', 
+                 protein_distance=False, protein_map='', ncpus=1):
         ## @var c_map
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -243,6 +251,9 @@ class CANDO(object):
         ## @var matrix 
         # str: File path to the cando matrix file (relative or absolute)
         self.matrix = matrix
+        ## @var db_name
+        # str: Name of the sqlite database file that will be created
+        self.db_name = db_name
         ## @var compound_set
         # str or List str: what compounds to use, such as all, approved, experimental, etc
         self.compound_set = compound_set
@@ -324,12 +335,17 @@ class CANDO(object):
         # List: ADR objects in the platform
         self.adrs = []
         self.adr_ids = []
-
+        ## @var sig_fusion
+        # str: determines the method by which the signatures are combined for DDI analysis
+        self.sig_fusion = sig_fusion
         self.short_matrix_path = self.matrix.split('/')[-1]
         self.short_read_dists = read_dists.split('/')[-1]
         self.short_protein_set = protein_set.split('/')[-1]
         self.cmpd_set = rm_compounds.split('/')[-1]
         self.data_name = ''
+        self.short_c_map = c_map.split('/')[-1]
+        self.short_i_map = i_map.split('/')[-1]
+
 
         if self.matrix:
             if self.protein_set:
@@ -338,6 +354,9 @@ class CANDO(object):
                 self.data_name = self.cmpd_set + '.' + self.short_matrix_path
         if self.short_read_dists:
             self.data_name = self.short_read_dists
+
+        if not self.db_name:
+            self.db_name = f"cando-{self.short_matrix_path}-{self.short_c_map}-{self.short_i_map}.db"
 
         ignored_set = []
         # create all of the compound objects from the compound map
@@ -394,6 +413,7 @@ class CANDO(object):
                 if include_cmpd:
                     self.compounds.append(cm)
                     self.compound_ids.append(id_)
+        del lines
 
         if self.compound_set and len(self.compounds) == 0:
             print('No compounds passed filtering, please check input parameters.')
@@ -422,13 +442,23 @@ class CANDO(object):
                 if cm:
                     if ind_id in self.indication_ids:
                         ind = self.get_indication(ind_id)
-                        ind.compounds.append(cm)
+                        # Modified to remove object within an object
+                        # Reduce memory usage
+                        #ind.compounds.append(cm)
+                        ind.compounds.append(c_id)
                     else:
                         ind = Indication(ind_id, i_name)
-                        ind.compounds.append(cm)
+                        # Modified to remove object within an object
+                        # Reduce memory usage
+                        #ind.compounds.append(cm)
+                        ind.compounds.append(c_id)
                         self.indications.append(ind)
                         self.indication_ids.append(ind.id_)
-                    cm.add_indication(ind)
+                    # Modified to remove object within an object
+                    # Reduce memory usage
+                    #cm.add_indication(ind)
+                    cm.add_indication(ind_id)
+        del lines
 
         # add proteins, add signatures and such to compounds
         if self.protein_set:
@@ -447,6 +477,47 @@ class CANDO(object):
                 quit()
             print('Reading signatures from matrix...')
 
+            '''
+            # SQLite approach to saving signatures
+            # Need to update other functions to account for the sigs not being in the Compound objects
+            check = False
+            try:
+                conn = f'sqlite://{self.db_name}'
+                #db = create_engine(f'sqlite:///{self.db_name}')
+                # db = create_engine('sqlite:///cando.db')
+                df_sigs = pl.read_database(query="SELECT * FROM sigs", connection=conn)
+                sigs = json.loads(
+                    df_sigs.filter(pl.col('id') == self.compounds[0]).select(['sig']).item().replace("'", '"'))
+                if len(df_sigs) == len(self.compounds) and len(df_cmpds) == len(self.compounds):
+                    print("  Data already in tables.")
+                    check = True
+            except:
+                print("  Data does not exist OR data does not match.")
+                os.system(f"rm {self.db_name}")
+
+            if not check:
+                db = create_engine(f'sqlite:///{self.db_name}')
+                df_sigs = pd.read_csv(self.matrix, sep='\t', header=None, index_col=0)
+                if len(df_sigs.columns) != len(self.proteins):
+                    print(f'The number of proteins in {self.i_map} does not match the number of rows in {self.matrix}.')
+                    quit()
+                if len(df_sigs.index) != len(self.compounds):
+                    print(f'The number of compounds in {self.c_map} does not match the number of columns in {self.matrix}.')
+                    quit()
+                df_sigs = df_sigs.T.reset_index(drop=True)
+                d_sigs = {}
+                for c in df_sigs.index:
+                    d_temp = {str(p): df_sigs.loc[c,p] for p in df_sigs.columns}
+                    d_sigs[str(c)] = str(d_temp)
+                    if c % 1000 == 0 or c == len(self.compounds) - 1:
+                        df_temp = pd.DataFrame.from_dict(d_sigs, orient='index')
+                        df_temp.index.names = ['id']
+                        df_temp.rename(columns={0: 'sig'}, inplace=True)
+                        df_temp.to_sql('sigs', db, if_exists='append')
+                        del df_temp
+                        d_sig = {}
+                del df_sigs, d_sigs, d_temp
+            '''
             with open(matrix, 'r', encoding="utf8") as m_f:
                 m_lines = m_f.readlines()
                 if self.protein_set:
@@ -478,8 +549,8 @@ class CANDO(object):
                             new_i += 1
                         else:
                             continue
-                    print('\tDirect UniProt matches:\t{}\n\tDirect PDB matches:    \t{}'
-                          '\n\tNew signature length:  \t{}'.format(matches[1], matches[0], sum(matches)))
+                    print('    Direct UniProt matches: {}\n    Direct PDB matches: {}'
+                          '\n    New signature length: {}'.format(matches[1], matches[0], sum(matches)))
                     if not sum(matches):
                         print('Sorry, the input proteins did not match any proteins in the input matrix -- quitting.')
                         quit()
@@ -498,7 +569,9 @@ class CANDO(object):
                         for i in range(len(scores)):
                             s = scores[i]
                             self.compounds[i].sig.append(s)
+            del m_lines
             print('Done reading signatures.\n')
+
         if pathways:
             print('Reading pathways...')
             if self.indication_pathways:
@@ -544,7 +617,53 @@ class CANDO(object):
             if not indication_pathways:
                 self.quantify_pathways()
             print('Done reading pathways.')
-           
+
+        # Create SQLITE db for CANDO libraries and data
+        print("Building compound-indication tables...")
+
+        check = False
+        print("  Checking if data exists in tables...")
+        try:
+            db = create_engine(f'sqlite:///{self.db_name}')
+            #db = create_engine('sqlite:///cando.db')
+            df_inds = pd.read_sql("SELECT * FROM inds", db)
+            df_cmpds = pd.read_sql("SELECT * FROM cmpds", db)
+            if len(df_inds) == len(self.indications) and len(df_cmpds) == len(self.compounds):
+                print("  Data already in tables.")
+                check = True
+        except:
+            print("  Data does not exist OR data does not match.")
+            os.system(f"rm {self.db_name}")
+
+        if not check:
+            db = create_engine(f'sqlite:///{self.db_name}')
+            #db = create_engine('sqlite:///cando.db')
+            print("    indications")
+            #d_inds = {str(x.id_): [str(x.name), str([cmpd.id_ for cmpd in x.compounds])] for x in tqdm(self.indications)}
+            d_inds = {str(x.id_): [str(x.name), str([cmpd for cmpd in x.compounds])] for x in tqdm(self.indications)}
+            df_inds = pd.DataFrame.from_dict(d_inds, orient='index')
+            df_inds.index.names = ['id']
+            df_inds.rename(columns={0: 'name', 1: 'cmpd_ids'}, inplace=True)
+            df_inds.to_sql('inds', db, if_exists='replace')
+            print("    compounds")
+            #d_cmpds = {str(x.id_): [str(x.name), str([ind.id_ for ind in x.indications])] for x in tqdm(self.compounds)}
+            d_cmpds = {str(x.id_): [str(x.name), str([ind for ind in x.indications])] for x in tqdm(self.compounds)}
+            df_cmpds = pd.DataFrame.from_dict(d_cmpds, orient='index')
+            df_cmpds.index.names = ['id']
+            df_cmpds.rename(columns={0: 'name', 1: 'ind_ids'}, inplace=True)
+            df_cmpds.to_sql('cmpds', db, if_exists='replace')
+            del d_inds, df_inds, d_cmpds, df_cmpds
+            # Index on id for cmpds and inds tables
+            conn = sqlite3.connect(f'{self.db_name}')
+            #conn = sqlite3.connect('cando.db')
+            cursor = conn.cursor()
+            cursor.execute("CREATE INDEX c_id_idx ON cmpds(id)")
+            cursor.execute("CREATE INDEX i_id_idx ON inds(id)")
+            conn.commit()
+            conn.close()
+        print("Done building compound-indication tables.\n")
+
+
         if self.ddi_compounds:
             print("Reading compound-compound associations...")
             ddi = pd.read_csv(ddi_compounds, sep='\t')
@@ -557,7 +676,85 @@ class CANDO(object):
                     c2.compounds.append(c1)
             print('Done reading compound-compound associations.\n')
 
+        check=False
         if self.ddi_adrs:
+            # Check
+            # If pass, do not recreate but pull from db
+            try:
+                db = create_engine('sqlite:///ddi.db')
+                df_temp = pd.read_sql("SELECT * FROM adrs",db)
+                ddi = pd.read_csv(ddi_adrs, sep='\t')
+                l_adrs = set(ddi.loc[:,'COND_DB_ID'].to_list())
+                #l_adrs = set(ddi.loc[:,'CONDITION_MESH_ID'].to_list())
+                if len(df_temp)==len(l_adrs):
+                    print("    Data does exist.")
+                    check=True
+                # Check other tables
+                #l_cps = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
+            except:
+                print("    Data does not exist.")
+                os.system("rm ddi.db")
+
+        if self.ddi_adrs and check==True:
+            print("Reading adverse drug reaction and compound pair associations from tables...")
+            # Compound pairs
+            db = create_engine('sqlite:///ddi.db')
+            df_temp = pd.read_sql("SELECT * FROM cmpd_pairs",db)
+            print("  compound pairs")
+            for i in tqdm(df_temp.index):
+                cm_p = Compound_pair(ast.literal_eval(df_temp.loc[i,'names']), ast.literal_eval(df_temp.loc[i,'ids']), ast.literal_eval(df_temp.loc[i,'ids']))
+                cm_p.adrs = ast.literal_eval(df_temp.loc[i,'adr_ids'])
+                self.compound_pairs.append(cm_p)
+                self.compound_pair_ids.append(cm_p.id_)
+
+            # ADRs
+            df_temp = pd.read_sql("SELECT * FROM adrs",db)
+            print("  adverse drug reactions")
+            for i in tqdm(df_temp.index):
+                adr = ADR(df_temp.loc[i,'id'],df_temp.loc[i,'name'])
+                adr.compound_pairs = ast.literal_eval(df_temp.loc[i,'cmpd_pair_ids'])
+                self.adrs.append(adr)
+                self.adr_ids.append(adr.id_)
+            print('Done reading adverse drug reaction and compound pair associations.\n')
+
+            '''
+            # ADRS + Compound pairs
+            df_temp = pd.read_sql("SELECT * FROM 'adr-cmpd_pairs'",db)
+            # Add comppund pair to ADR and vice versa
+            print("adr-compound pair associations")
+            for i in tqdm(df_temp.index):
+                adr = self.get_adr(df_temp.loc[i,'adrs'])
+                for j in ast.literal_eval(df_temp.loc[i,'cmpd_pairs']):
+                    cm_p = self.get_compound_pair(j)
+                    adr.compound_pairs.append(cm_p)
+                    cm_p.add_adr(adr)
+            print('Done reading adverse drug reaction and compound pair associations.\n')
+            '''
+
+            print("Generating compound-compound signatures...")
+            for cm_p in tqdm(self.compound_pairs):
+                c1 = self.get_compound(cm_p.id_[0])
+                c2 = self.get_compound(cm_p.id_[1])
+                # Add signatures??
+                #cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+                # max, min, mult?
+                # ZF - mod 9/5/23
+                # allow other types of vector combination
+                if self.sig_fusion=='sum':
+                    cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='product':
+                    cm_p.sig = [i*j for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='min':
+                    cm_p.sig = [min(i,j) for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='max':
+                    cm_p.sig = [max(i,j) for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='average':
+                    cm_p.sig = [np.mean([i,j]) for i,j in zip(c1.sig,c2.sig)]
+ 
+            print("Done generating compound-compound signatures.\n")
+
+        if self.ddi_adrs and check==False:
+            db = create_engine('sqlite:///ddi.db')
             print("Reading compound pair-adverse events associations...")
             ddi = pd.read_csv(ddi_adrs,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
@@ -565,7 +762,7 @@ class CANDO(object):
             print("    {} compound pair-adverse event associations.".format(len(idss)))
             idss = list(set(idss))
             # Iterate through list of CANDO ID tuples
-            for ids in idss: 
+            for ids in tqdm(idss): 
                 if ids in self.compound_pair_ids:
                     cm_p = self.get_compound_pair(ids)
                 elif (ids[1],ids[0]) in self.compound_pair_ids:
@@ -580,8 +777,10 @@ class CANDO(object):
                 # Iterate through ADRs for this compound pair 
                 for x in adrs.index:
                     #ADRs
-                    adr_name = ddi.loc[x,'CONDITION_MESH_NAME']
-                    adr_id = ddi.loc[x,'CONDITION_MESH_ID']
+                    adr_name = ddi.loc[x,'COND_NAME']
+                    adr_id = ddi.loc[x,'COND_DB_ID']
+                    #adr_name = ddi.loc[x,'CONDITION_MESH_NAME']
+                    #adr_id = ddi.loc[x,'CONDITION_MESH_ID']
                     if adr_id in self.adr_ids:
                         adr = self.get_adr(adr_id)
                     else:
@@ -589,66 +788,52 @@ class CANDO(object):
                         self.adrs.append(adr)
                         self.adr_ids.append(adr.id_)
                     # Add comppund pair to ADR and vice versa
-                    cm_p.add_adr(adr)
-                    adr.compound_pairs.append(cm_p)
+                    cm_p.add_adr(adr_id)
+                    #cm_p.add_adr(adr)
+                    adr.compound_pairs.append(ids)
+                    #adr.compound_pairs.append(cm_p)
             print("    {} compound pairs.".format(len(self.compound_pairs)))
             print("    {} adverse events.".format(len(self.adrs)))
             print('Done reading compound pair-adverse event associations.\n')
-           
-            '''
-            for x in ddi.itertuples():
-                #ADRs
-                #adr_name = ddi.loc[x,'EVENT_NAME']
-                adr_name = x[6]
-                #adr_id = ddi.loc[x,'EVENT_UMLS_ID']
-                adr_id = x[5]
-                if adr_id in self.adr_ids:
-                    adr = self.get_adr(adr_id)
-                else:
-                    adr = ADR(adr_id,adr_name)
-                    self.adrs.append(adr)
-                    self.adr_ids.append(adr.id_)
-                # Compound pair
-                ids = (int(x[1]),int(x[3]))
-                #ids = (int(ddi.loc[x,'CANDO_ID-1']),int(ddi.loc[x,'CANDO_ID-2']))
-                if ids in self.compound_pair_ids:
-                    cm_p = self.get_compound_pair(ids)
-                elif (ids[1],ids[0]) in self.compound_pair_ids:
-                    cm_p = self.get_compound_pair((ids[1],ids[0]))
-                else:
-                    #names = (x[1],x[3])
-                    names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
-                    cm_p = Compound_pair(names, ids, ids)
-                    self.compound_pairs.append(cm_p)
-                    self.compound_pair_ids.append(ids)
-                # Add comppund pair to ADR and vice versa
-                cm_p.add_adr(adr)
-                adr.compound_pairs.append(cm_p)
-            print('Done reading compound-compound adverse event associations.\n')
-            '''
-            '''
-            print("Generating compound pairs...")
-            for i in range(len(self.compounds)):
-                c1 = self.compounds[i]
-                for j in range(i,len(self.compounds)):
-                    if i == j:
-                        continue
-                    c2 = self.compounds[j]
-                    names = (c1.name,c2.name)
-                    ids = (c1.id_,c2.id_)
-                    idxs = (c1.id_,c2.id_)
-                    cm_p = Compound_pair(names,ids,idxs)
-                    self.compound_pairs.append(cm_p)
-                    self.compound_pair_ids.append(ids)
-            print("Done generating compound pairs.\n")
-            '''
+ 
+            print("Building compound pair-adverse events tables...")
+            print("  adverse drug reactions")
+            d_adrs = {str(x.id_): [str(x.name), str(x.compound_pairs)] for x in tqdm(self.adrs)}
+            #d_adrs = {str(x.id_): str(x.name) for x in tqdm(self.adrs)}
+            df_adrs = pd.DataFrame.from_dict(d_adrs,orient='index')
+            df_adrs.index.names = ['id']
+            df_adrs.rename(columns={0:'name',1:'cmpd_pair_ids'},inplace=True)
+            #df_adrs.rename(columns={0:'name'},inplace=True)
+            df_adrs.to_sql('adrs', db, if_exists='replace')
+            
+            print("  compound pairs")
+            d_cps = {str(x.id_): [str(x.name), str(x.adrs)] for x in tqdm(self.compound_pairs)}
+            #d_cps = {str(x.id_): str(x.name) for x in tqdm(self.compound_pairs)}
+            df_cps = pd.DataFrame.from_dict(d_cps,orient='index')
+            df_cps.index.names = ['ids']
+            df_cps.rename(columns={0:'names', 1:'adr_ids'},inplace=True)
+            #df_cps.rename(columns={0:'names'},inplace=True)
+            df_cps.to_sql('cmpd_pairs', db, if_exists='replace')
+            print("Done building compound pair-adverse events tables.\n")
+
             print("Generating compound-compound signatures...")
             for cm_p in self.compound_pairs:
                 c1 = self.get_compound(cm_p.id_[0])
                 c2 = self.get_compound(cm_p.id_[1])
                 # Add signatures??
-                cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
                 # max, min, mult?
+                # ZF - mod 9/5/23
+                # allow other types of vector combination
+                if self.sig_fusion=='sum':
+                    cm_p.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='product':
+                    cm_p.sig = [i*j for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='min':
+                    cm_p.sig = [min(i,j) for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='max':
+                    cm_p.sig = [max(i,j) for i,j in zip(c1.sig,c2.sig)]
+                elif self.sig_fusion=='average':
+                    cm_p.sig = [np.mean([i,j]) for i,j in zip(c1.sig,c2.sig)]
             print("Done generating compound-compound signatures.\n")
 
         if self.indication_proteins:
@@ -679,7 +864,7 @@ class CANDO(object):
                     c1 = self.compounds[i]
                     scores = lines[i].strip().split('\t')
                     if len(scores) != len(self.compounds):
-                        print('The number of compounds in {} does not match the '
+                        print('    The number of compounds in {} does not match the '
                               'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
                         quit()
                     for j in range(len(scores)):
@@ -710,154 +895,188 @@ class CANDO(object):
             ## do not populate the similar list for each Compound_pair object
             ## This will increase computing time, but decrease mem allocation
             elif ddi_adrs:
-                print('Will not compute {} distances for compound pairs due to memory issues...'.format(self.dist_metric))
-                print('Can compute individually on-the-fly for canpredict and/or canbennchmark.')
-                '''
+                #print('Will not compute {} distances for compound pairs due to memory issues...'.format(self.dist_metric))
+                #print('Can compute individually on-the-fly for canpredict and/or canbennchmark.')
                 print('Computing {} distances for compound pairs...'.format(self.dist_metric))
+               
+                try: 
+                    #Connecting to sqlite
+                    conn = sqlite3.connect('ddi.db')
+                    #Creating a cursor object using the cursor() method
+                    cursor = conn.cursor()
+                    #Droping dists table if already exists
+                    cursor.execute("DROP TABLE dists")
+                    #print("dists table dropped.")
+                    #Commit your changes in the database
+                    conn.commit()
+                    #Closing the connection
+                    conn.close()
+                except:
+                    #print("dists table does not exist.")
+                    pass
+
+                '''
+                try: 
+                    #Connecting to sqlite
+                    conn = sqlite3.connect('ddi.db')
+                    #Creating a cursor object using the cursor() method
+                    cursor = conn.cursor()
+                    #Droping dists table if already exists
+                    cursor.execute("DROP TABLE ranks")
+                    print("ranks table dropped.")
+                    #Commit your changes in the database
+                    conn.commit()
+                    #Closing the connection
+                    conn.close()
+                except:
+                    print("ranks table does not exist.")
+                '''
+
+                db = create_engine('sqlite:///ddi.db')
                 # put all compound_pair signatures into 2D-array
                 snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
                 snp = np.array(snp)  # convert to numpy form
-                
+                distance_matrix = []
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
-                    distance_matrix = squareform(distance_matrix)
+                    distance_matrix = pairwise_distances_chunked(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    #distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
-                    for i in range(len(self.compound_pairs)):
-                        print("{} of {}".format(i+1,len(self.compound_pairs)))
-                        dists = cdist([snp[i]], snp, dist_metric)[0]
-                        self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
-                        self.compound_pairs[i].similar.pop(i)
-                        self.compound_pairs[i].similar_computed = True
-                    
-
-
+                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
+                    #distance_matrix = squareform(distance_matrix)
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
                             force_all_finite=False,
                             n_jobs=self.ncpus)
-                    print("pairwise is done.")
-                    #distance_matrix = np.concatenate(list(distance_matrix), axis=0) 
-                    #print("concat is done.")
-                    
-                    #distance_matrix = pairwise_distances(snp, metric=self.dist_metric,
-                    #        force_all_finite=False,
-                    #        n_jobs=self.ncpus)
-                    
-                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    #distance_matrix = squareform(distance_matrix, checks=False)
-                    #print("squareform is done.")
-                   
-                    #i = 0
-                    #cp_ids = [i.id_ for i in self.compound_pairs]
-                    #for cp in self.compound_pairs:
-                    #for i in range(len(self.compound_pairs)):
-                    for x in distance_matrix:
-                        for y in x:
-                            cp = self.compound_pairs[i]
-                            print("{} of {}".format(i+1,len(self.compound_pairs)))
-                            cp.similar = dict(zip(self.compound_pairs, y))
-                            # Remove self similar
-                            del cp.similar[cp]
-                            # Completed simialr calc
-                            cp.similar_computed = True
-                        #print(distance_matrix[i])
+                l = [cpp.id_ for cpp in self.compound_pairs]
+                d_similar = {}
+                #r_similar = {}
+                i = 0
+                for x in distance_matrix:
+                    for y in tqdm(x):
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
-                        # Let us try dicts instead of list of tuples
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
-                        #del self.compound_pairs[i].similar[self.compound_pairs[i]]
-                        #self.compound_pairs[i].similar = list(zip(self.compound_pairs, dists))
-                        #self.compound_pairs[i].similar = list(zip(self.compound_pairs, distance_matrix[i]))
                         #self.compound_pairs[i].similar.pop(i)
-                            #distance_matrix = np.delete(distance_matrix, 0, 0)
-                        #cp.similar = dict(zip(cp_ids, distance_matrix[i]))
-                   
-                        # Sort similar
-                        #cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
-                        #cp.similar_sorted = True
-                            #i+=1
-                    #del distance_matrix
-                else:
-                    print("Incorrect distance metric - {}".format(self.dist_metric))
-                    exit()
-                # step through the condensed matrix - add RMSDs to Compound.similar lists
-                nc = len(self.compound_pairs)
-                print(nc)
-                n = 0
-                for i in range(nc):
-                    for j in range(i, nc):
-                        c1 = self.compound_pairs[i]
-                        c2 = self.compound_pairs[j]
-                        if i == j:
-                            continue
-                        print("got both pairs")
-                        r = distance_matrix[n]
-                        print(r)
-                        c1.similar.append((c2, r))
-                        c2.similar.append((c1, r))
-                        n += 1
-                print('Done computing {} distances.\n'.format(self.dist_metric))
- 
-                # sort the dists after saving (if desired)
-                print('Sorting {} distances...'.format(self.dist_metric))
-                i = 1
-                for cp in self.compound_pairs:
-                    print("{} of {}".format(i,len(self.compound_pairs)))
-                    cp.similar = {k: v for k,v in sorted(cp.similar.items(), key=operator.itemgetter(1))} 
-                    #cp.similar = {k: v for k, v in sorted(cp.similar.items(), key=lambda item: item[1])} 
-                    cp.similar_sorted = True
-                    i+=1
-                print('Done sorting {} distances.\n'.format(self.dist_metric))
-                
-                for c in self.compound_pairs:
-                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                    c.similar = sorted_scores
-                    c.similar_computed = True
-                    c.similar_sorted = True
-                '''
+                        cp = self.compound_pairs[i].id_
+                        #d_temp = dict(zip(l, y))
+                        #d_temp.pop(cp)
+                        #d_temp = dict(sorted(d_temp.items(), key=lambda item: item[1] if not math.isnan(item[1]) else 100000))
+                            
+                        d_temp = list(zip(l, y))
+                        d_temp.pop(i)
+                        #l2 = l.copy()
+                        #l2.pop(i)
+                        #y = np.delete(y, i)
+                        #d_temp = sorted(d_temp, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                            
+                        # Calculate ranks for each compound pair
+                        #rank_sorted = stats.rankdata(y, method='max')
+                        #rank_sorted = stats.rankdata(list(zip(*d_temp))[1], method='max')
+
+                        # Save as a list
+                        #d_temp = list(zip(l2,y,rank_sorted))
+                        #d_temp = list(zip(list(zip(*d_temp))[0],list(zip(*d_temp))[1],rank_sorted))
+                        # Save as a dict
+                        #d_temp = {sctr(cp2): [dist2,rank2] for cp2,dist2,rank2 in d_temp}
+                        d_temp = {str(cp2): dist2 for cp2,dist2 in d_temp}
+                        #d_similar[str(cp)] = d_temp
+                        d_similar[str(cp)] = str(d_temp)
+                        if i%1000==0 or i==len(self.compound_pairs)-1:
+                            df_temp = pd.DataFrame.from_dict(d_similar,orient='index')
+                            df_temp.index.names = ['id']
+                            df_temp.rename(columns={0:'dists'},inplace=True)
+                            df_temp.to_sql('dists', db, if_exists='append')
+                            d_similar = {}
+                                
+                            #df_temp = pd.DataFrame.from_dict(r_similar,orient='index')
+                            #df_temp.index.names = ['id']
+                            #df_temp.to_sql('ranks', db, if_exists='append')
+                            #r_similar = {}
+                        i+=1
+                        #df_temp = pd.DataFrame.from_dict(d_similar, index=[str(self.compound_pairs[i].id_)], columns=['dists'])
+                    #df_temp.to_sql('dists', db, if_exists='append')
+                    #self.compound_pairs[i].similar_computed = True
+                    #self.compound_pairs[i].similar_sorted = True
+                print('Done computing {} distances for compound pairs.\n'.format(self.dist_metric))
 
             else:
-                print('Computing {} distances...'.format(self.dist_metric))
-                # put all compound signatures into 2D-array
-                signatures = [self.compounds[i].sig for i in range(len(self.compounds))]
-                #for i in range(0, len(self.compounds)):
-                #    signatures.append(self.compounds[i].sig)
-                snp = np.array(signatures)  # convert to numpy form
-                # call pairwise_distances, speed up with custom RMSD function and parallelism
-                if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances(snp, metric=lambda u, v: np.sqrt(np.mean((u - v)**2)), n_jobs=self.ncpus)
-                    #distance_matrix = squareform(distance_matrix)
-                elif self.dist_metric in ['correlation', 'euclidean', 'cityblock', 'cosine']:
-                    distance_matrix = pairwise_distances(snp, metric=self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
-                    # Removed checks in case the diagonal is very small (close to zero) but not zero.
-                    #distance_matrix = squareform(distance_matrix, checks=False)
-                else:
-                    print("Incorrect distance metric - {}".format(self.dist_metric))
-                    exit()
+                print('Building {} distance table...'.format(self.dist_metric))
 
-                '''
-                # step through the condensed matrix - add RMSDs to Compound.similar lists
-                nc = len(self.compounds)
-                n = 0
-                for i in range(nc):
-                    for j in range(i, nc):
-                        c1 = self.compounds[i]
-                        c2 = self.compounds[j]
-                        if i == j:
-                            continue
-                        r = distance_matrix[n]
-                        c1.similar.append((c2, r))
-                        c2.similar.append((c1, r))
-                        n += 1
-                '''
-                # Iterate through the square matrix, zip compounds and scores, 
-                # remove the self value, then set similar list for the compound
-                for i in range(len(self.compounds)):
-                    c = self.compounds[i]
-                    l = list(zip(self.compounds,distance_matrix[i]))
-                    del l[i]
-                    c.similar = l
-                print('Done computing {} distances.\n'.format(self.dist_metric))
-            
+                print("  Checking if data exists in table...")
+                check = False
+                try:
+                    db = create_engine(f'sqlite:///{self.db_name}')
+                    #db = create_engine('sqlite:///cando.db')
+                    df_dists = pd.read_sql("SELECT * FROM dists", db)
+                    if len(df_dists) == len(self.compounds):
+                        print("  Data already exists in table.")
+                        check = True
+                except:
+                    pass
+                if not check:
+                    print("  Data does not exist in table OR data does not match.")
+                    try:
+                        conn = sqlite3.connect(f'{self.db_name}')
+                        #conn = sqlite3.connect('cando.db')
+                        cursor = conn.cursor()
+                        cursor.execute("DROP TABLE dists")
+                        conn.commit()
+                        conn.close()
+                    except:
+                        pass
+
+                    print('  Calculating {} distances...'.format(self.dist_metric))
+                    db = create_engine(f'sqlite:///{self.db_name}')
+                    #db = create_engine('sqlite:///cando.db')
+                    # put all compound_pair signatures into 2D-array
+                    snp = [self.compounds[i].sig for i in range(len(self.compounds))]
+                    snp = np.array(snp)  # convert to numpy form
+
+                    # Remove sigs from Compounds to reduce mem
+                    for i in range(len(self.compounds)):
+                        self.compounds[i].sig = []
+
+                    # call pairwise_distances, speed up with custom RMSD function and parallelism
+                    distance_matrix = []
+                    if self.dist_metric == "rmsd":
+                        distance_matrix = pairwise_distances_chunked(snp,
+                                                                     metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()),
+                                                                     n_jobs=self.ncpus)
+                    elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+                        distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
+                                                                     force_all_finite=False,
+                                                                     n_jobs=self.ncpus)
+                    print('  Done calculating {} distances.'.format(self.dist_metric))
+
+                    l = [c.id_ for c in self.compounds]
+                    d_similar = {}
+                    i = 0
+                    for x in distance_matrix:
+                        for y in tqdm(x):
+                            c1 = str(self.compounds[i].id_)
+                            d_temp = list(zip(l, y))
+                            d_temp.pop(i)
+                            self.compounds[i].similar = d_temp
+                            d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
+                            d_similar[str(c1)] = str(d_temp)
+                            if i % 1000 == 0 or i == len(self.compounds)-1:
+                                df_temp = pd.DataFrame.from_dict(d_similar, orient='index')
+                                df_temp.index.names = ['id']
+                                df_temp.rename(columns={0: 'dists'}, inplace=True)
+                                df_temp.to_sql('dists', db, if_exists='append')
+                                del df_temp
+                                d_similar = {}
+                            i += 1
+                    # Speed the table up with indexes
+                    conn = sqlite3.connect(f'{self.db_name}')
+                    #conn = sqlite3.connect('cando.db')
+                    cursor = conn.cursor()
+                    cursor.execute("CREATE INDEX d_id_idx ON dists(id)")
+                    conn.commit()
+                    conn.close()
+                    del distance_matrix, snp, d_similar
+                print('Done building {} distance table.\n'.format(self.dist_metric))
+
+
             if self.save_dists:
                 def dists_to_str(cmpd, ci):
                     o = []
@@ -1462,39 +1681,15 @@ class CANDO(object):
         @return Returns list: Similar Compounds to the given Compound
         """
         # find index of query compound, collect signatures for both
-        q = 0
-        cp_sig = []
-        if proteins is None:
-            cp_sig = cmpd_pair.sig
-        elif proteins:
-            for pro in proteins:
-                index = self.protein_id_to_index[pro.id_]
-                cp_sig.append(cmpd_pair.sig[index])
-        else:
-            if aux:
-                cp_sig = cmpd_pair.aux_sig
-            else:
-                cp_sig = cmpd_pair.sig
+        try:
+            q = self.compound_pair_ids.index(cmpd_pair.id_)
+        except:
+            q = None
+
+        cp_sig = cmpd_pair.sig
         ca = np.array([cp_sig])
 
-        other_sigs = []
-        for ci in range(len(self.compound_pairs)):
-            cp = self.compound_pairs[ci]
-            if cmpd_pair.id_ == cp.id_:
-                q = ci
-            other = []
-            if proteins is None:
-                other_sigs.append(cp.sig)
-            elif proteins:
-                for pro in proteins:
-                    index = self.protein_id_to_index[pro.id_]
-                    other.append(cp.sig[index])
-                other_sigs.append(other)
-            else:
-                if aux:
-                    other_sigs.append(cp.aux_sig)
-                else:
-                    other_sigs.append(cp.sig)
+        other_sigs = [cp.sig for cp in self.compound_pairs]
         oa = np.array(other_sigs)
         
         # call cdist, speed up with custom RMSD function
@@ -1532,10 +1727,59 @@ class CANDO(object):
         '''
         cps = self.compound_pairs
         scores = list(zip(cps, distances[0]))
-        del scores[q]
+        if q:
+            del scores[q]
 
         if sort:
             sorted_scores = sorted(scores, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+            return sorted_scores
+        else:
+            return scores
+
+
+    def generate_similar_sigs_cps(self, cmpd_pairs, sort=False, proteins=[], aux=False, ncpus=1):
+        """!
+        For a given compound pair, generate the similar compound pairs using distance of sigs.
+
+        @param cmpd_pair object: Compound_pair object
+        @param sort bool: Sort the list of similar compounds
+        @param proteins list: Protein objects to identify a subset of the Compound signature
+        @param aux bool: Use an auxiliary signature (default: False)
+
+        @return Returns list: Similar Compounds to the given Compound
+        """
+        # find index of query compound, collect signatures for both
+        q = None
+        cp_sigs = []
+        for cmpd_pair in cmpd_pairs:
+            cp_sig = cmpd_pair.sig
+            cp_sigs.append(cp_sig)
+        ca = np.array(cp_sigs)
+
+        other_sigs = []
+        for ci in range(len(self.compound_pairs)):
+            cp = self.compound_pairs[ci]
+            if cmpd_pair.id_ == cp.id_:
+                q = ci
+            other_sigs.append(cp.sig)
+        oa = np.array(other_sigs)
+        
+        # call cdist, speed up with custom RMSD function
+        if self.dist_metric == "rmsd":
+            distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=ncpus)
+        elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
+            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=ncpus)
+        else:
+            print("Incorrect distance metric - {}".format(self.dist_metric))
+
+        cps = self.compound_pairs
+        scores = list(zip(cps, distances[0]))
+        if q:
+            del scores[q]
+
+        if sort:
+            sorted_scores = [sorted(y, key=lambda x: x[1] if not math.isnan(x[1]) else 100000) for y in scores]
+            #sorted_scores = sorted(scores, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
             return sorted_scores
         else:
             return scores
@@ -2026,10 +2270,10 @@ class CANDO(object):
         # Append 3 lists to df and write to file
         with open(summ, 'w', encoding="utf8") as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
-            ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
-            pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
-            cst = "\t".join(map(str, cov)) + '\n'
-            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(ast, pst, cst))
+            iast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
+            pwst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
+            icst = "\t".join(map(str, cov)) + '\n'
+            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(iast, pwst, icst))
        
         # pretty print the average indication accuracies
         cut = 0
@@ -2038,6 +2282,375 @@ class CANDO(object):
             print("{}\t{:.3f}".format(headers[cut], final_accs[m] * 100.0))
             cut += 1
         print('\n')
+
+    def canbenchmark_new(self, file_name, n=100, indications=[], continuous=False, bottom=False,
+                     ranking='standard', adrs=False, approved=False):
+        """!
+        Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
+        This function tests the performance of canpredict_compounds
+
+        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
+        @param indications list or str: List of Indication ids to be benchmarked, otherwise all will be used.
+        @param continuous bool: Use the percentile of distances from the similarity matrix as the benchmarking cutoffs
+        @param bottom bool: Reverse the ranking (descending) for the benchmark
+        @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
+        modified, and ordinal)
+        @param adrs bool: ADRs are used as the Compounds' phenotypic effects instead of Indications
+        @return Returns None
+        """
+
+        def print_time(s):
+            if s >= 60:
+                m = s / 60.0
+                s %= 60.0
+                if m >= 60.0:
+                    h = m / 60.0
+                    m %= 60.0
+                    #print(f"      {h:.0f} hr {m:.0f} min {s:.0f} s.")
+                    return f"{h:.0f} hr {m:.0f} min {s:.0f} s"
+                else:
+                    #print(f"      {m:.0f} min {s:.0f} s")
+                    return f"{m:.0f} min {s:.0f} s"
+            else:
+                #print(f"      {s:.0f} s")
+                return f"{s:.0f} s"
+
+        print("Begin running canbenchmark_new...")
+        start = time.time()
+
+        #ZF - 1/19/24 - check if this is needed later
+        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+            exit()
+
+        if not self.indication_proteins and not self.indication_pathways:
+            if not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_sorted = True
+
+        if approved:
+            ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}-approved.tsv'
+            ra = f'raw_results/raw_results-{file_name}-{n}-approved.csv'
+            pwr = f'pairwise_results/pairwise_results-{file_name}-{n}-approved.csv'
+            summ = f'summary-{file_name}-{n}-approved.tsv'
+            benchmark_name = f"canbenchmark-{file_name}-{n}-approved"
+            t_name = f"time-{file_name}-{n}-approved.txt"
+        else:
+            ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}.tsv'
+            ra = f'raw_results/raw_results-{file_name}-{n}.csv'
+            summ = f'summary-{file_name}-{n}.tsv'
+            benchmark_name = f"canbenchmark-{file_name}-{n}"
+            t_name = f"time-{file_name}-{n}.txt"
+
+        os.makedirs('results_analysed_named', exist_ok=True)
+        os.makedirs('raw_results', exist_ok=True)
+        os.makedirs('pairwise_results', exist_ok=True)
+        os.makedirs(benchmark_name, exist_ok=True)
+
+        ra_out = open(ra, 'w')
+        pwr_out = open(pwr, 'w')
+
+        def dcg(l,k):
+            dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
+            return np.sum(dcg)
+
+        def effect_type():
+            if adrs:
+                return 'ADR'
+            else:
+                return 'disease'
+
+        def filter_indications(ind_set):
+            if not os.path.exists('v2.0/mappings/group_disease-top_level.tsv'):
+                url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/mappings/group_disease-top_level.tsv'
+                dl_file(url, 'v2.0/mappings/group_disease-top_level.tsv')
+            path_ids = ['C01', 'C02', 'C03']
+            with open('v2.0/mappings/group_disease-top_level.tsv', 'r') as fgd:
+                for l in fgd:
+                    ls = l.strip().split('\t')
+                    if ls[1] in path_ids:
+                        ind = self.get_indication(ls[0])
+                        ind.pathogen = True
+            if ind_set == 'pathogen':
+                return [indx for indx in self.indications if indx.pathogen]
+            elif ind_set == 'human':
+                return [indx for indx in self.indications if not indx.pathogen]
+            else:
+                print('Please enter proper indication set, options include "pathogen", "human", or "all".')
+                quit()
+
+        effect_dct = {}
+        ss = []
+        c_per_effect = 0
+
+        if isinstance(indications, list) and len(indications) >= 1:
+            effects = list(map(self.get_indication, indications))
+        elif isinstance(indications, list) and len(indications) == 0 and not adrs:
+            effects = self.indications
+        elif adrs:
+            effects = self.adrs
+        else:
+            if isinstance(indications, str):
+                if indications == 'all':
+                    effects = self.indications
+                else:
+                    effects = filter_indications(indications)
+
+        effects = [effect for effect in self.indications if len(effect.compounds) > 1]
+        if approved:
+            cmpds = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
+        else:
+            cmpds = [str(c.id_) for c in self.compounds]
+        def cont_metrics():
+            all_v = []
+            for c in self.compounds:
+                for s in c.similar:
+                    if s[1] != 0.0:
+                        all_v.append(s[1])
+            avl = len(all_v)
+            all_v_sort = sorted(all_v)
+            # for tuple 10, have to add the '-1' for index out of range reasons
+            metrics = [(1, all_v_sort[int(avl / 1000.0)]), (2, all_v_sort[int(avl / 400.0)]),
+                       (3, all_v_sort[int(avl / 200.0)]),
+                       (4, all_v_sort[int(avl / 100.0)]), (5, all_v_sort[int(avl / 20.0)]),
+                       (6, all_v_sort[int(avl / 10.0)]),
+                       (7, all_v_sort[int(avl / 5.0)]), (8, all_v_sort[int(avl / 3.0)]),
+                       (9, all_v_sort[int(avl / 2.0)]),
+                       (10, all_v_sort[int(avl / 1.0) - 1])]
+            return metrics
+
+        x = (len(cmpds)) / 100.0  # changed this...no reason to use similar instead of compounds
+        #x = (len(self.compounds)) / 100.0  # changed this...no reason to use similar instead of compounds
+        # had to change from 100.0 to 100.0001 because the int function
+        # would chop off an additional value of 1 for some reason...
+        if continuous:
+            metrics = cont_metrics()
+        else:
+            metrics = [(1, 10), (2, 25), (3, 50), (4, 100), (5, int(x * 100.0001)),
+                       (6, int(x * 1.0001)), (7, int(x * 5.0001)), (8, int(x * 10.0001)),
+                       (9, int(x * 50.0001)), (10, int(x * 100.0001))]
+
+        if continuous:
+            ra_out.write("compound_id,{}_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
+                         "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
+                         "50%({:.3f}),100%({:.3f}),value\n".format(effect_type(), metrics[0][1], metrics[1][1],
+                                                                   metrics[2][1], metrics[3][1], metrics[4][1],
+                                                                   metrics[5][1], metrics[6][1], metrics[7][1],
+                                                                   metrics[8][1], metrics[9][1]))
+        else:
+            ra_out.write(f"compound_id,effect_id,top10,top25,top50,top100,"
+                         f"top{len(cmpds)},top1%,top5%,top10%,top50%,top100%,"
+                         f"rank,score,avg_rank,avg_dist,conf\n")
+            pwr_out.write(f"cmpd_id-1,cmpd_id-2,effect_id,top10,top25,top50,top100,"
+                          f"top{len(cmpds)},top1%,top5%,top10%,top50%,top100%,"
+                          f"rank,dist\n")
+        print("  Calculating scores...")
+        start_calc = time.time()
+        if self.ncpus > 1:
+            # tqdm progressbar is not working for multiprocessing
+            pool = mp.Pool(self.ncpus)
+            pool.starmap_async(self.calc_accuracies_cmpd_new, [(effect.id_, effect.compounds, benchmark_name, metrics, approved, n) for effect in effects]).get()
+            pool.close
+            pool.join
+        else:
+            [self.calc_accuracies_cmpd_new(effect.id_, effect.compounds, benchmark_name, metrics, approved, n) for effect in tqdm(effects)]
+        t_calc = print_time(time.time() - start_calc)
+        print("  Done calculating scores.")
+        print(f"  Time to calculate scores: {t_calc}")
+        with open(t_name,'w') as tw:
+            tw.write(f"Number of CPUs: {self.ncpus}\n")
+            tw.write(f"Time to calculate scores: {t_calc}\n")
+
+        print("  Compiling and saving results...")
+        # Average Indication Accuracy
+        aia_accs = []
+        # Pairwise Accuracy
+        pwa_count = [0.0]*len(metrics)
+        pwa_tot = 0
+        top_pairwise = [0.0] * 10
+        # Coverage
+        cov_count = [0]*len(metrics)
+        # NDCG
+        ndcg = {}
+        for m in metrics:
+            ndcg[m[0]] = {}
+        # Results_analysed_named
+        #for effect_id in ranks.keys():
+        pd.options.display.float_format='{:.3f}'.format
+
+        #for effect in tqdm(effects):
+        pbar = tqdm(range(len(effects)))
+        for i in pbar:
+            effect = effects[i]
+            effect_id = effect.id_
+            pbar.set_description(f"    {effect_id}")
+            #print(effect_id)
+            db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
+            df_ia = pd.read_sql("SELECT * FROM ia_results",db_benchmark)
+            df_pa = pd.read_sql("SELECT * FROM pa_results",db_benchmark)
+            #effect = self.get_adr(effect_id)
+            count = [0.0]*len(metrics)
+            tot = len(effect.compounds)
+            effect_dct[(effect, tot)] = {}
+            ndcg_l = {}
+            for m in metrics:
+                effect_dct[(effect, tot)][m] = 0.0
+                ndcg_l[m[0]] = []
+            #pwa_tot += tot
+            c_ideal = [0]*len(cmpds)
+            c_ideal[0] = 1
+            for c_idx in df_ia.index:
+                rank = int(df_ia.loc[c_idx,'rank'])
+                c_rank = [0]*len(cmpds)
+                c_rank[rank-1] = 1
+                # Check ranks against each top metric
+                for idx,m in enumerate(metrics):
+                    #if ranks[effect_id][cp_query][1] <= m[1]:
+                    if rank <= m[1]:
+                        effect_dct[(effect, tot)][m] += 1.0
+                        count[idx]+=1.0
+                        #pwa_count[idx]+=1.0
+                    # NDCG
+                    ndcg_l[m[0]].append(dcg(c_rank, int(m[1])) / dcg(c_ideal, int(m[1])))
+
+                # compound-indication results
+                '''
+                if str(df_ia.iloc[c_idx,2]) == '1':
+                #if s[2] == '1':
+                    top_pairwise[0] += 1.0
+                if str(df_ia.iloc[c_idx,3]) == '1':
+                #if s[3] == '1':
+                    top_pairwise[1] += 1.0
+                if str(df_ia.iloc[c_idx,4]) == '1':
+                #if s[4] == '1':
+                    top_pairwise[2] += 1.0
+                if str(df_ia.iloc[c_idx,5]) == '1':
+                #if s[5] == '1':
+                    top_pairwise[3] += 1.0
+                if str(df_ia.iloc[c_idx,6]) == '1':
+                #if s[6] == '1':
+                    top_pairwise[4] += 1.0
+                if str(df_ia.iloc[c_idx,7]) == '1':
+                #if s[7] == '1':
+                    top_pairwise[5] += 1.0
+                if str(df_ia.iloc[c_idx,8]) == '1':
+                #if s[8] == '1':
+                    top_pairwise[6] += 1.0
+                if str(df_ia.iloc[c_idx,9]) == '1':
+                #if s[9] == '1':
+                    top_pairwise[7] += 1.0
+                if str(df_ia.iloc[c_idx,10]) == '1':
+                #if s[10] == '1':
+                    top_pairwise[8] += 1.0
+                if str(df_ia.iloc[c_idx,11]) == '1':
+                #if s[11] == '1':
+                    top_pairwise[9] += 1.0
+                sj = ','.join(df_ia.loc[c_idx,:].values.tolist())
+                sj += '\n'
+                '''
+                ra_out.write(','.join(df_ia.loc[c_idx,:].values.tolist()) + '\n')
+
+            # Pairwise accuracy
+            pwa_tot += len(df_pa)
+            for c_idx in df_pa.index:
+                rank = int(df_pa.loc[c_idx,'rank'])
+                for idx,m in enumerate(metrics):
+                    #if ranks[effect_id][cp_query][1] <= m[1]:
+                    if rank <= m[1]:
+                        pwa_count[idx]+=1.0
+                pwr_out.write(','.join(df_pa.loc[c_idx,:].values.tolist()) + '\n')
+
+            # NDCG
+            for m in metrics:
+                ndcg[m[0]][effect] = np.mean(ndcg_l[m[0]])
+
+            # Indication coverage
+            count = [(i/tot)*100.0 for i in count]
+            for idx,i in enumerate(count):
+                if i>0.0:
+                    cov_count[idx]+=1
+            aia_accs.append(count)
+            #print(effect_id,effect.name,count)
+        ra_out.close()
+
+        top_metrics = [str(j) for i,j in metrics]
+        aia_accs = [str(sum(sub_list) / len(sub_list)) for sub_list in zip(*aia_accs)]
+        pwa_accs = [str((i/pwa_tot)*100.0) for i in pwa_count]
+        cov_count = [str(i) for i in cov_count]
+
+        #print("\t".join(top_metrics))
+        #print("\t".join(aia_accs))
+        #print("\t".join(pwa_accs))
+        #print("\t".join(cov_count))
+        # Fix later
+        self.accuracies = effect_dct
+        final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        #ss = sorted(ss, key=lambda xx: xx[0])
+        #ss = sorted(ss, key=lambda xx: int(xx[0]))
+
+        # NDCG - results_analysed_named
+        if approved:
+            ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}-approved.tsv"
+        else:
+            ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}.tsv"
+        with open(ra_named_ndcg, 'w') as o:
+            o.write(f"effect_id\tcmpds_per_effect\ttop10\ttop25\ttop50\ttop100\ttop{len(cmpds)}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\teffect_name\n")
+            for effect in effects:
+                o.write(f"{effect.id_}\t{len(effect.compounds)}")
+                for m in metrics:
+                    o.write(f"\t{ndcg[m[0]][effect]:.3f}")
+                o.write(f"\t{effect.name}\n")
+
+        pa = [(i/pwa_tot)*100.0 for i in pwa_count]
+
+        cov = [0] * 10
+        for effect, c in list(self.accuracies.keys()):
+            accs = self.accuracies[effect, c]
+            for m_i in range(len(metrics)):
+                if accs[metrics[m_i]] > 0.0:
+                    cov[m_i] += 1
+
+        nndcg = [0.0] * 10
+        for idx, m in enumerate(metrics):
+            l = []
+            for effect in effects:
+                l.append(ndcg[m[0]][effect])
+            nndcg[idx] = np.mean(l)
+
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', 'top{}'.format(len(cmpds)),
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        # Create average indication accuracy list in percent
+        ia = []
+        for m in metrics:
+            ia.append(final_accs[m] * 100.0)
+        # Create average pairwise accuracy list in percent
+        # Old method - pairwise compound-indication
+        #pa = [(x * 100.0 / pwa_tot) for x in top_pairwise]
+
+        # Control calculation
+        control_aia = []
+        for n in range(len(metrics)):
+            p = hypergeom.pmf(1, len(cmpds), 1, metrics[n][1])
+            control_aia.append(p * 100.0)
+        print("  Done compiling and saving results.")
+
+        # pretty print the average indication accuracies
+        df_summ = pd.DataFrame(list(zip(ia, control_aia, pa, cov, nndcg)), columns=['nAIA','control-nAIA','PA','IC','nNDCG'], index=[headers])
+        print("\nSummary")
+        print(df_summ.T)
+        print()
+        df_summ.T.to_csv(summ, float_format='%.3f', sep='\t')
+        t_tot = print_time(time.time()-start)
+        print("Done running canbenchmark_new.")
+        print(f"Total time to run canbenchmark_new: {t_tot}\n")
+        with open(t_name,'a') as tw:
+            tw.write(f"Total time to run canbenchmark_new: {t_tot}")
 
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
@@ -2529,10 +3142,10 @@ class CANDO(object):
         # Append 3 lists to df and write to file
         with open(summ, 'w', encoding="utf8") as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
-            ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
-            pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
-            cst = "\t".join(map(str, cov)) + '\n'
-            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(ast, pst, cst))
+            iast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
+            pwst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
+            icst = "\t".join(map(str, cov)) + '\n'
+            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(iast, pwst, icst))
 
         # pretty print the average indication accuracies
         cut = 0
@@ -2585,7 +3198,7 @@ class CANDO(object):
         ra = 'raw_results/raw_results_' + file_name + '-ddi_adr.csv'
         summ = 'summary_' + file_name + '-ddi_adr.tsv'
         
-        #ra_out = open(ra, 'w')
+        ra_out = open(ra, 'w')
 
         def effect_type():
             if adrs:
@@ -2636,8 +3249,10 @@ class CANDO(object):
         c_per_effect = 0
 
         if adrs:
-            effects = self.adrs
-            effect_ids = [effect.id_ for effect in effects if len(effect.compound_pairs)>2]
+            #effects = self.adrs
+            effects = [effect for effect in self.adrs if len(effect.compound_pairs)>=2]
+            #effect_ids = [effect.id_ for effect in effects if len(effect.compound_pairs)>=2]
+            effect_ids = [effect.id_ for effect in effects]
         else:
             effects = self.indications
 
@@ -2670,7 +3285,6 @@ class CANDO(object):
                        (6, int(x*1.0001)), (7, int(x*5.0001)), (8, int(x*10.0001)),
                        (9, int(x*50.0001)), (10, int(x*100.0001))]
 
-        '''
         if continuous:
             ra_out.write("compound_id,{}_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
                          "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
@@ -2681,10 +3295,9 @@ class CANDO(object):
         else:
             ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
                          "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
-        '''
         
 
-        # Calcualte all similar first
+        # Calculate all similar first
         # But do not populate compound_pair objects with similar
         #print("Calculating all compound pair distances...")
         '''
@@ -2705,169 +3318,93 @@ class CANDO(object):
         #sorted_distances = {self.compound_pairs[i].id_: self.generate_similar_sigs_cp(self.compound_pairs[i], sort=True) for i in range(len(self.compound_pairs))}
         #print("Calculated distances.")
 
+        # ZF - edit 02//06/23
+        # Fixed to work with the sqlite
+        print("Running canbenchmark...")
+        os.makedirs("ddi_benchmark",exist_ok=True)
         if ncpus > 1:
             pool = mp.Pool(ncpus)
-            accs = pool.starmap_async(self.calc_accuracies_cmpd_pairs, [(effect_id, adrs, metrics, ranking) for effect_id in effect_ids]).get()
+            accs = pool.starmap_async(self.calc_accuracies_cmpd_pairs, [(effect.id_, effect.compound_pairs, metrics) for effect in effects]).get()
             pool.close
             pool.join
         else:
-            accs = [self.calc_accuracies_cmpd_pairs(effect_id, adrs, metrics, ranking) for effect_id in effect_ids]
-        ranks = {y[0]:{j[1]:(j[2],j[3],j[4]) for i in accs for j in i if j[0]==y[0]} for x in accs for y in x} 
-        #effect_dct = {(d[0],d[1]):{metrics[i]:j} for d in accs for i,j in enumerate(d[2])}
-        #ss = [s for d in accs for s in d[3]]
-        
-        #mat = pd.DataFrame.from_dict(scores)
-        #mat.sort_index(axis=1,inplace=True)
-        #mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
+            accs = [self.calc_accuracies_cmpd_pairs_new(effect.id_, effect.compound_pairs, metrics) for effect in tqdm(effects)]
 
-        '''
-        print("Running canbenchmark...")
-        for effect in effects:
-            count = len(effect.compound_pairs)
-            if count < 2:
-                continue
-            if not adrs:
-                if self.indication_pathways:
-                    if len(effect.pathways) == 0:
-                        print('No associated pathways for {}, skipping'.format(effect.id_))
-                        continue
-                    elif len(effect.pathways) < 1:
-                        #print('Less than 5 associated pathways for {}, skipping'.format(effect.id_))
-                        continue
-            c_per_effect += count
-            effect_dct[(effect, count)] = {}
-            for m in metrics:
-                effect_dct[(effect, count)][m] = 0.0
-            # retrieve the appropriate proteins/pathway indices here, should be
-            # incorporated as part of the ind object during file reading
-            vs = []
-            if self.pathways:
-                if self.indication_pathways:
-                    if self.pathway_quantifier == 'proteins':
-                        for pw in effect.pathways:
-                            for p in pw.proteins:
-                                if p not in vs:
-                                    vs.append(p)
-                    else:
-                        self.quantify_pathways(indication=effect)
-            ## Need to fix all of this for compound pairs
-            # Retrieve the appropriate protein indices here, should be
-            # incorporated as part of the ind object during file reading
-            if self.indication_proteins:
-                dg = []
-                for p in effect.proteins:
-                    if p not in dg:
-                        dg.append(p)
-
-            c = effect.compound_pairs
-            if self.pathways:
-                if self.indication_pathways:
-                    if self.pathway_quantifier == 'proteins':
-                        if not vs:
-                            print('Warning: protein list empty for {}, using all proteins'.format(effect.id_))
-                            self.generate_some_similar_sigs(c, sort=True, proteins=None, aux=True)
-                        else:
-                            self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
-                    else:
-                        self.generate_some_similar_sigs(c, sort=True, aux=True)
-            elif self.indication_proteins:
-                if len(dg) < 2:
-                    self.generate_some_similar_sigs(c, sort=True, proteins=None)
-                else:
-                    self.generate_some_similar_sigs(c, sort=True, proteins=dg)
-            # call c.generate_similar_sigs()
-            # use the proteins/pathways specified above
-            ##
-
-            # This has been updated to work with compound_pairs
-            for c in effect.compound_pairs:
-                c_sorted = self.generate_similar_sigs_cp(c, sort=True)
-                if bottom:
-                    if ranking == 'modified':
-                        rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='min') - len(c_sorted))+1
-                        #rank_sorted = competitive_modified_bottom(c_sorted, c_dist)
-                    elif ranking == 'standard':
-                        rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='max') - len(c_sorted))+1
-                        #rank_sorted = competitive_standard_bottom(c_sorted, c_dist)
-                    elif ranking == 'ordinal':
-                        rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='ordinal') - len(c_sorted))+1
-                        #rank_sorted = list(c_sorted).index(idx)
-                    else:
-                        print("Ranking function {} is incorrect.".format(ranking))
-                        exit()
-                elif ranking == 'modified':
-                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='min')
-                    #value = competitive_modified(c_sorted, c_dist)
-                elif ranking == 'standard':
-                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='max')
-                    #value = competitive_standard(c_sorted, c_dist)
-                elif ranking == 'ordinal':
-                    rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='ordinal')
-                    #value = c.similar.index(cs)
-                    #value = list(c_sorted).index(idx)
-                else:
-                    print("Ranking function {} is incorrect.".format(ranking))
-                    exit()
-
-
-                for idx, cs in enumerate(c_sorted):
-                    c_sim = cs[0]
-                    c_dist = cs[1]
-                    if adrs:
-                        if effect not in c_sim.adrs:
-                            continue
-                    else:
-                        if effect not in c_sim.indications:
-                            continue
-
-                    value = 0.0
-                    if continuous:
-                        value = c_dist
-                    else:
-                        value = rank_sorted[idx]
-
-                    if adrs:
-                        s = [str(c.index), effect.name]
-                    else:
-                        s = [str(c.index), effect.id_]
-                    for x in metrics:
-                        if value <= x[1]:
-                            effect_dct[(effect, count)][x] += 1.0
-                            s.append('1')
-                        else:
-                            s.append('0')
-                    if continuous:
-                        s.append(str(value))
-                    else:
-                        s.append(str(int(value)))
-                    ss.append(s)
-                    break
-        '''
         # Average Indication Accuracy
         aia_accs = []
         # Pairwise Accuracy
         pwa_count = [0.0]*len(metrics)
         pwa_tot = 0
+        top_pairwise = [0.0] * 10
         # Coverage
         cov_count = [0]*len(metrics)
         # Results_analysed_named
-        for effect_id in ranks.keys():
-            effect = self.get_adr(effect_id)
+        #for effect_id in ranks.keys():
+        for effect in effects:
+            effect_id = effect.id_
+            print(effect_id)
+            db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
+            df_benchmark = pd.read_sql(f"SELECT * FROM results",db_benchmark)
+            #effect = self.get_adr(effect_id)
             count = [0.0]*len(metrics)
             tot = len(effect.compound_pairs)
+            effect_dct[(effect, tot)] = {}
+            for m in metrics:
+                effect_dct[(effect, tot)][m] = 0.0
             pwa_tot += tot
-            for cp_query in ranks[effect_id].keys():
+            #for cp_query in ranks[effect_id].keys():
+            for cp_idx in df_benchmark.index:
+                rank = int(df_benchmark.loc[cp_idx,'rank'])
                 # Check ranks against each top metric
                 for idx,m in enumerate(metrics):
-                    if ranks[effect_id][cp_query][1] <= m[1]:
+                    #if ranks[effect_id][cp_query][1] <= m[1]:
+                    if rank <= m[1]:
+                        effect_dct[(effect, tot)][m] += 1.0
                         count[idx]+=1.0
                         pwa_count[idx]+=1.0
+
+                # pairwise results
+                if str(df_benchmark.iloc[cp_idx,2]) == '1':
+                #if s[2] == '1':
+                    top_pairwise[0] += 1.0
+                if str(df_benchmark.iloc[cp_idx,3]) == '1':
+                #if s[3] == '1':
+                    top_pairwise[1] += 1.0
+                if str(df_benchmark.iloc[cp_idx,4]) == '1':
+                #if s[4] == '1':
+                    top_pairwise[2] += 1.0
+                if str(df_benchmark.iloc[cp_idx,5]) == '1':
+                #if s[5] == '1':
+                    top_pairwise[3] += 1.0
+                if str(df_benchmark.iloc[cp_idx,6]) == '1':
+                #if s[6] == '1':
+                    top_pairwise[4] += 1.0
+                if str(df_benchmark.iloc[cp_idx,7]) == '1':
+                #if s[7] == '1':
+                    top_pairwise[5] += 1.0
+                if str(df_benchmark.iloc[cp_idx,8]) == '1':
+                #if s[8] == '1':
+                    top_pairwise[6] += 1.0
+                if str(df_benchmark.iloc[cp_idx,9]) == '1':
+                #if s[9] == '1':
+                    top_pairwise[7] += 1.0
+                if str(df_benchmark.iloc[cp_idx,10]) == '1':
+                #if s[10] == '1':
+                    top_pairwise[8] += 1.0
+                if str(df_benchmark.iloc[cp_idx,11]) == '1':
+                #if s[11] == '1':
+                    top_pairwise[9] += 1.0
+                sj = ','.join(df_benchmark.loc[cp_idx,:].values.tolist())
+                sj += '\n'
+                ra_out.write(sj)
+
             count = [(i/tot)*100.0 for i in count]
-            for idx,i in enumerate(count): 
+            for idx,i in enumerate(count):
                 if i>0.0:
                     cov_count[idx]+=1
             aia_accs.append(count)
             #print(effect_id,effect.name,count)
+        ra_out.close()
 
         top_metrics = [str(j) for i,j in metrics]
         aia_accs = [str(sum(sub_list) / len(sub_list)) for sub_list in zip(*aia_accs)]
@@ -2878,38 +3415,11 @@ class CANDO(object):
         print("\t".join(aia_accs))
         print("\t".join(pwa_accs))
         print("\t".join(cov_count))
-
-        '''
+        # Fix later
         self.accuracies = effect_dct
         final_accs = self.results_analysed(ra_named, metrics, effect_type())
-        ss = sorted(ss, key=lambda xx: xx[0])
+        #ss = sorted(ss, key=lambda xx: xx[0])
         #ss = sorted(ss, key=lambda xx: int(xx[0]))
-        top_pairwise = [0.0] * 10
-        for s in ss:
-            if s[2] == '1':
-                top_pairwise[0] += 1.0
-            if s[3] == '1':
-                top_pairwise[1] += 1.0
-            if s[4] == '1':
-                top_pairwise[2] += 1.0
-            if s[5] == '1':
-                top_pairwise[3] += 1.0
-            if s[6] == '1':
-                top_pairwise[4] += 1.0
-            if s[7] == '1':
-                top_pairwise[5] += 1.0
-            if s[8] == '1':
-                top_pairwise[6] += 1.0
-            if s[9] == '1':
-                top_pairwise[7] += 1.0
-            if s[10] == '1':
-                top_pairwise[8] += 1.0
-            if s[11] == '1':
-                top_pairwise[9] += 1.0
-            sj = ','.join(s)
-            sj += '\n'
-            ra_out.write(sj)
-        ra_out.close()
 
         cov = [0] * 10
         for effect, c in list(self.accuracies.keys()):
@@ -2930,16 +3440,16 @@ class CANDO(object):
         for m in metrics:
             ia.append(final_accs[m] * 100.0)
         # Create average pairwise accuracy list in percent
-        pa = [(x * 100.0 / len(ss)) for x in top_pairwise]
+        pa = [(x * 100.0 / pwa_tot) for x in top_pairwise]
         # Indication coverage
         cov = map(int, cov)
         # Append 3 lists to df and write to file
         with open(summ, 'w') as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
-            ast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
-            pst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
-            cst = "\t".join(map(str, cov)) + '\n'
-            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(ast, pst, cst))
+            iast = "\t".join(map(str, [format(x, ".3f") for x in ia]))
+            pwst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
+            icst = "\t".join(map(str, cov)) + '\n'
+            sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(iast, pwst, icst))
 
         # pretty print the average indication accuracies
         cut = 0
@@ -2948,12 +3458,43 @@ class CANDO(object):
             print("{}\t{:.3f}".format(headers[cut], final_accs[m] * 100.0))
             cut += 1
         print('\n')
-        '''
 
-    def calc_accuracies_cmpd_pairs(self, effect_id, adrs, metrics, ranking):
-        if adrs:
-            effect = self.get_adr(effect_id)
-        count = len(effect.compound_pairs)
+    def calc_accuracies_cmpd_pairs(self, effect_id, cmpd_pairs, metrics):
+        if os.path.exists(f'ddi_benchmark/{effect_id}.db'):
+            return
+        try: 
+            #Connecting to sqlite
+            conn = sqlite3.connect(f'ddi_benchmark/{effect_id}.db')
+            #Creating a cursor object using the cursor() method
+            cursor = conn.cursor()
+            #Droping dists table if already exists
+            cursor.execute("DROP TABLE results")
+            #print("results table dropped.")
+            #Commit your changes in the database
+            conn.commit()
+            #Closing the connection
+            conn.close()
+        except:
+            #print("dists table does not exist.")
+            pass
+
+
+        conn = 'sqlite://ddi.db'
+        #db = create_engine('sqlite:///ddi.db')
+        db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
+        #df_cp = pd.read_sql(f"SELECT * FROM 'adrs'",db)
+        benchmark_cols = ['cmpd_pair_ids','effect_id','top10','top25','top50','top100','topAll','top1%','top5%','top10%','top50%','top100%','hit_cmpd_pair_ids','rank']
+
+        #effect = self.get_adr(effect_id)
+        cmpd_pairs = [str(c) for c in cmpd_pairs]
+        
+        #df_cp = pd.read_sql(f"SELECT cmpd_pair_ids FROM 'adrs' WHERE id='{effect_id}'",db)
+        #cmpd_pairs = ast.literal_eval(df_cp.loc[0,'cmpd_pair_ids'])
+        #cmpd_pairs = [str(c) for c in cmpd_pairs]
+        #count = len(cmpd_pairs)
+        #print(f"{effect_id} has {count} cmpd pairs")
+
+        #count = len(effect.compound_pairs)
         #if count < 2:
         #    return
         '''
@@ -2973,55 +3514,118 @@ class CANDO(object):
         #    effect_dct[(effect, count)][m] = 0.0
        
         accs = [0.0]*len(metrics)
-        s = []
+        ss = []
+        
+        #print(effect_id)
+        #df_dists = pd.read_sql(f"SELECT {str(cmpd_pairs).replace('[','').replace(']','')} FROM ranks WHERE id IN {tuple(cmpd_pairs)}",db)
+        df_dists = pl.read_sql(f"SELECT * FROM dists WHERE id IN {tuple(cmpd_pairs)}", conn)
+        #df_dists = pd.read_sql(f"SELECT * FROM dists WHERE id IN {tuple(cmpd_pairs)}",db)
+        #all_dists = {c: ast.literal_eval(df_dists.loc[(df_dists['id']==str(c)),'dists'].values.tolist()[0]) for c in cmpd_pairs}
+        for c in cmpd_pairs:
+            #c_sorted = self.generate_similar_sigs_cp(c, sort=True)
+            #df_dists = pd.read_sql(f"SELECT dists FROM dists WHERE id='{c}'",db)
+            #c_sorted = [[key, value] for key, value in ast.literal_eval(df_dists.loc[0,'dists']).items()]
+            #c_sorted = ast.literal_eval(df_dists.loc[0,'dists'])
+            
+            #c_sorted = ast.literal_eval(df_dists.loc[(df_dists['id']==str(c)),'dists'].values.tolist()[0])
+            #c_sorted = all_dists[c]
+            
+            c_sorted = json.loads(df_dists.filter(pl.col('id')==str(c)).select(['dists']).item().replace("'",'"'))
+            c_sorted = pl.DataFrame(c_sorted)
+            #c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_1')
+            c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_0')
+            c_df = c_df.with_columns(pl.Series(name='ranks',values=list(range(1,len(c_sorted.columns)+1))))
+
+            # Polars way of doing it
+            best_value = c_df.filter(pl.col('ids').is_in(cmpd_pairs))[0,'ranks']
+            best_cp = c_df.filter(pl.col('ids').is_in(cmpd_pairs))[0,'ids']
+
+            s = [c, effect_id]
+            for x in metrics:
+                if best_value <= x[1]:
+                    # Comment out for now to see if we can just use s to calculate benchmarks
+                    #effect_dct[effect][x] += 1.0
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(best_cp))
+            s.append(str(int(best_value)))
+            ss.append(s)
+        df_temp = pd.DataFrame(ss,columns=benchmark_cols)
+        #df_temp = pd.DataFrame.from_dict(effect_dct,orient='index')
+        #df_temp.index.names = ['id']
+        #df_temp.rename(columns={benchmark_cols},inplace=True)
+        df_temp.to_sql('results', db_benchmark, if_exists='append', index=False)
+        #df_temp = None
+        return
 
         '''
-        # retrieve the appropriate proteins/pathway indices here, should be
-        # incorporated as part of the ind object during file reading
-        vs = []
-        if self.pathways:
-            if self.indication_pathways:
-                if self.pathway_quantifier == 'proteins':
-                    for pw in effect.pathways:
-                        for p in pw.proteins:
-                            if p not in vs:
-                                vs.append(p)
-                else:
-                    self.quantify_pathways(indication=effect)
-        ## Need to fix all of this for compound pairs
-        # Retrieve the appropriate protein indices here, should be
-        # incorporated as part of the ind object during file reading
-        if self.indication_proteins:
-            dg = []
-            for p in effect.proteins:
-                if p not in dg:
-                    dg.append(p)
-
-        c = effect.compound_pairs
-        if self.pathways:
-            if self.indication_pathways:
-                if self.pathway_quantifier == 'proteins':
-                    if not vs:
-                        print('Warning: protein list empty for {}, using all proteins'.format(effect.id_))
-                        self.generate_some_similar_sigs(c, sort=True, proteins=None, aux=True)
+            for cs in c_sorted:
+                if str(cs[0]) not in cmpd_pairs:
+                    continue
+                value = cs[2]
+                s = [c, effect_id]
+                #s = [str(c.index), effect.name]
+                for x in range(len(metrics)):
+                    if value <= metrics[x][1]:
+                        accs[x] += 1.0
+                        #effect_dct[(effect, count)][x] += 1.0
+                        s.append('1')
                     else:
-                        self.generate_some_similar_sigs(c, sort=True, proteins=vs, aux=True)
-                else:
-                    self.generate_some_similar_sigs(c, sort=True, aux=True)
-        elif self.indication_proteins:
-            if len(dg) < 2:
-                self.generate_some_similar_sigs(c, sort=True, proteins=None)
-            else:
-                self.generate_some_similar_sigs(c, sort=True, proteins=dg)
-        # call c.generate_similar_sigs()
-        # use the proteins/pathways specified above
-        ##
+                        s.append('0')
+                s.append(str(int(value)))
+                ss.append(s)
+                break
+        '''
+            
+            #best_value = 10000000000
+            #for c2 in cmpd_pairs:
+            #    if str(c2) == str(c):
+            #        continue
+            #    #c2 = tuple(map(int, c2.replace("(",'').replace(")",'').split(', ')))
+            #    temp_value = c_sorted[c2][1]
+            #    if temp_value < best_value:
+            #        best_value = temp_value
+            #        #cp2 = cp
+
+            
+            #s = [c, effect_id]
+            #for x in range(len(metrics)):
+            #    if best_value <= metrics[x][1]:
+            #        accs[x] += 1.0
+            #        #effect_dct[(effect, count)][x] += 1.0
+            #        s.append('1')
+            #    else:
+            #        s.append('0')
+            #s.append(str(int(best_value)))
+            #ss.append(s)
+
+        '''
+            for cs in c_sorted:
+                if str(cs[0]) not in cmpd_pairs:
+                    continue
+
+                value = cs[2]
+                s = [c, effect_id]
+                #s = [str(c.index), effect.name]
+                for x in range(len(metrics)):
+                    if value <= metrics[x][1]:
+                        accs[x] += 1.0
+                        #effect_dct[(effect, count)][x] += 1.0
+                        s.append('1')
+                    else:
+                        s.append('0')
+                s.append(str(int(value)))
+                ss.append(s)
+                break
         '''
 
+        ''' 
         # This has been updated to work with compound_pairs
         for c in effect.compound_pairs:
             c_sorted = self.generate_similar_sigs_cp(c, sort=True, ncpus=1)
-            '''
+        '''
+        '''
             if bottom:
                 if ranking == 'modified':
                     rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='min') - len(c_sorted))+1
@@ -3032,7 +3636,8 @@ class CANDO(object):
                 else:
                     print("Ranking function {} is incorrect.".format(ranking))
                     exit()
-            '''
+        '''
+        '''
             if ranking == 'modified':
                 rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='min')
             elif ranking == 'standard':
@@ -3055,7 +3660,8 @@ class CANDO(object):
 
                 s.append((effect_id, c.id_, c_sim.id_, rank_sorted[idx], c_dist))
                 break
-                '''
+        '''
+        '''
                 value = 0.0
                 if continuous:
                     value = c_dist
@@ -3080,9 +3686,389 @@ class CANDO(object):
                 ss.append(s)
                 break
         return [effect, count, accs, ss]
-                '''
-        return s
+        '''
+        #df_dists = None 
+        #db = None 
+        #c_sorted=None
+        #return ss
+        #return [ss, accs]
 
+
+    # Indication accuracy metric w/ new protocol
+    # ---
+    # Leave one out method where a consensus list will be generated
+    # using all but 1 approved drug (reverse of classic canbenchmark)
+    # Accuracy will be determined by the presence or absence of the 
+    # left out drug for each iteration and the average will be 
+    # calculated for each indicaiton
+    def calc_accuracies_cmpd_pairs_new(self, effect_id, cmpd_pairs, metrics):
+        if os.path.exists(f'ddi_benchmark/{effect_id}.db'):
+            return
+        try: 
+            #Connecting to sqlite
+            conn = sqlite3.connect(f'ddi_benchmark/{effect_id}.db')
+            #Creating a cursor object using the cursor() method
+            cursor = conn.cursor()
+            #Droping dists table if already exists
+            cursor.execute("DROP TABLE results")
+            #print("results table dropped.")
+            #Commit your changes in the database
+            conn.commit()
+            #Closing the connection
+            conn.close()
+        except:
+            #print("dists table does not exist.")
+            pass
+
+
+        conn = 'sqlite://ddi.db'
+        #db = create_engine('sqlite:///ddi.db')
+        db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
+        #df_cp = pd.read_sql(f"SELECT * FROM 'adrs'",db)
+        benchmark_cols = ['cmpd_pair_ids','effect_id','top10','top25','top50','top100','topAll','top1%','top5%','top10%','top50%','top100%','hit_cmpd_pair_ids','rank']
+
+        #effect = self.get_adr(effect_id)
+        cmpd_pairs = [str(c) for c in cmpd_pairs]
+        
+        #df_cp = pd.read_sql(f"SELECT cmpd_pair_ids FROM 'adrs' WHERE id='{effect_id}'",db)
+        #cmpd_pairs = ast.literal_eval(df_cp.loc[0,'cmpd_pair_ids'])
+        #cmpd_pairs = [str(c) for c in cmpd_pairs]
+        #count = len(cmpd_pairs)
+        #print(f"{effect_id} has {count} cmpd pairs")
+
+        #count = len(effect.compound_pairs)
+        #if count < 2:
+        #    return
+        '''
+        if not adrs:
+            if self.indication_pathways:
+                if len(effect.pathways) == 0:
+                    print('No associated pathways for {}, skipping'.format(effect.id_))
+                    continue
+                elif len(effect.pathways) < 1:
+                    #print('Less than 5 associated pathways for {}, skipping'.format(effect.id_))
+                    continue
+        '''
+        #c_per_effect += count
+        
+        #effect_dct[(effect, count)] = {}
+        #for m in metrics:
+        #    effect_dct[(effect, count)][m] = 0.0
+       
+        accs = [0.0]*len(metrics)
+        ss = []
+        
+        #print(effect_id)
+        #df_dists = pd.read_sql(f"SELECT {str(cmpd_pairs).replace('[','').replace(']','')} FROM ranks WHERE id IN {tuple(cmpd_pairs)}",db)
+        df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(cmpd_pairs)}", connection=conn)
+
+        #df_dists = pd.read_sql(f"SELECT * FROM dists WHERE id IN {tuple(cmpd_pairs)}",db)
+        #all_dists = {c: ast.literal_eval(df_dists.loc[(df_dists['id']==str(c)),'dists'].values.tolist()[0]) for c in cmpd_pairs}
+        for c_loo in cmpd_pairs:
+            c_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn)
+            for c in cmpd_pairs:
+                if c_loo == c:
+                    continue
+                c_sorted = json.loads(df_dists.filter(pl.col('id')==str(c)).select(['dists']).item().replace("'",'"'))
+                c_sorted = pl.DataFrame(c_sorted)
+                #c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_1')
+                c_df_temp = c_sorted.transpose().with_columns(pl.Series(name='id',values=c_sorted.columns)).sort('column_0')
+                c_df_temp = c_df_temp.rename({'column_0':str(c)})
+                c_df = c_df.join(c_df_temp, on='id', how='left')
+            c_df = c_df.with_columns(sum=pl.sum_horizontal(c_df.columns[1:]))
+            c_df = c_df.sort('sum')
+            c_df = c_df.with_columns(pl.Series(name='rank',values=list(range(1,len(c_df)+1))))
+
+            # Polars way of doing it
+            best_rank = c_df.filter(pl.col('id')==str(c_loo))[0,'rank']
+            best_dist = c_df.filter(pl.col('id')==str(c_loo))[0,'sum']
+
+            s = [c_loo, effect_id]
+            for x in metrics:
+                if best_rank <= x[1]:
+                    # Comment out for now to see if we can just use s to calculate benchmarks
+                    #effect_dct[effect][x] += 1.0
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(float(best_dist)))
+            s.append(str(int(best_rank)))
+            ss.append(s)
+        df_temp = pd.DataFrame(ss,columns=benchmark_cols)
+        #df_temp = pd.DataFrame.from_dict(effect_dct,orient='index')
+        #df_temp.index.names = ['id']
+        #df_temp.rename(columns={benchmark_cols},inplace=True)
+        df_temp.to_sql('results', db_benchmark, if_exists='append', index=False)
+        #df_temp = None
+        return
+
+        '''
+            for cs in c_sorted:
+                if str(cs[0]) not in cmpd_pairs:
+                    continue
+                value = cs[2]
+                s = [c, effect_id]
+                #s = [str(c.index), effect.name]
+                for x in range(len(metrics)):
+                    if value <= metrics[x][1]:
+                        accs[x] += 1.0
+                        #effect_dct[(effect, count)][x] += 1.0
+                        s.append('1')
+                    else:
+                        s.append('0')
+                s.append(str(int(value)))
+                ss.append(s)
+                break
+        '''
+            
+            #best_value = 10000000000
+            #for c2 in cmpd_pairs:
+            #    if str(c2) == str(c):
+            #        continue
+            #    #c2 = tuple(map(int, c2.replace("(",'').replace(")",'').split(', ')))
+            #    temp_value = c_sorted[c2][1]
+            #    if temp_value < best_value:
+            #        best_value = temp_value
+            #        #cp2 = cp
+
+            
+            #s = [c, effect_id]
+            #for x in range(len(metrics)):
+            #    if best_value <= metrics[x][1]:
+            #        accs[x] += 1.0
+            #        #effect_dct[(effect, count)][x] += 1.0
+            #        s.append('1')
+            #    else:
+            #        s.append('0')
+            #s.append(str(int(best_value)))
+            #ss.append(s)
+
+        '''
+            for cs in c_sorted:
+                if str(cs[0]) not in cmpd_pairs:
+                    continue
+
+                value = cs[2]
+                s = [c, effect_id]
+                #s = [str(c.index), effect.name]
+                for x in range(len(metrics)):
+                    if value <= metrics[x][1]:
+                        accs[x] += 1.0
+                        #effect_dct[(effect, count)][x] += 1.0
+                        s.append('1')
+                    else:
+                        s.append('0')
+                s.append(str(int(value)))
+                ss.append(s)
+                break
+        '''
+
+        ''' 
+        # This has been updated to work with compound_pairs
+        for c in effect.compound_pairs:
+            c_sorted = self.generate_similar_sigs_cp(c, sort=True, ncpus=1)
+        '''
+        '''
+            if bottom:
+                if ranking == 'modified':
+                    rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='min') - len(c_sorted))+1
+                elif ranking == 'standard':
+                    rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='max') - len(c_sorted))+1
+                elif ranking == 'ordinal':
+                    rank_sorted = abs(stats.rankdata(list(zip(*c_sorted))[1], method='ordinal') - len(c_sorted))+1        
+                else:
+                    print("Ranking function {} is incorrect.".format(ranking))
+                    exit()
+        '''
+        '''
+            if ranking == 'modified':
+                rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='min')
+            elif ranking == 'standard':
+                rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='max')
+            elif ranking == 'ordinal':
+                rank_sorted = stats.rankdata(list(zip(*c_sorted))[1], method='ordinal')
+            else:
+                print("Ranking function {} is incorrect.".format(ranking))
+                exit()
+
+            for idx, cs in enumerate(c_sorted):
+                c_sim = cs[0]
+                c_dist = cs[1]
+                if adrs:
+                    if effect not in c_sim.adrs:
+                        continue
+                else:
+                    if effect not in c_sim.indications:
+                        continue
+
+                s.append((effect_id, c.id_, c_sim.id_, rank_sorted[idx], c_dist))
+                break
+        '''
+        '''
+                value = 0.0
+                if continuous:
+                    value = c_dist
+                else:
+                    value = rank_sorted[idx]
+
+                if adrs:
+                    s = [str(c.index), effect.name]
+                else:
+                    s = [str(c.index), effect.id_]
+                for x in range(len(metrics)):
+                    if value <= metrics[x][1]:
+                        accs[x] += 1.0
+                        #effect_dct[(effect, count)][x] += 1.0
+                        s.append('1')
+                    else:
+                        s.append('0')
+                if continuous:
+                    s.append(str(value))
+                else:
+                    s.append(str(int(value)))
+                ss.append(s)
+                break
+        return [effect, count, accs, ss]
+        '''
+        #df_dists = None 
+        #db = None 
+        #c_sorted=None
+        #return ss
+        #return [ss, accs]
+
+    def calc_accuracies_cmpd_new(self, effect_id, cmpds, d_name, metrics, approved, n):
+        db_name = f'{d_name}/{effect_id}.db'
+        if os.path.exists(db_name):
+            db = create_engine(f'sqlite:///{db_name}')
+            df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
+            df_pa_results = pd.read_sql("SELECT cmpd_id-1 FROM pa_results", db)
+            if len(df_ia_results) == len(cmpds) and len(df_pa_results) == (math.factorial(len(cmpds))/(math.factorial(len(cmpds)-2))):
+                return
+            else:
+                try:
+                    # Connecting to sqlite
+                    conn = sqlite3.connect(db_name)
+                    # Creating a cursor object using the cursor() method
+                    cursor = conn.cursor()
+                    # Droping dists table if already exists
+                    cursor.execute("DROP TABLE ia_results")
+                    cursor.execute("DROP TABLE pa_results")
+                    # Commit your changes in the database
+                    conn.commit()
+                    # Closing the connection
+                    conn.close()
+                except:
+                    # print("dists table does not exist.")
+                    pass
+        conn = f'sqlite://{self.db_name}'
+        #conn = 'sqlite://cando.db'
+        cmpds = [str(c) for c in cmpds]
+        if approved:
+            cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
+        else:
+            cmpd_lib = [str(c.id_) for c in self.compounds]
+        ss = []
+        pa_ss = []
+        df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(cmpds)}", connection=conn)
+        #for c_loo in cmpds:
+        dist_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+        #score_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+        #rank_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+        if approved:
+            dist_df = dist_df.filter(pl.col('id').is_in(cmpd_lib))
+            #score_df = score_df.filter(pl.col('id').is_in(cmpd_lib))
+            #rank_df = rank_df.filter(pl.col('id').is_in(cmpd_lib))
+        score_df = dist_df.clone()
+        rank_df = dist_df.clone()
+        for c in cmpds:
+            c_sorted = json.loads(
+                df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
+            c_sorted = pl.DataFrame(c_sorted)
+            if approved:
+                cmpd_lib_temp = [x for x in cmpd_lib if x!=c]
+                c_sorted = c_sorted.select(cmpd_lib_temp)
+            df_temp = c_sorted.transpose().with_columns(pl.Series(name='id', values=c_sorted.columns)).sort('column_0')
+            df_temp = df_temp.with_columns(rank=df_temp['column_0'].rank(method='min'))
+            df_temp = df_temp.with_columns(df_temp['rank'].apply(lambda x: 1 if x <= n else 0).alias(c))
+            #c_df_temp = c_df_temp.rename({'column_0': c})
+            score_df = score_df.join(df_temp.select('id',c), on='id', how='left')
+            #rank_df = rank_df.join(df_temp.filter(pl.col(c) == 1).select('id','rank'), on='id', how='left')
+            rank_df = rank_df.join(df_temp.select('id','rank'), on='id', how='left')
+            rank_df = rank_df.rename({'rank': c})
+            dist_df = dist_df.join(df_temp.select('id','column_0'), on='id', how='left')
+            dist_df = dist_df.rename({'column_0': c})
+            # Pairwise accuracy
+            for c2 in cmpds:
+                if c == c2:
+                    continue
+                s = [c, c2, effect_id]
+                rank = rank_df.filter(pl.col('id') == c2)[0, c]
+                dist = dist_df.filter(pl.col('id') == c2)[0, c]
+                for x in metrics:
+                    if rank <= x[1]:
+                        s.append('1')
+                    else:
+                        s.append('0')
+                s.append(str(int(rank)))
+                s.append(str(float(dist)))
+                pa_ss.append(s)
+        del df_dists, c_sorted
+
+        for c_loo in cmpds:
+            dist_df_loo = dist_df.drop(c_loo)
+            score_df_loo = score_df.drop(c_loo)
+            rank_df_loo = rank_df.drop(c_loo)
+
+            score_df_loo = score_df_loo.with_columns(score=pl.sum_horizontal(score_df_loo.columns[1:]))
+            dist_df_loo = dist_df_loo.with_columns(summed_dist=pl.sum_horizontal(dist_df_loo.columns[1:]))
+            rank_df_loo = rank_df_loo.with_columns(summed_rank=pl.sum_horizontal(rank_df_loo.columns[1:]))
+
+            c_df_loo = dist_df_loo.select('id','summed_dist').join(score_df_loo.select('id','score'), on='id', how='left')
+            c_df_loo = c_df_loo.join(rank_df_loo.select('id','summed_rank'), on='id', how='left')
+            c_df_loo = c_df_loo.with_columns(c_df_loo['score'].apply(lambda x: len(cmpds)-1 - x).alias('neg_score'))
+            c_df_loo = c_df_loo.with_columns(c_df_loo['summed_rank'].apply(lambda x: x / (len(cmpds)-1)).alias('avg_rank'))
+            c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(cmpds)-1)).alias('avg_dist'))
+
+            c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
+            # This is competitive ranking
+            # Add other ranking methods using polars.Series.rank
+            #c_df_loo = c_df_loo.with_columns(rank=c_df_loo['summed_dist'].rank(method='min'))
+            c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
+
+            # Polars way of doing it
+            #rank = c_df_loo.with_row_count(offset=1).filter(pl.col('id') == c_loo)[0, 'row_nr']
+            rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
+            score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
+            avg_dist = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_dist']
+            avg_rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_rank']
+            conf = 0.5*(score/(len(cmpds)-1)) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank)
+
+            s = [c_loo, effect_id]
+            for x in metrics:
+                if rank <= x[1]:
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(int(rank)))
+            s.append(str(int(score)))
+            s.append(str(float(avg_rank)))
+            s.append(str(float(avg_dist)))
+            s.append(str(float(conf)))
+            ss.append(s)
+        db_benchmark = create_engine(f'sqlite:///{db_name}')
+        # Indication accuracies
+        benchmark_cols = ['cmpd_id', 'effect_id',
+                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
+                          'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+        df_temp = pd.DataFrame(ss, columns=benchmark_cols)
+        df_temp.to_sql('ia_results', db_benchmark, if_exists='append', index=False)
+        # Pairwise accuracies
+        benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id',
+                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
+                          'top10%', 'top50%', 'top100%', 'rank', 'dist']
+        df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
+        df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
+        return
 
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], threshold=0.5,
            negative='random', seed=42, out=''):
@@ -3556,7 +4542,7 @@ class CANDO(object):
         Control how many similar compounds to consider with the argument 'n'. In the output, 'score1'
         refers to the number of times the compound shows up in the top 'n' drugs associated with
         the indication and 'score2' is the average of the ranks for 'score1' (note: 'score2' <= 'n').
-        
+
         @param ind_id str: Indication id
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
@@ -3882,8 +4868,8 @@ class CANDO(object):
         to see if any are repeatedly enriched.
 
         @param cmpd_pair Compound_pair: Compound_pair object to be used
-        @param n int: top number of similar Compounds to be used for prediction
-        @param topX int: top number of predicted Indications to be printed
+        @param n int: top number of similar Compound_pairs to be used for prediction
+        @param topX int: top number of predicted ADRs to be printed
         @return Returns None
         """
         if n == -1:
@@ -3894,7 +4880,11 @@ class CANDO(object):
         if type(cmpd_pair) is Compound_pair:
             cmpd_pair = cmpd_pair
         elif type(cmpd_pair) is tuple:
-            cmpd = self.get_compound_pair(cmpd_pair)
+            try:
+                cmpd = self.get_compound_pair(cmpd_pair)
+            except:
+                print("Compound pair does not exist.")
+        '''
         if type(cmpd_pair) is tuple:
             c1 = self.get_compound(cmpd_pair[0])
             c2 = self.get_compound(cmpd_pair[1])
@@ -3902,26 +4892,44 @@ class CANDO(object):
             self.compound_pairs.append(cmpd_pair)
             self.compound_pair_ids.append(cmpd_pair.id_)
             cmpd_pair.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+        '''
         print("Using CANDO compound pair {}".format(cmpd_pair.name))
         print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
-        print("Comparing signature to all CANDO compound pair signatures...")
-        self.generate_similar_sigs_cp(cmpd_pair, sort=True, ncpus=self.ncpus)
+        #print("Comparing signature to all CANDO compound pair signatures...")
+        #self.generate_similar_sigs_cp(cmpd_pair, sort=True, ncpus=self.ncpus)
         print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
+        conn = 'sqlite://ddi.db'
+        df_dists = pl.read_sql(f"SELECT * FROM dists WHERE id=={str(cmpd_pair.id_)}", conn)
+        c_sorted = json.loads(df_dists.filter(pl.col('id')==str(c)).select(['dists']).item().replace("'",'"'))
+        c_sorted = pl.DataFrame(c_sorted)
+        #c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_1')
+        c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_0')
+        c_sorted = df.select(pl.col("ids")).to_list()
         a_dct = {}
-        for c in cmpd_pair.similar[0:n]:
+        for cp2_id in c_sorted[:n]:
+            cp2 = self.get_compound_pair(cp2_id)
+            for adr in cp2.adrs:
+                if adr.id_ not in a_dct:
+                    a_dct[adr.id_] = 1
+                else:
+                    a_dct[adr.id_] += 1
+        '''
+        for i in cmpd_pair.similar[0:n]:
+            cp2 = self.get_compound_pair(c)
             for adr in c[0].adrs:
                 if adr.id_ not in a_dct:
                     a_dct[adr.id_] = 1
                 else:
                     a_dct[adr.id_] += 1
+        '''
         sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
         if save:
             fo = open(save, 'w', encoding="utf8")
             print("Saving the {} highest predicted indications...\n".format(topX))
             fo.write("rank\tscore\tadr_id\tadverse_reaction\n")
         else:
-            print("Printing the {} highest predicted indications...\n".format(topX))
-            print("rank\tscore\tadr_id    \tadverse_reaction")
+            print("Printing the {} highest predicted ADRs...\n".format(topX))
+            print("rank\tscore\tadr_id    \tadr_name")
         for i in range(topX):
             adr = self.get_adr(sorted_x[i][0])
             if save:
@@ -3931,6 +4939,201 @@ class CANDO(object):
         if save:
             fo.close()
         print('')
+
+
+    def canpredict_ddi_adrs_newpair(self, cmpd1, cmpd2, n=10, topX=10, save='', verbose=True, printout=True):
+        """!
+        Similarly to canpredict_adrs(), input a compound pair of interest (cmpd_pair)
+        and the most similar compound pairs to it will be computed. The ADRs associated
+        with the top n most similar compound pairs to the query pair will be examined
+        to see if any are repeatedly enriched.
+
+        @param cmpd_pair Compound_pair: Compound_pair object to be used
+        @param n int: top number of similar Compound_pairs to be used for prediction
+        @param topX int: top number of predicted ADRs to be printed
+        @return Returns None
+        """
+        if n == -1:
+            n = len(self.compound_pairs)-1
+        if topX == -1:
+            topX = len(self.adrs)
+
+        if type(cmpd1) is Compound:
+            cmpd1 = cmpd1
+        elif type(cmpd1) is int:
+            cmpd1 = self.get_compound(cmpd1)
+
+        if type(cmpd2) is Compound:
+            cmpd2 = cmpd2
+        elif type(cmpd2) is int:
+            cmpd2 = self.get_compound(cmpd2)
+
+        c1 = min(cmpd1.id_,cmpd2.id_)
+        c2 = max(cmpd1.id_,cmpd2.id_)
+        cmpd_pair_id = (c1, c2)
+        known_cp = False
+        if cmpd_pair_id in self.compound_pair_ids:
+            cmpd_pair = self.get_compound_pair(cmpd_pair_id)
+            print(cmpd_pair)
+            known_cp = True
+            print(f"Known compound pair -- {cmpd_pair_id}")
+        else:
+            cmpd_pair = Compound_pair((cmpd1.name,cmpd2.name),cmpd_pair_id,cmpd_pair_id)
+            cmpd_pair.sig = [i+j for i,j in zip(cmpd1.sig,cmpd2.sig)]
+
+        '''
+        if type(cmpd_pair) is tuple:
+            c1 = self.get_compound(cmpd_pair[0])
+            c2 = self.get_compound(cmpd_pair[1])
+            cmpd_pair = Compound_pair((c1.name,c2.name),cmpd_pair,cmpd_pair)
+            self.compound_pairs.append(cmpd_pair)
+            self.compound_pair_ids.append(cmpd_pair.id_)
+            cmpd_pair.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
+        '''
+        conn = 'sqlite://ddi.db'
+        if verbose:
+            print("Using CANDO compound pair {}".format(cmpd_pair.name))
+            print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
+            print("Comparing signature to all CANDO compound pair signatures...")
+        c_sorted = []
+        if known_cp:
+            df_dists = pl.read_sql(f"SELECT * FROM dists WHERE id=='{cmpd_pair_id}'", conn)
+            c_sorted = json.loads(df_dists.filter(pl.col('id')==str(cmpd_pair_id)).select(['dists']).item().replace("'",'"'))
+            c_sorted = pl.DataFrame(c_sorted)
+            c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_0')
+            c_sorted = c_df.get_column("ids").to_list()
+            c_sorted = [self.get_compound_pair(ast.literal_eval(x)) for x in c_sorted]
+        else:
+            dists_sorted = self.generate_similar_sigs_cp(cmpd_pair, sort=True, ncpus=self.ncpus)
+            c_sorted = list(list(zip(*dists_sorted))[0])
+        if verbose:
+            print("Done comparing compound pair signatures.\n")
+            print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
+        #conn = 'sqlite://ddi.db'
+        #df_dists = pl.read_sql(f"SELECT * FROM dists WHERE id=={cmpd_pair.id_}", conn)
+        #c_sorted = json.loads(df_dists.filter(pl.col('id')==str(c)).select(['dists']).item().replace("'",'"'))
+        #c_sorted = pl.DataFrame(c_sorted)
+        #c_df = c_sorted.transpose().with_columns(pl.Series(name='ids',values=c_sorted.columns)).sort('column_0')
+        #c_sorted = df.select(pl.col("ids")).to_list()
+        '''
+        a_dct = {}
+        for cp2 in c_sorted[:n]:
+            #cp2 = self.get_compound_pair(cp2_id)
+            for adr_id in cp2.adrs:
+                if adr_id not in a_dct:
+                    a_dct[adr_id] = 1
+                else:
+                    a_dct[adr_id] += 1
+        sorted_x = sorted(a_dct.items(), key=operator.itemgetter(1), reverse=True)
+        if save:
+            fo = open(save, 'w')
+            print("Saving the {} highest predicted ADRs...\n".format(topX))
+            fo.write("rank\tscore\tadr_id\tadr\n")
+        else:
+            print("Printing the {} highest predicted ADRs...\n".format(topX))
+            print("rank\tscore\tadr_id    \tadr_name")
+        tot = min(topX,len(sorted_x))
+        for i in range(tot):
+            adr = self.get_adr(sorted_x[i][0])
+            if save:
+                fo.write("{}\t{}\t{}\t{}\n".format(i+1, sorted_x[i][1], adr.id_, adr.name))
+            else:
+                print("{}\t{}\t{}\t{}".format(i+1, sorted_x[i][1], adr.id_, adr.name))
+        if save:
+            fo.close()
+        print('')
+        '''
+        cols = ['score','adr_id','adr_name']
+        adr_df = pd.DataFrame(columns=cols)
+        for cp2 in c_sorted[:n]:
+            for adr_id in cp2.adrs:
+                if adr_id not in adr_df.adr_id.values:
+                    adr_df = pd.concat([adr_df,pd.DataFrame([[1,adr_id,self.get_adr(adr_id).name]],columns=cols)],ignore_index=True)
+                else:
+                    adr_df.loc[(adr_df['adr_id']==adr_id),'score'] += 1
+        adr_df.sort_values(by=['score'],ascending=False,inplace=True)
+        adr_df['rank'] = list(range(1,len(adr_df)+1))
+        adr_df['score_norm'] = adr_df.apply(lambda x: x['score']/n, axis=1)
+        adr_df = adr_df[['rank','score','score_norm','adr_id','adr_name']]
+        tot = min(topX,len(adr_df))
+        if save:
+            if verbose: print("Saving the {} highest predicted ADRs...\n".format(tot))
+            adr_df.iloc[:tot,:].to_csv(save,sep='\t',index=False)
+            if verbose: print("Predicted ADRs saved.\n")
+        else:
+            if verbose: print("Printing the {} highest predicted ADRs...\n".format(tot))
+            if printout: print(adr_df.iloc[:tot,:].to_string(index=False))
+            if verbose: print()
+        return adr_df.iloc[:tot,:]
+
+
+    def canpredict_ddi_adrs_newpairs(self, cp_list, n=10, topX=10, save='', verbose=True, printout=True):
+        """!
+        Similarly to canpredict_adrs(), input a compound pair of interest (cmpd_pair)
+        and the most similar compound pairs to it will be computed. The ADRs associated
+        with the top n most similar compound pairs to the query pair will be examined
+        to see if any are repeatedly enriched.
+
+        @param cmpd_pair Compound_pair: Compound_pair object to be used
+        @param n int: top number of similar Compound_pairs to be used for prediction
+        @param topX int: top number of predicted ADRs to be printed
+        @return Returns None
+        """
+        if n == -1:
+            n = len(self.compound_pairs)-1
+        if topX == -1:
+            topX = len(self.adrs)
+
+        cmpd_pair_list = []
+        for x in cp_list:
+            if x in self.compound_pair_ids:
+                cmpd_pair_list.append(self.get_compound_pair(x))
+            else:
+                cmpd1 = self.get_compound(cmpd1)
+                cmpd2 = self.get_compound(cmpd2)
+                c1 = min(cmpd1.id_,cmpd2.id_)
+                c2 = max(cmpd1.id_,cmpd2.id_)
+                cmpd_pair = (c1,c2)
+                cmpd_pair = Compound_pair((cmpd1.name,cmpd2.name),cmpd_pair,cmpd_pair)
+                cmpd_pair.sig = [i+j for i,j in zip(cmpd1.sig,cmpd2.sig)]
+                cmpd_pair_list.append(cmpd_pair)
+
+        if verbose:
+            print("Using CANDO compound pair {}".format(cmpd_pair.name))
+            print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
+            print("Comparing signature to all CANDO compound pair signatures...")
+        dists_sorted = self.generate_similar_sigs_cps(cmpd_pair_list, sort=True, ncpus=self.ncpus)
+        if verbose:
+            print("Done comparing compound pair signatures.\n")
+            print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
+        
+        cols = ['score','adr_id','adr_name']
+        for idx in range(len(dists_sorted)):
+            c_sorted = list(list(zip(*dists_sorted[idx]))[0])
+            adr_df = pd.DataFrame(columns=cols)
+            for cp2 in c_sorted[:n]:
+                for adr_id in cp2.adrs:
+                    if adr_id not in adr_df.adr_id.values:
+                        adr_df = pd.concat([adr_df,pd.DataFrame([[1,adr_id,self.get_adr(adr_id).name]],columns=cols)],ignore_index=True)
+                    else:
+                        adr_df.loc[(adr_df['adr_id']==adr_id),'score'] += 1
+            adr_df.sort_values(by=['score'],ascending=False,inplace=True)
+            adr_df['rank'] = list(range(1,len(adr_df)+1))
+            adr_df['score_norm'] = adr_df.apply(lambda x: x['score']/n, axis=1)
+            adr_df = adr_df[['rank','score','score_norm','adr_id','adr_name']]
+            tot = min(topX,len(adr_df))
+            if save:
+                if verbose: print("Saving the {} highest predicted ADRs...\n".format(tot))
+                adr_df.iloc[:tot,:].to_csv(save,sep='\t',index=False)
+                if verbose: print("Predicted ADRs saved.\n")
+            else:
+                if verbose: print("Printing the {} highest predicted ADRs...\n".format(tot))
+                if printout: print(adr_df.iloc[:tot,:].to_string(index=False))
+                if verbose: print()
+            return adr_df.iloc[:tot,:]
+
+
+
 
     def similar_compounds(self, cmpd, n=10, save=''):
         """!
@@ -4529,12 +5732,15 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
         c_list = list(c_fps.keys())
 
     if ncpus > 1:
+        pbar = tqdm(total=len(c_list))
+        def update(*a):
+            pbar.update()
         pool = mp.Pool(ncpus)
-        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]).get()
+        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in tqdm(c_list)], callback=update).get()
         pool.close
         pool.join
     else:
-        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list]
+        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in tqdm(c_list)]
     scores = {d[0]:d[1] for d in scores}
 
     mat = pd.DataFrame.from_dict(scores)
@@ -5312,94 +6518,112 @@ def get_fp_lig(fp):
         print("This file can be found at {}".format(out_file))
 
 
-def get_data(v="v2.2", org='nrpdb', fp='rd_ecfp4', vect='int'):
+def get_data(v="v2.2", cmpd_set='all', org='nrpdb', fp='rd_ecfp4', vect='int', dist='dice', i_score='CxP', out_path=os.path.dirname(__file__)):
     """!
     Download CANDO v2.2+ data.
 
-    @param v str: version to use (supports v2.2 - v2.5)
-    @param org str: protein library to use ('nrpdb' or 'homo_sapien')
-    @param fp str: the chemical fingerprint to use (rd_ecfp4, rd_ecfp10, etc)
-    @param vect str: integer "int" or binary "bit" vector for fingerprint
+    @param v str: Compound library version to use. 'v2.2' - 'v2.5' are currently supported. Default: 'v2.2'
+    @param cmpd_set: Sublibrary of compounds to use. 'all' will use all compounds in library, 'approved' will only use approved drugs. Default: 'all'
+    @param org str: Protein library (i.e., proteome) to use. 'nrpdb' and 'homo_sapien' are currently supported. Default: 'nrpdb'
+    @param fp str: Chemical fingerprint method to use. 'rd_ecfp4' is the only currently supported method. Default: 'rd_ecfp4'
+    @param vect str: Vector type for the chenical fingerprints. 'int' for an integer vector. Default: 'int'
+    @param dist: Distance metric used to compare chemical fingerprints with the BANDOCK method. 'dice' is currentl supproted. Default: 'dice'
+    @param i_score: Scoring protocol for the BANDOCK method. 'C', 'CxP', and 'dCxP' are currently supported. Default: 'CxP'
+    @param out_path: Path to which the files will be downloaded. All data will be stored in ./data/v2.2+ at the path defined here along with subdirs for each data type, i.e., prots, cmpds, mappings, and matrices. Default: path to the installed cando.py file
 
     @returns Returns None
     """
     # Check v and org before moving on
-    vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
-    orgs = ['all','nrpdb','homo_sapien','cryptococcus','aspire','test','tutorial']
+    vs = ['v2.2','v2.3','v2.4','v2.5','test.0']
+    #vs = ['v2.2','v2.3','v2.4','v2.5','v2.6','v2.7','v2.8','test.0']
+    cmpd_sets = ['all','approved']
+    orgs = ['nrpdb','homo_sapien','test','tutorial']
+    #orgs = ['all','nrpdb','homo_sapien','cryptococcus','aspire','test','tutorial']
+    fps = ['rd_ecfp4']
+    vects = ['int']
+    dists = ['dice']
+    i_scores = ['C','CxP','dCxP']
     if v not in vs:
-        print("{} is not a correct version.".format(v))
+        print(f"{v} is not a supported version.")
         sys.exit()
+    if cmpd_set not in cmpd_sets:
+        print(f"{cmpd_set} is not a supported version.")
+        sys.exit()        
     if org not in orgs:
-        print("{} is not a correct organism.".format(org))
+        print(f"{org} is not a supported organism.")
         sys.exit()
-    print('Downloading data for {}...'.format(v))
+    if fp not in fps:
+        print(f"{fp} is not a supported version.")
+        sys.exit()
+    if vect not in vects:
+        print(f"{vect} is not a supported version.")
+        sys.exit()
+    if dist not in dists:
+        print(f"{dist} is not a supported version.")
+        sys.exit()
+    if i_score not in i_scores:
+        print(f"{i_score} is not a supported version.")
+        sys.exit()
     if org=='test':
-        pre = "."
-    else:
+        pre = os.getcwd()
+    elif out_path == os.path.dirname(__file__):
         pre = os.path.dirname(__file__) + "/data/v2.2+"
-    # Dirs
-    os.makedirs(pre, exist_ok=True)
-    os.makedirs('{}/mappings'.format(pre), exist_ok=True)
-    #os.makedirs('{}/matrices'.format(pre), exist_ok=True)
-    os.makedirs('{}/prots'.format(pre), exist_ok=True)
-    os.makedirs('{}/cmpds'.format(pre), exist_ok=True)
-    # Mappings
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}.tsv'.format(v)
-    dl_file(url, '{}/mappings/drugbank-{}.tsv'.format(pre,v))
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{}-approved.tsv'.format(v)
-    dl_file(url, '{}/mappings/drugbank-{}-approved.tsv'.format(pre, v))
-    url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{}.tsv'.format(v)
-    dl_file(url, '{}/mappings/drugbank2ctd-{}.tsv'.format(pre,v))
-    # Compounds
-    if not os.path.exists("{}/cmpds/fps-{}/{}-{}_vect.pickle".format(pre,v,fp,vect)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{}/{}-{}_vect.pickle'.format(v,fp,vect)
-        dl_file(url, '{}/cmpds/fps-{}/{}-{}_vect.pickle'.format(pre,v,fp,vect))
-    if not os.path.exists("{}/ligs/fps/{}-{}_vect.pickle".format(pre,fp,vect)):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{}-{}_vect.pickle'.format(fp,vect)
-        dl_file(url, '{}/ligs/fps/{}-{}_vect.pickle'.format(pre,fp,vect))
-    # Matrices
-    '''
-    if matrix == 'all':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
-        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
-        dl_file(url, 'v2.0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
-        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
-    elif matrix == 'nrpdb':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv'
-        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-approved_x_nrpdb.tsv')
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv'
-        dl_file(url, 'v2.0/matrices/ob_fp4/drugbank-approved_x_nrpdb.tsv')
-    elif matrix == 'human':
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/matrices/rd_ecfp4/drugbank-human.tsv'
-        dl_file(url, 'v2.0/matrices/rd_ecfp4/drugbank-human.tsv')
-    '''
-    print('Downloading data for {}...'.format(org))
-    # Proteins
-    if org=='all':
-        for o in orgs[1:]:
-            if o=='test' or o=='tutorial':
-                continue
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(o)
-            dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,o))
-            url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-metadata.tsv'.format(o)
-            dl_file(url, '{}/prots/{}-metadata.tsv'.format(pre,o))
+    elif out_path == '.':
+        pre = os.getcwd() + "/data/v2.2+"
     else:
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-coach.tsv'.format(org)
-        dl_file(url, '{}/prots/{}-coach.tsv'.format(pre,org))
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{}-metadata.tsv'.format(org)
-        dl_file(url, '{}/prots/{}-metadata.tsv'.format(pre,org))
+        pre = out_path + "/data/v2.2+"
+    # Dirs
+    print(f'Creating subdirs in {pre}...')
+    os.makedirs(pre, exist_ok=True)
+    os.makedirs(f'{pre}/mappings', exist_ok=True)
+    os.makedirs(f'{pre}/cmpds', exist_ok=True)
+    os.makedirs(f'{pre}/prots', exist_ok=True)
+    os.makedirs(f'{pre}/matrices', exist_ok=True)
+    print() 
 
-    '''
-    if not os.path.exists('v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv'):
-        url = 'http://protinfo.compbio.buffalo.edu/cando/data/v2/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz'
-        dl_file(url, 'v2.0/cmpds/scores/drugbank-approved-rd_ecfp4.tsv.gz')
-        os.chdir("v2.0/cmpds/scores")
-        os.system("gunzip -f drugbank-approved-rd_ecfp4.tsv.gz")
-        os.chdir("../../..")
-    '''
-    print('All data for {} and {} downloaded.'.format(v,org))
+    # Mappings
+    print("Downloading library and mapping files...")
+    print(f"Files will be downloaded to: {pre + '/mappings/'}")
+    if cmpd_set == 'all':
+        url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{v}.tsv'
+        dl_file(url, f'{pre}/mappings/drugbank-{v}.tsv')
+    elif cmpd_set == 'approved':
+        url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank-{v}-approved.tsv'
+        dl_file(url, f'{pre}/mappings/drugbank-{v}-approved.tsv')
+    url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/mappings/drugbank2ctd-{v}.tsv'
+    dl_file(url, f'{pre}/mappings/drugbank2ctd-{v}.tsv')
+    print() 
+
+    # Compounds
+    print(f"Downloading {v} compound library data...")
+    print(f"Files will be downloaded to: {pre + '/cmpds/'}")
+    if not os.path.exists(f"{pre}/cmpds/fps-{v}/{fp}-{vect}_vect.pickle"):
+        print(f"fps-{v}/{fp}-{vect}_vect.pickle")
+        url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/cmpds/fps-{v}/{fp}-{vect}_vect.pickle'
+        dl_file(url, f'{pre}/cmpds/fps-{v}/{fp}-{vect}_vect.pickle')
+    if not os.path.exists(f"{pre}/ligs/fps/{fp}-{vect}_vect.pickle"):
+        print(f"ligs/{fp}-{vect}_vect.pickle")
+        url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/ligs/fps/{fp}-{vect}_vect.pickle'
+        dl_file(url, f'{pre}/ligs/fps/{fp}-{vect}_vect.pickle')
+    print() 
+
+    # Proteins
+    print(f"Downloading {org} protein library data...")
+    print(f"Files will be downloaded to: {pre + '/prots/'}")
+    print(f"{org}-coach.tsv")
+    url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/prots/{org}-coach.tsv'
+    dl_file(url, f'{pre}/prots/{org}-coach.tsv')
+    print() 
+
+    # Matrices
+    print(f"Downloading matrix for {v} compound library, {cmpd_set} sublibrary, {org} protein library, {fp} fingerprint method, {vect} vector type, {dist} distance, and {i_score} interaction score...")
+    print(f"Files will be downloaded to: {pre + '/matrices/'}")
+    matrix = f'{fp}-{org}-{v}-{cmpd_set}-{vect}_vect-{dist}-{i_score}.tsv'
+    print(f"{matrix}")
+    url = f'http://protinfo.compbio.buffalo.edu/cando/data/v2.2+/matrices/{matrix}'
+    dl_file(url, f'{pre}/matrices/{matrix}')
+    print() 
+    print('All data was downloaded.\n')
 
 
 def clear_cache():
@@ -5523,31 +6747,12 @@ def dl_dir(url, out, l):
             if not os.path.exists("{}/{}".format(out, n)):
                 break
         return
-    format_custom_text = progressbar.FormatCustomText(
-        '%(f)s',
-        dict(
-            f='',
-        ),
-    )
-    widgets = [
-        format_custom_text,
-        ' [', progressbar.DataSize(format='%(scaled)i files',), '] ',
-        progressbar.Bar(left='[', right=']'),
-        ' [', progressbar.ETA(), '] ',
-    ]
-    num_bars = len(l)
-    bar = progressbar.ProgressBar(max_value=num_bars, widgets=widgets).start()
-    i = 0
-    for n in l:
-        format_custom_text.update_mapping(f=out)
+    for n in tqdm(l):
         url2 = "{}/{}".format(url, n)
         r = requests.get(url2)
         out_file = "{}/{}".format(out, n)
         with open(out_file, 'wb') as f:
             f.write(r.content)
-        bar.update(i)
-        i += 1
-    bar.finish()
 
 
 def dl_file(url, out_file):
@@ -5566,37 +6771,20 @@ def dl_file(url, out_file):
     elif not os.path.exists(os.path.dirname(out_file)):
         os.makedirs(os.path.dirname(out_file))
     time.sleep(1)
-    r = requests.get(url, stream=True)
-    format_custom_text = progressbar.FormatCustomText(
-        '%(f)s',
-        dict(
-            f='',
-        ),
-    )
-    widgets = [
-        format_custom_text,
-        ' [', progressbar.DataSize(prefixes=('K', 'M', 'G')), '] ',
-        progressbar.Bar(left='[', right=']'),
-        ' [', progressbar.ETA(), '] ',
-    ]
+    headers = {'Accept-Encoding': 'gzip'}
+    r = requests.get(url, stream=True, headers=headers)
     with open(out_file, 'wb') as f:
         total_length = int(r.headers.get('content-length'))
-        if total_length >= 1024:
-            chunk_size = 1024
-            num_bars = total_length / chunk_size
+        if total_length >= 512000000:
+            chunk_size = 512000000
+            num_bars = int(total_length / chunk_size)
         else:
-            chunk_size = 1
-            num_bars = total_length / chunk_size
-        bar = progressbar.ProgressBar(max_value=num_bars, widgets=widgets).start()
-        i = 0
-        for chunk in r.iter_content(chunk_size=chunk_size):
-            format_custom_text.update_mapping(f=out_file)
+            chunk_size = total_length
+            num_bars = int(total_length / chunk_size)
+        for chunk in tqdm(r.iter_content(chunk_size=chunk_size), total=num_bars):
             f.write(chunk)
             f.flush()
             os.fsync(f.fileno())
-            bar.update(i)
-            i += 1
-        bar.finish()
 
 
 def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, compute_distance=False,
