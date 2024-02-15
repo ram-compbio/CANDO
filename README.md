@@ -15,6 +15,7 @@ Computational Analysis of Novel Drug Opportunities
 
 CANDO is an unique and innovative multiscale therapeutic discovery, repurposing, and design platform.
 
+For additional information, publications, and funding sources, please check out our [website]([here](http://protinfo.compbio.buffalo.edu/cando/) or our [ACKNOWLEDGEMENTS](https://github.com/ram-compbio/CANDO/blob/master/ACKNOWLEDGEMENTS.md).
 
 ## Install
 
