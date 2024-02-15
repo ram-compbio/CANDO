@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, shutil
 import cando as cnd
 cnd.get_test()
 os.chdir("cando/data/v2.2+/test")
@@ -16,7 +16,7 @@ new_cmpds = 'test-new_cmpds.tsv'
 #prot_scores = 'test-prot_scores.tsv'
 pwp = 'test-pathway-prot.tsv'
 pwm = 'test-pathway-mesh.tsv'
-ncpus = 3
+ncpus = 1
 
 print("Test #1 - generate a toy matrix")
 print('-------')
@@ -68,7 +68,7 @@ print('\n')
 
 print("Test #7 - canpredict_indications() for new compound and CANDO compound signatures")
 print('-------')
-cando.canpredict_indications(tc, n=10)
+cando.canpredict_indications(tc, n=10, consensus=False)
 cando.canpredict_indications(cando.compounds[10], n=10)
 print('\n')
 
@@ -146,6 +146,7 @@ print('\n')
 
 print("Cleaning up test data...")
 os.chdir("..")
-os.system("rm -r test")
+shutil.rmtree('test')
+#os.system("rm -r test")
 print('Done.\n')
 
