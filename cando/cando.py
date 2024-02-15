@@ -2340,6 +2340,7 @@ class CANDO(object):
         else:
             ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}.tsv'
             ra = f'raw_results/raw_results-{file_name}-{n}.csv'
+            pwr = f'pairwise_results/pairwise_results-{file_name}-{n}.csv'
             summ = f'summary-{file_name}-{n}.tsv'
             benchmark_name = f"canbenchmark-{file_name}-{n}"
             t_name = f"time-{file_name}-{n}.txt"
