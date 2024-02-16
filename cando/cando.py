@@ -6645,7 +6645,6 @@ def dl_file(url, out_file):
     with open(out_file, 'wb') as f:
         total_length = int(r.headers.get('content-length'))
         if total_length >= 512000000:
-        if total_length >= 512000000:
             chunk_size = 512000000
             num_bars = int(total_length / chunk_size)
         else:
