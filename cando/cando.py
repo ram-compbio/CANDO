@@ -337,13 +337,13 @@ class CANDO(object):
         ## @var sig_fusion
         # str: determines the method by which the signatures are combined for DDI analysis
         self.sig_fusion = sig_fusion
-        self.short_matrix_path = self.matrix.split('/')[-1]
-        self.short_read_dists = read_dists.split('/')[-1]
-        self.short_protein_set = protein_set.split('/')[-1]
-        self.cmpd_set = rm_compounds.split('/')[-1]
+        self.short_matrix_path = self.matrix.replace('\\', '/').split('/')[-1]
+        self.short_read_dists = read_dists.replace('\\', '/').split('/')[-1]
+        self.short_protein_set = protein_set.replace('\\', '/').split('/')[-1]
+        self.cmpd_set = rm_compounds.replace('\\', '/').split('/')[-1]
         self.data_name = ''
-        self.short_c_map = c_map.split('/')[-1]
-        self.short_i_map = i_map.split('/')[-1]
+        self.short_c_map = c_map.replace('\\', '/').split('/')[-1]
+        self.short_i_map = i_map.replace('\\', '/').split('/')[-1]
 
 
         if self.matrix:
@@ -373,6 +373,9 @@ class CANDO(object):
                 index = id_
                 cm = Compound(name, id_, index)
 
+                assert isinstance(self.compound_set, str) or isinstance(self.compound_set, list), \
+                       'compound_set flag has wrong input type, please input a string compound category ("all", '+\
+                          '"approved", etc) or a list of categories (["approved", "experimental"])'
                 include_cmpd = False
                 if self.compound_set == 'all':
                     include_cmpd = True
@@ -381,11 +384,11 @@ class CANDO(object):
                     tags = [self.compound_set]
                 elif isinstance(self.compound_set, list):
                     tags = self.compound_set
-                else:
-                    tags = None
-                    print('compound_set flag has wrong input type, please input a string compound category ("all", '
-                          '"approved", etc) or a list of categories (["approved", "experimental"])')
-                    quit()
+                #else:
+                #    tags = None
+                #    print('compound_set flag has wrong input type, please input a string compound category ("all", '
+                #          '"approved", etc) or a list of categories (["approved", "experimental"])')
+                #    quit()
 
                 if 'DRUG_GROUPS' in h2i:
                     stati = ls[h2i['DRUG_GROUPS']].split(';')
@@ -414,9 +417,12 @@ class CANDO(object):
                     self.compound_ids.append(id_)
         del lines
 
-        if self.compound_set and len(self.compounds) == 0:
-            print('No compounds passed filtering, please check input parameters.')
-            quit()
+        assert not self.compound_set or len(self.compounds) > 0,\
+               'No compounds passed filtering, please check input parameters.'
+
+        #if self.compound_set and len(self.compounds) == 0:
+        #   print('No compounds passed filtering, please check input parameters.')
+        #   quit()
 
         # create the indication objects and add indications to the
         # already created compound objects from previous loop
@@ -469,11 +475,13 @@ class CANDO(object):
                     uniprots.append(uni)
 
         if matrix:
-            if matrix[-4:] == '.fpt':
-                print('The matrix file {} is in the old fpt format -- please '
-                      'convert to tsv with the following line of code:'.format(matrix))
-                print('>> Matrix({}, convert_to_tsv=True)'.format(matrix))
-                quit()
+            assert matrix[-4:] != '.fpt', 'The matrix file {} is in the old fpt format -- please '\
+                      'convert to tsv with the following line of code:\n>> Matrix({}, convert_to_tsv=True)'.format(matrix,matrix)
+            #if matrix[-4:] == '.fpt':
+            #    print('The matrix file {} is in the old fpt format -- please '
+            #          'convert to tsv with the following line of code:'.format(matrix))
+            #    print('>> Matrix({}, convert_to_tsv=True)'.format(matrix))
+            #   quit()
             print('Reading signatures from matrix...')
 
             '''
@@ -529,10 +537,12 @@ class CANDO(object):
                         name = vec[0]
                         if name in targets:
                             scores = list(map(float, vec[1:]))
-                            if len(scores) != len(self.compounds):
-                                print('The number of compounds in {} does not match the '
-                                      'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
-                                quit()
+                            assert len(scores) == len(self.compounds), 'The number of compounds in {} does not match the '\
+                                      'number of values in {}'.format(self.c_map, self.matrix)
+                            #if len(scores) != len(self.compounds):
+                            #    print('The number of compounds in {} does not match the '
+                            #          'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                            #    quit()
                             p = Protein(name, scores)
                             try:
                                 alt = pdct_rev[name]
@@ -550,18 +560,21 @@ class CANDO(object):
                             continue
                     print('    Direct UniProt matches: {}\n    Direct PDB matches: {}'
                           '\n    New signature length: {}'.format(matches[1], matches[0], sum(matches)))
-                    if not sum(matches):
-                        print('Sorry, the input proteins did not match any proteins in the input matrix -- quitting.')
-                        quit()
+                    assert sum(matches), 'The input proteins did not match any proteins in the input matrix'
+                    #if not sum(matches):
+                    #   print('Sorry, the input proteins did not match any proteins in the input matrix -- quitting.')
+                    #   quit()
                 else:
                     for l_i in range(len(m_lines)):
                         vec = m_lines[l_i].strip().split('\t')
                         name = vec[0]
                         scores = list(map(float, vec[1:]))
-                        if len(scores) != len(self.compounds):
-                            print('The number of compounds in {} does not match the '
-                                  'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
-                            quit()
+                        assert len(scores) == len(self.compounds), 'The number of compounds in {} does not match the '\
+                                  'number of values in {}'.format(self.c_map, self.matrix)
+                        #if len(scores) != len(self.compounds):
+                        #    print('The number of compounds in {} does not match the '
+                        #          'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                        #    quit()
                         self.proteins.append(Protein(name, scores))
                         self.protein_id_to_index[name] = l_i
                         for i in range(len(scores)):
@@ -860,10 +873,12 @@ class CANDO(object):
                 for i in range(len(lines)):
                     c1 = self.compounds[i]
                     scores = lines[i].strip().split('\t')
-                    if len(scores) != len(self.compounds):
-                        print('    The number of compounds in {} does not match the '
-                              'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
-                        quit()
+                    assert len(scores) == len(self.compounds), '    The number of compounds in {} does not match the '\
+                              'number of values in {} -- quitting.'.format(self.c_map, self.matrix)
+                    #if len(scores) != len(self.compounds):
+                    #    print('    The number of compounds in {} does not match the '
+                    #         'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
+                    #   quit()
                     for j in range(len(scores)):
                         if i == j:
                             continue
@@ -1048,8 +1063,8 @@ class CANDO(object):
                     l = [c.id_ for c in self.compounds]
                     d_similar = {}
                     i = 0
-                    for x in distance_matrix:
-                        for y in tqdm(x):
+                    for chunk in distance_matrix:
+                        for y in tqdm(chunk):
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
@@ -1321,9 +1336,10 @@ class CANDO(object):
         @param protein_id str: Protein name
         @return Returns object: Protein object
         """
-        if len(self.proteins) == 0 or not self.matrix:
-            print('No matrix/proteins loaded -- quitting.')
-            quit()
+        assert len(self.proteins) > 0 and self.matrix, 'No matrix/proteins loaded'
+        #if len(self.proteins) == 0 or not self.matrix:
+        #    print('No matrix/proteins loaded -- quitting.')
+        #    quit()
         for p in self.proteins:
             if p.id_ == protein_id:
                 return p
@@ -1407,14 +1423,15 @@ class CANDO(object):
         @param save_file str: output file for results
         @return Returns list: list of tuples (protein id_, score)
         """
+        assert type(cmpd) is Compound or type(cmpd) is int, 'Please enter a Compound object or integer id_ for a compound'
         # print the list of the top targets
         if type(cmpd) is Compound:
             pass
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
-        else:
-            print('Please enter a Compound object or integer id_ for a compound -- quitting.')
-            quit()
+        #else:
+        #    print('Please enter a Compound object or integer id_ for a compound -- quitting.')
+        #    quit()
         all_interactions = []
         sig = cmpd.sig
         for i in range(len(sig)):
@@ -1852,6 +1869,7 @@ class CANDO(object):
         @return Returns None
         """
         pq = self.pathway_quantifier
+        assert pq in ('max', 'sum', 'avg', 'proteins'), 'Please enter a proper pathway quantify method'
         if pq == 'max':
             func = max
         elif pq == 'sum':
@@ -1859,15 +1877,17 @@ class CANDO(object):
         elif pq == 'avg':
             func = np.average
         elif pq == 'proteins':
-            if not self.indication_pathways:
-                print('Pathway quantifier "proteins" should only be used in combination with a '
-                      'pathway-disease mapping (indication_pathways), quitting.')
-                quit()
+            assert self.indication_pathways, 'Pathway quantifier "proteins" should only be used in combination with a '\
+                      'pathway-disease mapping (indication_pathways).'
+            #if not self.indication_pathways:
+            #    print('Pathway quantifier "proteins" should only be used in combination with a '
+            #          'pathway-disease mapping (indication_pathways), quitting.')
+            #    quit()
             func = None
-        else:
-            print('Please enter a proper pathway quantify method, quitting.')
-            func = None
-            quit()
+        #else:
+        #    print('Please enter a proper pathway quantify method, quitting.')
+        #    func = None
+        #    quit()
 
         # this is a recursive function for checking if the pathways have proteins
         def check_proteins(paths):
@@ -1962,10 +1982,12 @@ class CANDO(object):
         @param adrs bool: ADRs are used as the Compounds' phenotypic effects instead of Indications
         @return Returns None
         """
-
-        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
-            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
-            exit()
+        assert not continuous or not (self.indication_pathways or self.indication_proteins),\
+               'Continuous benchmarking and indication-based signatures are not compatible'
+               
+        #if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+        #    print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+        #    exit()
 
         if not self.indication_proteins and not self.indication_pathways:
             if not self.compounds[0].similar_sorted:
@@ -2043,13 +2065,14 @@ class CANDO(object):
                     if ls[1] in path_ids:
                         ind = self.get_indication(ls[0])
                         ind.pathogen = True
+            assert ind_set in ('pathogen', 'human'), 'Please enter proper indication set; options include "pathogen" or "human"'
             if ind_set == 'pathogen':
                 return [indx for indx in self.indications if indx.pathogen]
             elif ind_set == 'human':
                 return [indx for indx in self.indications if not indx.pathogen]
-            else:
-                print('Please enter proper indication set, options include "pathogen", "human", or "all".')
-                quit()
+            #else:
+            #    print('Please enter proper indication set, options include "pathogen", "human", or "all".')
+            #    quit()
 
         effect_dct = {}
         ss = []
@@ -2317,9 +2340,11 @@ class CANDO(object):
         start = time.time()
 
         #ZF - 1/19/24 - check if this is needed later
-        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
-            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
-            exit()
+        assert not continuous or not (self.indication_pathways or self.indication_proteins),\
+               'Continuous benchmarking and indication-based signatures are not compatible'
+        #if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+        #    print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+        #   exit()
 
         if not self.indication_proteins and not self.indication_pathways:
             if not self.compounds[0].similar_sorted:
@@ -2328,20 +2353,13 @@ class CANDO(object):
                     c.similar = sorted_scores
                     c.similar_sorted = True
 
-        if approved:
-            ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}-approved.tsv'
-            ra = f'raw_results/raw_results-{file_name}-{n}-approved.csv'
-            pwr = f'pairwise_results/pairwise_results-{file_name}-{n}-approved.csv'
-            summ = f'summary-{file_name}-{n}-approved.tsv'
-            benchmark_name = f"canbenchmark-{file_name}-{n}-approved"
-            t_name = f"time-{file_name}-{n}-approved.txt"
-        else:
-            ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}.tsv'
-            ra = f'raw_results/raw_results-{file_name}-{n}.csv'
-            pwr = f'pairwise_results/pairwise_results-{file_name}-{n}.csv'
-            summ = f'summary-{file_name}-{n}.tsv'
-            benchmark_name = f"canbenchmark-{file_name}-{n}"
-            t_name = f"time-{file_name}-{n}.txt"
+        approved_str = '-approved' if approved else ''
+        ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}{approved_str}.tsv'
+        ra = f'raw_results/raw_results-{file_name}-{n}{approved_str}.csv'
+        pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{approved_str}.csv'
+        summ = f'summary-{file_name}-{n}{approved_str}.tsv'
+        benchmark_name = f"canbenchmark-{file_name}-{n}{approved_str}"
+        t_name = f"time-{file_name}-{n}{approved_str}.txt"
 
         os.makedirs('results_analysed_named', exist_ok=True)
         os.makedirs('raw_results', exist_ok=True)
@@ -2355,11 +2373,7 @@ class CANDO(object):
             dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
             return np.sum(dcg)
 
-        def effect_type():
-            if adrs:
-                return 'ADR'
-            else:
-                return 'disease'
+        effect_type = 'ADR' if adrs else 'disease'
 
         def filter_indications(ind_set):
             if not os.path.exists('v2.0/mappings/group_disease-top_level.tsv'):
@@ -2372,13 +2386,14 @@ class CANDO(object):
                     if ls[1] in path_ids:
                         ind = self.get_indication(ls[0])
                         ind.pathogen = True
+            assert ind_set in ('pathogen', 'human'), 'Please enter proper indication set; options include "pathogen" or "human"'
             if ind_set == 'pathogen':
                 return [indx for indx in self.indications if indx.pathogen]
             elif ind_set == 'human':
                 return [indx for indx in self.indications if not indx.pathogen]
-            else:
-                print('Please enter proper indication set, options include "pathogen", "human", or "all".')
-                quit()
+            #else:
+            #    print('Please enter proper indication set, options include "pathogen", "human", or "all".')
+            #   quit()
 
         effect_dct = {}
         ss = []
@@ -2396,7 +2411,7 @@ class CANDO(object):
                     effects = self.indications
                 else:
                     effects = filter_indications(indications)
-
+        # This makes everything above irrelevant I think
         effects = [effect for effect in self.indications if len(effect.compounds) > 1]
         if approved:
             cmpds = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
@@ -2434,7 +2449,7 @@ class CANDO(object):
         if continuous:
             ra_out.write("compound_id,{}_id,0.1%({:.3f}),0.25%({:.3f}),0.5%({:.3f}),"
                          "1%({:.3f}),5%({:.3f}),10%({:.3f}),20%({:.3f}),33%({:.3f}),"
-                         "50%({:.3f}),100%({:.3f}),value\n".format(effect_type(), metrics[0][1], metrics[1][1],
+                         "50%({:.3f}),100%({:.3f}),value\n".format(effect_type, metrics[0][1], metrics[1][1],
                                                                    metrics[2][1], metrics[3][1], metrics[4][1],
                                                                    metrics[5][1], metrics[6][1], metrics[7][1],
                                                                    metrics[8][1], metrics[9][1]))
@@ -2589,7 +2604,7 @@ class CANDO(object):
         #print("\t".join(cov_count))
         # Fix later
         self.accuracies = effect_dct
-        final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        final_accs = self.results_analysed(ra_named, metrics, effect_type)
         #ss = sorted(ss, key=lambda xx: xx[0])
         #ss = sorted(ss, key=lambda xx: int(xx[0]))
 
@@ -2924,9 +2939,11 @@ class CANDO(object):
         modified, and ordinal)
         @return Returns None
         """
-        if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
-            print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
-            exit()
+        assert not continuous or not (self.indication_pathways or self.indication_proteins),\
+               'Continuous benchmarking and indication-based signatures are not compatible'
+        #if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
+        #   print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
+        #   exit()
 
         if not self.indication_proteins and not self.indication_pathways:
             if not self.compounds[0].similar_sorted:
@@ -3956,10 +3973,10 @@ class CANDO(object):
         @param out str: file name extension for the output of benchmark (note: must have benchmark=True)
         @return Returns None
         """
-
-        if method in ['1csvm', 'svm']:
-            print('SVMs are currently unsupported by this version of cando.py. Please choose "log" or "rf" - quitting.')
-            quit()
+        assert method not in ('1csvm', 'svm'), 'SVMS are currently unsupported by this version of cando.py. Please choose "log" or "rf"'
+        #if method in ['1csvm', 'svm']:
+        #    print('SVMs are currently unsupported by this version of cando.py. Please choose "log" or "rf" - quitting.')
+        #    quit()
 
         if out:
             if not os.path.exists('./raw_results/'):
@@ -3991,11 +4008,14 @@ class CANDO(object):
 
         def choose_negatives(efct, neg_set=negative, s=None, hold_out=None, avoid=[], test=None):
             if neg_set == 'inverse':
-                if not self.compute_distance and not self.read_dists:
-                    print('Please compute all compound-compound distances before using inverse_negatives().\n'
-                          'Re-run with "compute_distance=True" or read in pre-computed distance file "read_dists="'
-                          'in the CANDO object instantiation -- quitting.')
-                    quit()
+                assert self.compute_distance or self.read_dists, 'Please compute all compound-compound distances before using inverse_negatives().\n'\
+                          'Re-run with "compute_distance=True" or read in pre-computed distance file "read_dists="'\
+                          'in the CANDO object instantiation -- quitting.'
+                #if not self.compute_distance and not self.read_dists:
+                #   print('Please compute all compound-compound distances before using inverse_negatives().\n'
+                #         'Re-run with "compute_distance=True" or read in pre-computed distance file "read_dists="'
+                #         'in the CANDO object instantiation -- quitting.')
+                #   quit()
             negatives = []
             used = avoid
 
@@ -4044,6 +4064,8 @@ class CANDO(object):
             return negatives, [0] * len(negatives), used
 
         def model(meth, samples, labels, params=None, seed=None):
+            assert meth in ('rf', 'svm', '1csvm', 'log'),\
+                   "Please enter valid machine learning method ('rf', '1csvm', 'log', or 'svm')"
             if meth == 'rf':
                 m = RandomForestClassifier(n_estimators=100, random_state=seed)
                 m.fit(samples, labels)
@@ -4064,9 +4086,9 @@ class CANDO(object):
                 m = LogisticRegression(penalty='l2', solver='newton-cg', random_state=seed)
                 m.fit(samples, labels)
                 return m
-            else:
-                print("Please enter valid machine learning method ('rf', '1csvm', 'log', or 'svm')")
-                quit()
+            #else:
+            #   print("Please enter valid machine learning method ('rf', '1csvm', 'log', or 'svm')")
+            #   quit()
 
         if benchmark:
             if adrs:
@@ -4079,11 +4101,14 @@ class CANDO(object):
                 fran = open('./results_analysed_named/results_analysed_named_ml_{}'.format(out), 'w', encoding="utf8")
                 fsum = open('summary_ml-{}'.format(out), 'w', encoding="utf8")
         else:
-            if len(effect.compounds) < 1:
-                print('No compounds associated with {} ({}), quitting.'.format(effect.name, effect.id_))
-                quit()
-            elif self.indication_proteins and len(effect.proteins) <= 2:
-                print('Less than 3 proteins associated with {} ({}), quitting.'.format(effect.name, effect.id_))
+            assert len(effect.compounds) > 0, 'No compounds associated with {} ({})'.format(effect.name, effect.id_)
+            assert not self.indication_proteins or len(effect.proteins) > 2, \
+                   'Less than 3 proteins associated with {} ({})'.format(effect.name, effect.id_)
+            #if len(effect.compounds) < 1:
+            #    print('No compounds associated with {} ({}), quitting.'.format(effect.name, effect.id_))
+            #   quit()
+            #elif self.indication_proteins and len(effect.proteins) <= 2:
+            #   print('Less than 3 proteins associated with {} ({}), quitting.'.format(effect.name, effect.id_))
             effects = [effect]
 
         rf_scores = []
@@ -4188,11 +4213,12 @@ class CANDO(object):
         return
 
     def raw_results_roc(self, rr_files, labels, save='roc-raw_results.pdf'):
-
-        if len(labels) != len(rr_files):
-            print('Please enter a label for each input raw results file '
-                  '({} files, {} labels).'.format(len(rr_files), len(labels)))
-            quit()
+        assert len(labels) == len(rr_files), 'Please enter a label for each input raw results file '\
+                  '({} files, {} labels).'.format(len(rr_files), len(labels))
+        #if len(labels) != len(rr_files):
+        #   print('Please enter a label for each input raw results file '
+        #         '({} files, {} labels).'.format(len(rr_files), len(labels)))
+        #   quit()
 
         n_per_d = {}
         dt = {}
@@ -4352,8 +4378,8 @@ class CANDO(object):
 
         else:
             sorted_x = []
-            print('Please enter a valid ranking method -- quitting.')
-            quit()
+            raise ValueError('Please enter a valid ranking method')
+            #quit()
         if save:
             fo = open(save, 'w', encoding="utf8")
             fo.write('rank\tscore1\tscore2\toffhits\tdiff\tid\tapproved\tname\n')
@@ -4565,20 +4591,24 @@ class CANDO(object):
             prb = 1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n)
             i2p_dct[ik] = (k, prb)
 
-        if consensus and len(i2p_dct) == 0:
-            print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
-                  '\targuments to include "consensus=False" to print results with\n'
-                  '\tscore1 == 1, and/or increase "n".\n')
-            quit()
+        assert not consensus or len(i2p_dct) > 0, '\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'\
+                  '\targuments to include "consensus=False" to print results with\n'\
+                  '\tscore1 == 1, and/or increase "n".\n'
+        #if consensus and len(i2p_dct) == 0:
+        #   print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+        #         '\targuments to include "consensus=False" to print results with\n'
+        #         '\tscore1 == 1, and/or increase "n".\n')
+        #   quit()
 
+        assert sorting in ('score', 'prob'), 'Please enter proper sorting method: "prob" or "score"'
         if sorting == 'score':
             sorted_x = sorted(list(i2p_dct.items()), key=lambda x: x[1][0], reverse=True)
         elif sorting == 'prob':
             sorted_x = sorted(list(i2p_dct.items()), key=lambda x: x[1][1], reverse=False)
-        else:
-            sorted_x = []
-            print('Please enter proper sorting method: "prob" or "score" -- quitting.')
-            quit()
+        #else:
+        #   sorted_x = []
+        #   print('Please enter proper sorting method: "prob" or "score" -- quitting.')
+        #   quit()
 
         if save:
             fo = open(save, 'w', encoding="utf8")
@@ -4645,20 +4675,24 @@ class CANDO(object):
             prb = 1.0 - stats.hypergeom.cdf(k, len(self.compounds) - 1, n_app, n)
             a2p_dct[ik] = (k, prb)
 
-        if consensus and len(a2p_dct) == 0:
-            print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
-                  '\targuments to include "consensus=False" to print results with\n'
-                  '\tscore1 == 1, and/or increase "n".\n')
-            quit()
+        assert not consensus or len(a2p_dct) > 0, '\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'\
+                  '\targuments to include "consensus=False" to print results with\n'\
+                  '\tscore1 == 1, and/or increase "n".\n'
+        #if consensus and len(a2p_dct) == 0:
+        #   print('\n\tFAILED - there are no compounds with score1 >= 2 -- change the\n'
+        #         '\targuments to include "consensus=False" to print results with\n'
+        #         '\tscore1 == 1, and/or increase "n".\n')
+        #   quit()
 
+        assert sorting in ('score', 'prob'), 'Please enter proper sorting method: "prob" or "score"'
         if sorting == 'score':
             sorted_x = sorted(list(a2p_dct.items()), key=lambda x: x[1][0], reverse=True)
         elif sorting == 'prob':
             sorted_x = sorted(list(a2p_dct.items()), key=lambda x: x[1][1], reverse=False)
-        else:
-            sorted_x = []
-            print('Please enter proper sorting method: "prob" or "score" -- quitting.')
-            quit()
+        #else:
+        #   sorted_x = []
+        #   print('Please enter proper sorting method: "prob" or "score" -- quitting.')
+        #   quit()
 
         if save:
             fo = open(save, 'w', encoding="utf8")
@@ -5163,9 +5197,10 @@ class CANDO(object):
 
         @return Returns None
         """
-        if len(self.compounds[0].similar) == 0:
-            print('Similar scores not computed yet -- quitting')
-            return
+        assert len(self.compounds[0].similar) > 0, 'Similar scores not computed yet'
+        #if len(self.compounds[0].similar) == 0:
+        #   print('Similar scores not computed yet')
+        #   return
 
         mx = 0
         for c in self.compounds:
@@ -5263,11 +5298,13 @@ class Matrix(object):
                 else:
                     for l_i in range(len(lines)):
                         vec = lines[l_i].strip().split('\t')
-                        if len(vec) < 2:
-                            print('The matrix file {} is in the old fpt format -- please '
-                                  'convert to tsv with the following line of code:'.format(self.matrix_file))
-                            print('-> Matrix("{}", convert_to_tsv=True) <-'.format(self.matrix_file))
-                            quit()
+                        assert len(vec) > 1, 'The matrix file {} is in the old fpt format -- please '\
+                                  'convert to tsv with the following line of code:\n-> Matrix("{}", convert_to_tsv=True) <-'.format(self.matrix_file, self.matrix_file)
+                        #if len(vec) < 2:
+                        #   print('The matrix file {} is in the old fpt format -- please '
+                        #         'convert to tsv with the following line of code:'.format(self.matrix_file))
+                        #   print('-> Matrix("{}", convert_to_tsv=True) <-'.format(self.matrix_file))
+                        #   quit()
                         name = vec[0]
                         scores = vec[1:]
                         self.proteins.append(name)
@@ -5288,15 +5325,17 @@ class Matrix(object):
         @param out_file str: File path to which write the converted matrix.
         @return Returns None
         """
+        assert self.values[0][0] in (0.0, 1.0), 'The first value is not 0.0 or 1.0; '\
+                  'please ensure the matrix is generated properly'
         if self.values[0][0] == 0.0:
             metric = 'd'
         elif self.values[0][0] == 1.0:
             metric = 's'
-        else:
-            metric = None
-            print('The first value is not 0.0 or 1.0; '
-                  'please ensure the matrix is generated properly')
-            quit()
+        #else:
+        #   metric = None
+        #   print('The first value is not 0.0 or 1.0; '
+        #         'please ensure the matrix is generated properly')
+        #   quit()
 
         def to_dist(s):
             return 1 - s
@@ -5342,13 +5381,14 @@ class Matrix(object):
         new_dvecs = []
         for i in range(len(dvs)):
             vec = dvs[i]
+            assert method in ('avg', 'max'), 'Please enter a proper normalization method: "max" or "avg"'
             if method == 'avg':
                 norm_val = np.average(vec)
             elif method == 'max':
                 norm_val = max(vec)
-            else:
-                print('Please enter a proper normalization method: "max" or "avg"')
-                quit()
+            #else:
+            #   print('Please enter a proper normalization method: "max" or "avg"')
+            #   quit()
 
             def norm(x):
                 if norm_val == 0:
