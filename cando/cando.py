@@ -5,7 +5,6 @@ import time
 import operator
 import math
 import ast
-import progressbar
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -13,8 +12,8 @@ import difflib
 import matplotlib.pyplot as plt
 from decimal import Decimal
 from tqdm import tqdm
-from rdkit import Chem, DataStructs, RDConfig
-from rdkit.Chem import AllChem, rdmolops
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem
 from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score, ndcg_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
@@ -22,7 +21,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from scipy.spatial.distance import squareform, cdist
+from scipy.spatial.distance import squareform
 from scipy import stats
 import shutil # change1
 from scipy.stats import hypergeom
@@ -356,7 +355,7 @@ class CANDO(object):
             self.data_name = self.short_read_dists
 
         if not self.db_name:
-            self.db_name = f"cando-{self.short_matrix_path}-{self.short_c_map}-{self.short_i_map}.db"
+            self.db_name = f"cando-{self.short_matrix_path.replace('.tsv','')}-{self.short_c_map.replace('.tsv','')}-{self.short_i_map.replace('.tsv','')}.db"
 
         ignored_set = []
         # create all of the compound objects from the compound map
@@ -563,13 +562,11 @@ class CANDO(object):
                             print('The number of compounds in {} does not match the '
                                   'number of values in {} -- quitting.'.format(self.c_map, self.matrix))
                             quit()
-                        p = Protein(name, scores)
-                        self.proteins.append(p)
+                        self.proteins.append(Protein(name, scores))
                         self.protein_id_to_index[name] = l_i
                         for i in range(len(scores)):
-                            s = scores[i]
-                            self.compounds[i].sig.append(s)
-            del m_lines
+                            self.compounds[i].sig.append(scores[i])
+            del m_lines, scores, vec
             print('Done reading signatures.\n')
 
         if pathways:
@@ -1044,6 +1041,7 @@ class CANDO(object):
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
+                                                                     working_memory=512,
                                                                      n_jobs=self.ncpus)
                     print('  Done calculating {} distances.'.format(self.dist_metric))
 
@@ -1055,7 +1053,7 @@ class CANDO(object):
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
-                            self.compounds[i].similar = d_temp
+                            #self.compounds[i].similar = d_temp
                             d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
                             d_similar[str(c1)] = str(d_temp)
                             if i % 1000 == 0 or i == len(self.compounds)-1:
@@ -1073,7 +1071,7 @@ class CANDO(object):
                     cursor.execute("CREATE INDEX d_id_idx ON dists(id)")
                     conn.commit()
                     conn.close()
-                    del distance_matrix, snp, d_similar
+                    del distance_matrix, d_temp, snp, d_similar
                 print('Done building {} distance table.\n'.format(self.dist_metric))
 
 
@@ -2449,14 +2447,18 @@ class CANDO(object):
                           f"rank,dist\n")
         print("  Calculating scores...")
         start_calc = time.time()
+        if approved:
+            cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications) >= 1]
+        else:
+            cmpd_lib = [str(c.id_) for c in self.compounds]
         if self.ncpus > 1:
             # tqdm progressbar is not working for multiprocessing
-            pool = mp.Pool(self.ncpus)
-            pool.starmap_async(self.calc_accuracies_cmpd_new, [(effect.id_, effect.compounds, benchmark_name, metrics, approved, n) for effect in effects]).get()
+            pool = mp.Pool(processes=self.ncpus)
+            pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [self.calc_accuracies_cmpd_new(effect.id_, effect.compounds, benchmark_name, metrics, approved, n) for effect in tqdm(effects)]
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in tqdm(effects)]
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -3936,140 +3938,6 @@ class CANDO(object):
         #c_sorted=None
         #return ss
         #return [ss, accs]
-
-    def calc_accuracies_cmpd_new(self, effect_id, cmpds, d_name, metrics, approved, n):
-        db_name = f'{d_name}/{effect_id}.db'
-        if os.path.exists(db_name):
-            db = create_engine(f'sqlite:///{db_name}')
-            df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
-            df_pa_results = pd.read_sql("SELECT cmpd_id-1 FROM pa_results", db)
-            if len(df_ia_results) == len(cmpds) and len(df_pa_results) == (math.factorial(len(cmpds))/(math.factorial(len(cmpds)-2))):
-                return
-            else:
-                try:
-                    # Connecting to sqlite
-                    conn = sqlite3.connect(db_name)
-                    # Creating a cursor object using the cursor() method
-                    cursor = conn.cursor()
-                    # Droping dists table if already exists
-                    cursor.execute("DROP TABLE ia_results")
-                    cursor.execute("DROP TABLE pa_results")
-                    # Commit your changes in the database
-                    conn.commit()
-                    # Closing the connection
-                    conn.close()
-                except:
-                    # print("dists table does not exist.")
-                    pass
-        conn = f'sqlite://{self.db_name}'
-        #conn = 'sqlite://cando.db'
-        cmpds = [str(c) for c in cmpds]
-        if approved:
-            cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
-        else:
-            cmpd_lib = [str(c.id_) for c in self.compounds]
-        ss = []
-        pa_ss = []
-        df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(cmpds)}", connection=conn)
-        #for c_loo in cmpds:
-        dist_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
-        #score_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
-        #rank_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
-        if approved:
-            dist_df = dist_df.filter(pl.col('id').is_in(cmpd_lib))
-            #score_df = score_df.filter(pl.col('id').is_in(cmpd_lib))
-            #rank_df = rank_df.filter(pl.col('id').is_in(cmpd_lib))
-        score_df = dist_df.clone()
-        rank_df = dist_df.clone()
-        for c in cmpds:
-            c_sorted = json.loads(
-                df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
-            c_sorted = pl.DataFrame(c_sorted)
-            if approved:
-                cmpd_lib_temp = [x for x in cmpd_lib if x!=c]
-                c_sorted = c_sorted.select(cmpd_lib_temp)
-            df_temp = c_sorted.transpose().with_columns(pl.Series(name='id', values=c_sorted.columns)).sort('column_0')
-            df_temp = df_temp.with_columns(rank=df_temp['column_0'].rank(method='min'))
-            df_temp = df_temp.with_columns(df_temp['rank'].apply(lambda x: 1 if x <= n else 0).alias(c))
-            #c_df_temp = c_df_temp.rename({'column_0': c})
-            score_df = score_df.join(df_temp.select('id',c), on='id', how='left')
-            #rank_df = rank_df.join(df_temp.filter(pl.col(c) == 1).select('id','rank'), on='id', how='left')
-            rank_df = rank_df.join(df_temp.select('id','rank'), on='id', how='left')
-            rank_df = rank_df.rename({'rank': c})
-            dist_df = dist_df.join(df_temp.select('id','column_0'), on='id', how='left')
-            dist_df = dist_df.rename({'column_0': c})
-            # Pairwise accuracy
-            for c2 in cmpds:
-                if c == c2:
-                    continue
-                s = [c, c2, effect_id]
-                rank = rank_df.filter(pl.col('id') == c2)[0, c]
-                dist = dist_df.filter(pl.col('id') == c2)[0, c]
-                for x in metrics:
-                    if rank <= x[1]:
-                        s.append('1')
-                    else:
-                        s.append('0')
-                s.append(str(int(rank)))
-                s.append(str(float(dist)))
-                pa_ss.append(s)
-        del df_dists, c_sorted
-
-        for c_loo in cmpds:
-            dist_df_loo = dist_df.drop(c_loo)
-            score_df_loo = score_df.drop(c_loo)
-            rank_df_loo = rank_df.drop(c_loo)
-
-            score_df_loo = score_df_loo.with_columns(score=pl.sum_horizontal(score_df_loo.columns[1:]))
-            dist_df_loo = dist_df_loo.with_columns(summed_dist=pl.sum_horizontal(dist_df_loo.columns[1:]))
-            rank_df_loo = rank_df_loo.with_columns(summed_rank=pl.sum_horizontal(rank_df_loo.columns[1:]))
-
-            c_df_loo = dist_df_loo.select('id','summed_dist').join(score_df_loo.select('id','score'), on='id', how='left')
-            c_df_loo = c_df_loo.join(rank_df_loo.select('id','summed_rank'), on='id', how='left')
-            c_df_loo = c_df_loo.with_columns(c_df_loo['score'].apply(lambda x: len(cmpds)-1 - x).alias('neg_score'))
-            c_df_loo = c_df_loo.with_columns(c_df_loo['summed_rank'].apply(lambda x: x / (len(cmpds)-1)).alias('avg_rank'))
-            c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(cmpds)-1)).alias('avg_dist'))
-
-            c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
-            # This is competitive ranking
-            # Add other ranking methods using polars.Series.rank
-            #c_df_loo = c_df_loo.with_columns(rank=c_df_loo['summed_dist'].rank(method='min'))
-            c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
-
-            # Polars way of doing it
-            #rank = c_df_loo.with_row_count(offset=1).filter(pl.col('id') == c_loo)[0, 'row_nr']
-            rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
-            score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
-            avg_dist = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_dist']
-            avg_rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_rank']
-            conf = 0.5*(score/(len(cmpds)-1)) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank)
-
-            s = [c_loo, effect_id]
-            for x in metrics:
-                if rank <= x[1]:
-                    s.append('1')
-                else:
-                    s.append('0')
-            s.append(str(int(rank)))
-            s.append(str(int(score)))
-            s.append(str(float(avg_rank)))
-            s.append(str(float(avg_dist)))
-            s.append(str(float(conf)))
-            ss.append(s)
-        db_benchmark = create_engine(f'sqlite:///{db_name}')
-        # Indication accuracies
-        benchmark_cols = ['cmpd_id', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
-        df_temp = pd.DataFrame(ss, columns=benchmark_cols)
-        df_temp.to_sql('ia_results', db_benchmark, if_exists='append', index=False)
-        # Pairwise accuracies
-        benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'dist']
-        df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
-        df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
-        return
 
     def ml(self, method='rf', effect=None, benchmark=False, adrs=False, predict=[], threshold=0.5,
            negative='random', seed=42, out=''):
@@ -6777,6 +6645,7 @@ def dl_file(url, out_file):
     with open(out_file, 'wb') as f:
         total_length = int(r.headers.get('content-length'))
         if total_length >= 512000000:
+        if total_length >= 512000000:
             chunk_size = 512000000
             num_bars = int(total_length / chunk_size)
         else:
@@ -6828,3 +6697,121 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db):
+    db_name = f'{d_name}/{effect_id}.db'
+    if os.path.exists(db_name):
+        db = create_engine(f'sqlite:///{db_name}')
+        df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
+        df_pa_results = pd.read_sql("SELECT cmpd_id-1 FROM pa_results", db)
+        if len(df_ia_results) == len(effect_cmpds) and len(df_pa_results) == (math.factorial(len(effect_cmpds))/(math.factorial(len(effect_cmpds)-2))):
+            return
+        else:
+            try:
+                # Connecting to sqlite
+                conn = sqlite3.connect(db_name)
+                # Creating a cursor object using the cursor() method
+                cursor = conn.cursor()
+                # Droping dists table if already exists
+                cursor.execute("DROP TABLE ia_results")
+                cursor.execute("DROP TABLE pa_results")
+                # Commit your changes in the database
+                conn.commit()
+                # Closing the connection
+                conn.close()
+            except:
+                # print("dists table does not exist.")
+                pass
+    conn = f'sqlite://{cando_db}'
+    effect_cmpds = [str(c) for c in effect_cmpds]
+    ss = []
+    pa_ss = []
+    df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(effect_cmpds)}", connection=conn)
+    dist_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+    if approved:
+        dist_df = dist_df.filter(pl.col('id').is_in(cmpd_lib))
+    score_df = dist_df.clone()
+    rank_df = dist_df.clone()
+    for c in effect_cmpds:
+        c_sorted = json.loads(
+            df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
+        c_sorted = pl.DataFrame(c_sorted)
+        if approved:
+            cmpd_lib_temp = [x for x in cmpd_lib if x!=c]
+            c_sorted = c_sorted.select(cmpd_lib_temp)
+        df_temp = c_sorted.transpose().with_columns(pl.Series(name='id', values=c_sorted.columns)).sort('column_0')
+        df_temp = df_temp.with_columns(rank=df_temp['column_0'].rank(method='min'))
+        df_temp = df_temp.with_columns(df_temp['rank'].apply(lambda x: 1 if x <= n else 0).alias(c))
+        score_df = score_df.join(df_temp.select('id',c), on='id', how='left')
+        rank_df = rank_df.join(df_temp.select('id','rank'), on='id', how='left')
+        rank_df = rank_df.rename({'rank': c})
+        dist_df = dist_df.join(df_temp.select('id','column_0'), on='id', how='left')
+        dist_df = dist_df.rename({'column_0': c})
+        # Pairwise accuracy
+        for c2 in effect_cmpds:
+            if c == c2:
+                continue
+            s = [c, c2, effect_id]
+            rank = rank_df.filter(pl.col('id') == c2)[0, c]
+            dist = dist_df.filter(pl.col('id') == c2)[0, c]
+            for x in metrics:
+                if rank <= x[1]:
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(int(rank)))
+            s.append(str(float(dist)))
+            pa_ss.append(s)
+    del df_dists, c_sorted
+
+    for c_loo in effect_cmpds:
+        dist_df_loo = dist_df.drop(c_loo)
+        score_df_loo = score_df.drop(c_loo)
+        rank_df_loo = rank_df.drop(c_loo)
+
+        score_df_loo = score_df_loo.with_columns(score=pl.sum_horizontal(score_df_loo.columns[1:]))
+        dist_df_loo = dist_df_loo.with_columns(summed_dist=pl.sum_horizontal(dist_df_loo.columns[1:]))
+        rank_df_loo = rank_df_loo.with_columns(summed_rank=pl.sum_horizontal(rank_df_loo.columns[1:]))
+
+        c_df_loo = dist_df_loo.select('id','summed_dist').join(score_df_loo.select('id','score'), on='id', how='left')
+        c_df_loo = c_df_loo.join(rank_df_loo.select('id','summed_rank'), on='id', how='left')
+        c_df_loo = c_df_loo.with_columns(c_df_loo['score'].apply(lambda x: len(effect_cmpds)-1 - x).alias('neg_score'))
+        c_df_loo = c_df_loo.with_columns(c_df_loo['summed_rank'].apply(lambda x: x / (len(effect_cmpds)-1)).alias('avg_rank'))
+        c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cmpds)-1)).alias('avg_dist'))
+
+        c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
+        # This is competitive ranking
+        # Add other ranking methods using polars.Series.rank
+        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
+
+        rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
+        score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
+        avg_dist = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_dist']
+        avg_rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_rank']
+        conf = 0.5*(score/(len(effect_cmpds)-1)) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank)
+
+        s = [c_loo, effect_id]
+        for x in metrics:
+            if rank <= x[1]:
+                s.append('1')
+            else:
+                s.append('0')
+        s.append(str(int(rank)))
+        s.append(str(int(score)))
+        s.append(str(float(avg_rank)))
+        s.append(str(float(avg_dist)))
+        s.append(str(float(conf)))
+        ss.append(s)
+    db_benchmark = create_engine(f'sqlite:///{db_name}')
+    # Indication accuracies
+    benchmark_cols = ['cmpd_id', 'effect_id',
+                      'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
+                      'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+    df_temp = pd.DataFrame(ss, columns=benchmark_cols)
+    df_temp.to_sql('ia_results', db_benchmark, if_exists='append', index=False)
+    # Pairwise accuracies
+    benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id',
+                      'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
+                      'top10%', 'top50%', 'top100%', 'rank', 'dist']
+    df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
+    df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
+    return
