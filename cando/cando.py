@@ -963,8 +963,8 @@ class CANDO(object):
                 d_similar = {}
                 #r_similar = {}
                 i = 0
-                for x in distance_matrix:
-                    for y in tqdm(x):
+                for chunk in distance_matrix:
+                    for y in tqdm(chunk):
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar.pop(i)
@@ -2305,7 +2305,7 @@ class CANDO(object):
         print('\n')
 
     def canbenchmark_new(self, file_name, n=100, indications=[], continuous=False, bottom=False,
-                     ranking='standard', adrs=False, approved=False):
+                     ranking='standard', adrs=False, approved=False, addl_metrics=[], write_addl=False):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
         This function tests the performance of canpredict_compounds
@@ -2317,6 +2317,10 @@ class CANDO(object):
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
         modified, and ordinal)
         @param adrs bool: ADRs are used as the Compounds' phenotypic effects instead of Indications
+        @param addl_metrics list of func: functions to compute additional metrics
+            input - iterable of ranks, (iterable of out_ofs), thresholds
+            output - either single # result (eg AUROC) or tuple of one # per threshold
+        @param write_addl bool: Whether to write a results_analysed_named file for each addl_metrics func (default: False)
         @return Returns None
         """
 
@@ -2360,6 +2364,8 @@ class CANDO(object):
         summ = f'summary-{file_name}-{n}{approved_str}.tsv'
         benchmark_name = f"canbenchmark-{file_name}-{n}{approved_str}"
         t_name = f"time-{file_name}-{n}{approved_str}.txt"
+        if write_addl:
+            addl_named = f'results_analysed_named/results_analysed_named-%s-{file_name}-{n}{approved_str}.tsv'
 
         os.makedirs('results_analysed_named', exist_ok=True)
         os.makedirs('raw_results', exist_ok=True)
@@ -2469,11 +2475,12 @@ class CANDO(object):
         if self.ncpus > 1:
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
-            pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects], chunksize=20).get()
+            pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
+                                                 approved, n, self.db_name) for effect in tqdm(effects)], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in tqdm(effects)]
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects]
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -2499,10 +2506,13 @@ class CANDO(object):
         pd.options.display.float_format='{:.3f}'.format
 
         #for effect in tqdm(effects):
+        addl_results = {}
         pbar = tqdm(range(len(effects)))
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
+            addl_results[effect_id] = [[] for met in addl_metrics]
+            addl_list = addl_results[effect_id]
             pbar.set_description(f"    {effect_id}")
             #print(effect_id)
             db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
@@ -2519,8 +2529,11 @@ class CANDO(object):
             #pwa_tot += tot
             c_ideal = [0]*len(cmpds)
             c_ideal[0] = 1
+
+            ranks = []
             for c_idx in df_ia.index:
                 rank = int(df_ia.loc[c_idx,'rank'])
+                ranks.append(rank)
                 c_rank = [0]*len(cmpds)
                 c_rank[rank-1] = 1
                 # Check ranks against each top metric
@@ -2534,41 +2547,12 @@ class CANDO(object):
                     ndcg_l[m[0]].append(dcg(c_rank, int(m[1])) / dcg(c_ideal, int(m[1])))
 
                 # compound-indication results
-                '''
-                if str(df_ia.iloc[c_idx,2]) == '1':
-                #if s[2] == '1':
-                    top_pairwise[0] += 1.0
-                if str(df_ia.iloc[c_idx,3]) == '1':
-                #if s[3] == '1':
-                    top_pairwise[1] += 1.0
-                if str(df_ia.iloc[c_idx,4]) == '1':
-                #if s[4] == '1':
-                    top_pairwise[2] += 1.0
-                if str(df_ia.iloc[c_idx,5]) == '1':
-                #if s[5] == '1':
-                    top_pairwise[3] += 1.0
-                if str(df_ia.iloc[c_idx,6]) == '1':
-                #if s[6] == '1':
-                    top_pairwise[4] += 1.0
-                if str(df_ia.iloc[c_idx,7]) == '1':
-                #if s[7] == '1':
-                    top_pairwise[5] += 1.0
-                if str(df_ia.iloc[c_idx,8]) == '1':
-                #if s[8] == '1':
-                    top_pairwise[6] += 1.0
-                if str(df_ia.iloc[c_idx,9]) == '1':
-                #if s[9] == '1':
-                    top_pairwise[7] += 1.0
-                if str(df_ia.iloc[c_idx,10]) == '1':
-                #if s[10] == '1':
-                    top_pairwise[8] += 1.0
-                if str(df_ia.iloc[c_idx,11]) == '1':
-                #if s[11] == '1':
-                    top_pairwise[9] += 1.0
-                sj = ','.join(df_ia.loc[c_idx,:].values.tolist())
-                sj += '\n'
-                '''
                 ra_out.write(','.join(df_ia.loc[c_idx,:].values.tolist()) + '\n')
+
+            for i in range(len(addl_metrics)):
+                func = addl_metrics[i]
+                results = func(thresholds=metrics, ranks=ranks)
+                addl_list[i] = results
 
             # Pairwise accuracy
             pwa_tot += len(df_pa)
@@ -2592,6 +2576,20 @@ class CANDO(object):
             aia_accs.append(count)
             #print(effect_id,effect.name,count)
         ra_out.close()
+
+        addl_names = [x.__name__ for x in addl_metrics]
+        addl_results['overall'] = [None for met in addl_metrics]
+        for i in range(len(addl_metrics)):
+            avg_list = [0]*len(metrics)
+            
+            for effect in addl_results.keys():
+                if effect == 'overall':
+                    continue
+                for j in range(len(metrics)):
+                    avg_list[j] += addl_results[effect][i][j]
+
+            avg_list = [x/(len(addl_results) - 1) for x in avg_list]
+            addl_results['overall'][i] = avg_list
 
         top_metrics = [str(j) for i,j in metrics]
         aia_accs = [str(sum(sub_list) / len(sub_list)) for sub_list in zip(*aia_accs)]
@@ -2620,6 +2618,18 @@ class CANDO(object):
                 for m in metrics:
                     o.write(f"\t{ndcg[m[0]][effect]:.3f}")
                 o.write(f"\t{effect.name}\n")
+                
+        if write_addl:
+            format_str = '%s\t%d\t' + '\t'.join(['%.3f' for x in metrics]) + '\t%s\n'
+            for i in range(len(addl_metrics)):
+                out = ['effect_id\tcmpds_per_effect\t' + '\t'.join(['top' + str(x[1]) for x in metrics]) + '\teffect_name\n']
+                for effect in effects:
+                    effect_id = effect.id_
+                    out.append(format_str % \
+                               ((effect_id, len(effect.compounds)) + tuple(addl_results[effect_id][i]) + (effect.name,)))
+                with open(addl_named % addl_names[i], 'w') as f:
+                    f.writelines(out)
+
 
         pa = [(i/pwa_tot)*100.0 for i in pwa_count]
 
@@ -2659,7 +2669,13 @@ class CANDO(object):
         print("  Done compiling and saving results.")
 
         # pretty print the average indication accuracies
-        df_summ = pd.DataFrame(list(zip(ia, control_aia, pa, cov, nndcg)), columns=['nAIA','control-nAIA','PA','IC','nNDCG'], index=[headers])
+        if addl_metrics:
+            col_names = ['nAIA','control-nAIA','PA','IC','nNDCG'] + addl_names
+            overalls = addl_results['overall']
+            content = list(zip(ia, control_aia, pa, cov, nndcg, *overalls))
+            df_summ = pd.DataFrame(content, columns=col_names, index=[headers])
+        else:
+            df_summ = pd.DataFrame(list(zip(ia, control_aia, pa, cov, nndcg)), columns=['nAIA','control-nAIA','PA','IC','nNDCG'], index=[headers])
         print("\nSummary")
         print(df_summ.T)
         print()
@@ -2669,6 +2685,8 @@ class CANDO(object):
         print(f"Total time to run canbenchmark_new: {t_tot}\n")
         with open(t_name,'a') as tw:
             tw.write(f"Total time to run canbenchmark_new: {t_tot}")
+
+        return df_summ
 
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
@@ -6741,7 +6759,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
         df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
-        df_pa_results = pd.read_sql("SELECT cmpd_id-1 FROM pa_results", db)
+        df_pa_results = pd.read_sql("SELECT `cmpd_id-1` FROM pa_results", db)
         if len(df_ia_results) == len(effect_cmpds) and len(df_pa_results) == (math.factorial(len(effect_cmpds))/(math.factorial(len(effect_cmpds)-2))):
             return
         else:
