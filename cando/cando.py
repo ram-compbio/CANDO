@@ -2476,11 +2476,12 @@ class CANDO(object):
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 approved, n, self.db_name) for effect in tqdm(effects)], chunksize=20).get()
+                                                 approved, n, self.db_name) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects]
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name)\
+             for effect in tqdm(effects)]
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
