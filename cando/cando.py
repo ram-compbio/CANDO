@@ -964,7 +964,7 @@ class CANDO(object):
                 #r_similar = {}
                 i = 0
                 for chunk in distance_matrix:
-                    for y in tqdm(chunk):
+                    for y in tqdm(chunk): #TQDM3
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar.pop(i)
@@ -1064,7 +1064,7 @@ class CANDO(object):
                     d_similar = {}
                     i = 0
                     for chunk in distance_matrix:
-                        for y in tqdm(chunk):
+                        for y in tqdm(chunk): ##TQDM1
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
@@ -2305,13 +2305,14 @@ class CANDO(object):
         print('\n')
 
     def canbenchmark_new(self, file_name, n=100, indications=[], continuous=False, bottom=False,
-                     ranking='standard', adrs=False, approved=False, addl_metrics=[], write_addl=False):
+                         ranking='standard', adrs=False, approved=False, addl_metrics=[], write_addl=False,\
+                         exclude_indic=False):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
         This function tests the performance of canpredict_compounds
 
         @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
-        @param indications list or str: List of Indication ids to be benchmarked, otherwise all will be used.
+        @param indications list of str: List of Indication ids to be benchmarked, otherwise all will be used.
         @param continuous bool: Use the percentile of distances from the similarity matrix as the benchmarking cutoffs
         @param bottom bool: Reverse the ranking (descending) for the benchmark
         @param ranking str: What ranking method to use for the compounds. This really only affects ties. (standard,
@@ -2320,7 +2321,8 @@ class CANDO(object):
         @param addl_metrics list of func: functions to compute additional metrics
             input - iterable of ranks, (iterable of out_ofs), thresholds
             output - either single # result (eg AUROC) or tuple of one # per threshold
-        @param write_addl bool: Whether to write a results_analysed_named file for each addl_metrics func (default: False)
+        @param write_addl bool: If True, will create a results_analysed_named file for each addl_metrics func (default: False)
+        @param exlude_indic: If True, will only rank left out compound against non-indicated compounds (default: False)
         @return Returns None
         """
 
@@ -2476,12 +2478,12 @@ class CANDO(object):
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 approved, n, self.db_name) for effect in effects], chunksize=20).get()
+                                                 approved, n, self.db_name, exclude_indic) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name)\
-             for effect in tqdm(effects)]
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, exclude_indic)\
+             for effect in tqdm(effects)] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -2506,15 +2508,14 @@ class CANDO(object):
         #for effect_id in ranks.keys():
         pd.options.display.float_format='{:.3f}'.format
 
-        #for effect in tqdm(effects):
         addl_results = {}
-        pbar = tqdm(range(len(effects)))
+        pbar = tqdm(range(len(effects))) #TQDM4
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
             addl_results[effect_id] = [[] for met in addl_metrics]
             addl_list = addl_results[effect_id]
-            pbar.set_description(f"    {effect_id}")
+            #pbar.set_description(f"    {effect_id}")
             #print(effect_id)
             db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
             df_ia = pd.read_sql("SELECT * FROM ia_results",db_benchmark)
@@ -2552,7 +2553,7 @@ class CANDO(object):
 
             for i in range(len(addl_metrics)):
                 func = addl_metrics[i]
-                results = func(thresholds=metrics, ranks=ranks)
+                results = func(thresholds=metrics, ranks=ranks, out_of=len(cmpd_lib) - ((tot - 1) if exclude_indic else 0))
                 addl_list[i] = results
 
             # Pairwise accuracy
@@ -6755,7 +6756,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
-def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db):
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, exclude_indic):
     db_name = f'{d_name}/{effect_id}.db'
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
@@ -6820,7 +6821,6 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             s.append(str(float(dist)))
             pa_ss.append(s)
     del df_dists, c_sorted
-
     for c_loo in effect_cmpds:
         dist_df_loo = dist_df.drop(c_loo)
         score_df_loo = score_df.drop(c_loo)
@@ -6839,6 +6839,11 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
         # This is competitive ranking
         # Add other ranking methods using polars.Series.rank
+        if exclude_indic:
+            other_indic = effect_cmpds[:]
+            other_indic.remove(c_loo)
+            c_df_loo = c_df_loo.filter(~pl.col('id').is_in(other_indic))
+
         c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
 
         rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
