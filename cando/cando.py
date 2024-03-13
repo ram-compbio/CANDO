@@ -643,7 +643,7 @@ class CANDO(object):
                 check = True
         except:
             print("  Data does not exist OR data does not match.")
-            os.system(f"rm {self.db_name}")
+            #os.system(f"rm {self.db_name}")
 
         if not check:
             db = create_engine(f'sqlite:///{self.db_name}')
@@ -686,31 +686,42 @@ class CANDO(object):
                     c2.compounds.append(c1)
             print('Done reading compound-compound associations.\n')
 
-        check=False
         if self.ddi_adrs:
+            print("Building compound pair-adverse events tables...")
+            print("  Checking if data exists in tables...")
+            check = False
             # Check
             # If pass, do not recreate but pull from db
             try:
-                db = create_engine('sqlite:///ddi.db')
-                df_temp = pd.read_sql("SELECT * FROM adrs",db)
-                ddi = pd.read_csv(ddi_adrs, sep='\t')
-                l_adrs = set(ddi.loc[:,'COND_DB_ID'].to_list())
+                #db = create_engine('sqlite:///ddi.db')
+                db = create_engine(f'sqlite:///{self.db_name}')
+                # Pull ADRs from table
+                df_adrs = pd.read_sql("SELECT * FROM adrs",db)
+                # Get ADRs from inputted cmpd_pair-ind mapping
+                ddi = pd.read_csv(self.ddi_adrs, sep='\t')
+                l_adrs = ddi['COND_DB_ID'].drop_duplicates().to_list()
+                # Pull cmpd_pairs from table
+                df_cps = pd.read_sql("SELECT * FROM cmpd_pairs",db)
+                # Get cmpd_pairs from inputted cmpd_pair-ind mapping
+                l_cps = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
+                l_cps = list(set(l_cps))
                 #l_adrs = set(ddi.loc[:,'CONDITION_MESH_ID'].to_list())
-                if len(df_temp)==len(l_adrs):
-                    print("    Data does exist.")
+                if len(df_adrs)==len(l_adrs) and len(df_cps)==len(l_cps):
+                    print("  Data already in tables.")
                     check=True
                 # Check other tables
                 #l_cps = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
             except:
-                print("    Data does not exist.")
-                os.system("rm ddi.db")
+                print("  Data does not exist OR data does not match.")
+                #os.system(f"rm {self.db_name}")
 
         if self.ddi_adrs and check==True:
-            print("Reading adverse drug reaction and compound pair associations from tables...")
+            print("  Reading adverse drug reaction and compound pair associations from tables...")
             # Compound pairs
-            db = create_engine('sqlite:///ddi.db')
+            db = create_engine(f'sqlite:///{self.db_name}')
+            #db = create_engine('sqlite:///ddi.db')
             df_temp = pd.read_sql("SELECT * FROM cmpd_pairs",db)
-            print("  compound pairs")
+            print("    compound pairs")
             for i in tqdm(df_temp.index):
                 cm_p = Compound_pair(ast.literal_eval(df_temp.loc[i,'names']), ast.literal_eval(df_temp.loc[i,'ids']), ast.literal_eval(df_temp.loc[i,'ids']))
                 cm_p.adrs = ast.literal_eval(df_temp.loc[i,'adr_ids'])
@@ -719,13 +730,13 @@ class CANDO(object):
 
             # ADRs
             df_temp = pd.read_sql("SELECT * FROM adrs",db)
-            print("  adverse drug reactions")
+            print("    adverse drug reactions")
             for i in tqdm(df_temp.index):
                 adr = ADR(df_temp.loc[i,'id'],df_temp.loc[i,'name'])
                 adr.compound_pairs = ast.literal_eval(df_temp.loc[i,'cmpd_pair_ids'])
                 self.adrs.append(adr)
                 self.adr_ids.append(adr.id_)
-            print('Done reading adverse drug reaction and compound pair associations.\n')
+            print('  Done reading adverse drug reaction and compound pair associations.\n')
 
             '''
             # ADRS + Compound pairs
@@ -764,8 +775,9 @@ class CANDO(object):
             print("Done generating compound-compound signatures.\n")
 
         if self.ddi_adrs and check==False:
-            db = create_engine('sqlite:///ddi.db')
-            print("Reading compound pair-adverse events associations...")
+            #db = create_engine('sqlite:///ddi.db')
+            db = create_engine(f'sqlite:///{self.db_name}')
+            print("  Reading compound pair-adverse events associations...")
             ddi = pd.read_csv(ddi_adrs,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
             idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
@@ -804,9 +816,8 @@ class CANDO(object):
                     #adr.compound_pairs.append(cm_p)
             print("    {} compound pairs.".format(len(self.compound_pairs)))
             print("    {} adverse events.".format(len(self.adrs)))
-            print('Done reading compound pair-adverse event associations.\n')
- 
-            print("Building compound pair-adverse events tables...")
+            print('  Done reading compound pair-adverse event associations.\n')
+
             print("  adverse drug reactions")
             d_adrs = {str(x.id_): [str(x.name), str(x.compound_pairs)] for x in tqdm(self.adrs)}
             #d_adrs = {str(x.id_): str(x.name) for x in tqdm(self.adrs)}
@@ -824,9 +835,8 @@ class CANDO(object):
             df_cps.rename(columns={0:'names', 1:'adr_ids'},inplace=True)
             #df_cps.rename(columns={0:'names'},inplace=True)
             df_cps.to_sql('cmpd_pairs', db, if_exists='replace')
-            print("Done building compound pair-adverse events tables.\n")
 
-            print("Generating compound-compound signatures...")
+            print("  Generating compound-compound signatures...")
             for cm_p in self.compound_pairs:
                 c1 = self.get_compound(cm_p.id_[0])
                 c2 = self.get_compound(cm_p.id_[1])
@@ -844,7 +854,8 @@ class CANDO(object):
                     cm_p.sig = [max(i,j) for i,j in zip(c1.sig,c2.sig)]
                 elif self.sig_fusion=='average':
                     cm_p.sig = [np.mean([i,j]) for i,j in zip(c1.sig,c2.sig)]
-            print("Done generating compound-compound signatures.\n")
+            print("  Done generating compound-compound signatures.\n")
+        print("Done building compound pair-adverse events tables.\n")
 
         if self.indication_proteins:
             print('Reading indication-gene associations...')
@@ -913,7 +924,8 @@ class CANDO(object):
                
                 try: 
                     #Connecting to sqlite
-                    conn = sqlite3.connect('ddi.db')
+                    #conn = sqlite3.connect('ddi.db')
+                    conn = sqlite3.connect(self.db_name)
                     #Creating a cursor object using the cursor() method
                     cursor = conn.cursor()
                     #Droping dists table if already exists
@@ -944,7 +956,8 @@ class CANDO(object):
                     print("ranks table does not exist.")
                 '''
 
-                db = create_engine('sqlite:///ddi.db')
+                #db = create_engine('sqlite:///ddi.db')
+                db = create_engine(f'sqlite:///{self.db_name}')
                 # put all compound_pair signatures into 2D-array
                 snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
                 snp = np.array(snp)  # convert to numpy form
@@ -2333,13 +2346,10 @@ class CANDO(object):
                 if m >= 60.0:
                     h = m / 60.0
                     m %= 60.0
-                    #print(f"      {h:.0f} hr {m:.0f} min {s:.0f} s.")
                     return f"{h:.0f} hr {m:.0f} min {s:.0f} s"
                 else:
-                    #print(f"      {m:.0f} min {s:.0f} s")
                     return f"{m:.0f} min {s:.0f} s"
             else:
-                #print(f"      {s:.0f} s")
                 return f"{s:.0f} s"
 
         print("Begin running canbenchmark_new...")
@@ -2361,6 +2371,7 @@ class CANDO(object):
 
         approved_str = '-approved' if approved else ''
         ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}{approved_str}.tsv'
+        ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}{approved_str}.tsv"
         ra = f'raw_results/raw_results-{file_name}-{n}{approved_str}.csv'
         pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{approved_str}.csv'
         summ = f'summary-{file_name}-{n}{approved_str}.tsv'
@@ -2422,9 +2433,11 @@ class CANDO(object):
         # This makes everything above irrelevant I think
         effects = [effect for effect in self.indications if len(effect.compounds) > 1]
         if approved:
-            cmpds = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
+            cmpd_lib = [str(self.get_compound(c).id_) for effect in effects for c in effect.compounds]
+            #cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
         else:
-            cmpds = [str(c.id_) for c in self.compounds]
+            cmpd_lib = [str(c.id_) for c in self.compounds]
+        cmpd_lib = list(set(cmpd_lib))
         def cont_metrics():
             all_v = []
             for c in self.compounds:
@@ -2443,7 +2456,7 @@ class CANDO(object):
                        (10, all_v_sort[int(avl / 1.0) - 1])]
             return metrics
 
-        x = (len(cmpds)) / 100.0  # changed this...no reason to use similar instead of compounds
+        x = (len(cmpd_lib)) / 100.0  # changed this...no reason to use similar instead of compounds
         #x = (len(self.compounds)) / 100.0  # changed this...no reason to use similar instead of compounds
         # had to change from 100.0 to 100.0001 because the int function
         # would chop off an additional value of 1 for some reason...
@@ -2463,17 +2476,13 @@ class CANDO(object):
                                                                    metrics[8][1], metrics[9][1]))
         else:
             ra_out.write(f"compound_id,effect_id,top10,top25,top50,top100,"
-                         f"top{len(cmpds)},top1%,top5%,top10%,top50%,top100%,"
+                         f"top{len(cmpd_lib)},top1%,top5%,top10%,top50%,top100%,"
                          f"rank,score,avg_rank,avg_dist,conf\n")
             pwr_out.write(f"cmpd_id-1,cmpd_id-2,effect_id,top10,top25,top50,top100,"
-                          f"top{len(cmpds)},top1%,top5%,top10%,top50%,top100%,"
+                          f"top{len(cmpd_lib)},top1%,top5%,top10%,top50%,top100%,"
                           f"rank,dist\n")
         print("  Calculating scores...")
         start_calc = time.time()
-        if approved:
-            cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications) >= 1]
-        else:
-            cmpd_lib = [str(c.id_) for c in self.compounds]
         if self.ncpus > 1:
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
@@ -2529,14 +2538,14 @@ class CANDO(object):
                 effect_dct[(effect, tot)][m] = 0.0
                 ndcg_l[m[0]] = []
             #pwa_tot += tot
-            c_ideal = [0]*len(cmpds)
+            c_ideal = [0]*len(cmpd_lib)
             c_ideal[0] = 1
 
             ranks = []
             for c_idx in df_ia.index:
                 rank = int(df_ia.loc[c_idx,'rank'])
                 ranks.append(rank)
-                c_rank = [0]*len(cmpds)
+                c_rank = [0]*len(cmpd_lib)
                 c_rank[rank-1] = 1
                 # Check ranks against each top metric
                 for idx,m in enumerate(metrics):
@@ -2583,7 +2592,7 @@ class CANDO(object):
         addl_results['overall'] = [None for met in addl_metrics]
         for i in range(len(addl_metrics)):
             avg_list = [0]*len(metrics)
-            
+
             for effect in addl_results.keys():
                 if effect == 'overall':
                     continue
@@ -2609,18 +2618,14 @@ class CANDO(object):
         #ss = sorted(ss, key=lambda xx: int(xx[0]))
 
         # NDCG - results_analysed_named
-        if approved:
-            ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}-approved.tsv"
-        else:
-            ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}.tsv"
         with open(ra_named_ndcg, 'w') as o:
-            o.write(f"effect_id\tcmpds_per_effect\ttop10\ttop25\ttop50\ttop100\ttop{len(cmpds)}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\teffect_name\n")
+            o.write(f"effect_id\tcmpds_per_effect\ttop10\ttop25\ttop50\ttop100\ttop{len(cmpd_lib)}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\teffect_name\n")
             for effect in effects:
                 o.write(f"{effect.id_}\t{len(effect.compounds)}")
                 for m in metrics:
                     o.write(f"\t{ndcg[m[0]][effect]:.3f}")
                 o.write(f"\t{effect.name}\n")
-                
+
         if write_addl:
             format_str = '%s\t%d\t' + '\t'.join(['%.3f' for x in metrics]) + '\t%s\n'
             for i in range(len(addl_metrics)):
@@ -2641,6 +2646,7 @@ class CANDO(object):
             for m_i in range(len(metrics)):
                 if accs[metrics[m_i]] > 0.0:
                     cov[m_i] += 1
+        cov = map(int, cov)
 
         nndcg = [0.0] * 10
         for idx, m in enumerate(metrics):
@@ -2649,12 +2655,6 @@ class CANDO(object):
                 l.append(ndcg[m[0]][effect])
             nndcg[idx] = np.mean(l)
 
-        if continuous:
-            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
-                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
-        else:
-            headers = ['top10', 'top25', 'top50', 'top100', 'top{}'.format(len(cmpds)),
-                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
         # Create average indication accuracy list in percent
         ia = []
         for m in metrics:
@@ -2666,10 +2666,16 @@ class CANDO(object):
         # Control calculation
         control_aia = []
         for n in range(len(metrics)):
-            p = hypergeom.pmf(1, len(cmpds), 1, metrics[n][1])
+            p = hypergeom.pmf(1, len(cmpd_lib), 1, metrics[n][1])
             control_aia.append(p * 100.0)
         print("  Done compiling and saving results.")
 
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}',
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
         # pretty print the average indication accuracies
         if addl_metrics:
             col_names = ['nAIA','control-nAIA','PA','IC','nNDCG'] + addl_names
@@ -3195,8 +3201,8 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-    def canbenchmark_ddi(self, file_name, adrs=[], continuous=False,
-                          bottom=False, ranking='standard', ncpus=1):
+    def canbenchmark_ddi(self, file_name, adrs=[], continuous=False, n=100, approved=False,
+                          bottom=False, ranking='standard'):
         """!
         Benchmarks the platform based on compound pairs known to cause ADRs
 
@@ -3208,8 +3214,20 @@ class CANDO(object):
         modified, and ordinal)
         @return Returns None
         """
-        ncpus = int(ncpus)
-        adrs = True
+
+        def print_time(s):
+            if s >= 60:
+                m = s / 60.0
+                s %= 60.0
+                if m >= 60.0:
+                    h = m / 60.0
+                    m %= 60.0
+                    return f"{h:.0f} hr {m:.0f} min {s:.0f} s"
+                else:
+                    return f"{m:.0f} min {s:.0f} s"
+            else:
+                return f"{s:.0f} s"
+
         '''
         if (continuous and self.indication_pathways) or (continuous and self.indication_proteins):
             print('Continuous benchmarking and indication-based signatures are not compatible, quitting.')
@@ -3225,6 +3243,25 @@ class CANDO(object):
                     #cm_p.similar = sorted_scores
                     cm_p.similar_sorted = True
         '''
+        print("Begin running canbenchmark_ddi...")
+        start = time.time()
+
+        adrs = True
+
+        approved_str = '-approved' if approved else ''
+        ra_named = f'results_analysed_named/results_analysed_named-ddi_adr-{file_name}-{n}{approved_str}.tsv'
+        ra_named_ndcg = f"results_analysed_named/results_analysed_named-ddi_adr-ndcg-{file_name}-{n}{approved_str}.tsv"
+        ra = f'raw_results/raw_results-ddi_adr-{file_name}-{n}{approved_str}.csv'
+        pwr = f'pairwise_results/pairwise_results-ddi_adr-{file_name}-{n}{approved_str}.csv'
+        summ = f'summary-ddi_adr-{file_name}-{n}{approved_str}.tsv'
+        benchmark_name = f"canbenchmark-ddi_adr-{file_name}-{n}{approved_str}"
+        t_name = f"time-ddi_adr-{file_name}-{n}{approved_str}.txt"
+
+        '''
+        os.makedirs('results_analysed_named', exist_ok=True)
+        os.makedirs('raw_results', exist_ok=True)
+        os.makedirs('pairwise_results', exist_ok=True)
+        os.makedirs(benchmark_name, exist_ok=True)
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
             #os.system('mkdir results_analysed_named')
@@ -3237,8 +3274,14 @@ class CANDO(object):
         ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-ddi_adr.tsv'
         ra = 'raw_results/raw_results_' + file_name + '-ddi_adr.csv'
         summ = 'summary_' + file_name + '-ddi_adr.tsv'
-        
+        '''
+
         ra_out = open(ra, 'w')
+        pwr_out = open(pwr, 'w')
+
+        def dcg(l,k):
+            dcg = [((2**x)-1)/(math.log2(i+1)) for i,x in enumerate(l[:k],1)]
+            return np.sum(dcg)
 
         def effect_type():
             if adrs:
@@ -3296,16 +3339,23 @@ class CANDO(object):
         else:
             effects = self.indications
 
+
+        effects = [effect for effect in self.adrs if len(effect.compound_pairs) > 1]
+        if approved:
+            cp_lib = [str(cp.id_) for cp in self.compound_pairs if len(cp.adrs)>=1]
+        else:
+            cp_lib = [str(cp.id_) for cp in self.compound_pairs]
+
         def cont_metrics():
             all_v = []
-            for c in self.compound_pairs:
+            for cp in self.compound_pairs:
                 # Create a sorted similar list on-the-fly for each compound pair
-                c_sorted = self.generate_similar_sigs_cp(c, sort=True, ncpus=self.ncpus)
+                cp_sorted = self.generate_similar_sigs_cp(cp, sort=True, ncpus=self.ncpus)
                 # Iterate through the sorted list
-                for c_sim in c_sorted:
-                    c_dist = c_sorted[c_sim]
-                    if c_dist != 0.0:
-                        all_v.append(c_dist)
+                for cp_sim in cp_sorted:
+                    cp_dist = cp_sorted[cp_sim]
+                    if cp_dist != 0.0:
+                        all_v.append(cp_dist)
             avl = len(all_v)
             all_v_sort = sorted(all_v)
             # for tuple 10, have to add the '-1' for index out of range reasons
@@ -3333,8 +3383,8 @@ class CANDO(object):
                                                                      metrics[5][1], metrics[6][1], metrics[7][1],
                                                                      metrics[8][1], metrics[9][1]))
         else:
-            ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
-                         "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
+            ra_out.write(f"cmpd_pair_id,effect_id,top10,top25,top50,top100,"
+                         f"top{len(self.compound_pairs)},top1%,top5%,top10%,top50%,top100%,rank\n")
         
 
         # Calculate all similar first
@@ -3360,16 +3410,26 @@ class CANDO(object):
 
         # ZF - edit 02//06/23
         # Fixed to work with the sqlite
-        print("Running canbenchmark...")
-        os.makedirs("ddi_benchmark",exist_ok=True)
-        if ncpus > 1:
-            pool = mp.Pool(ncpus)
-            accs = pool.starmap_async(self.calc_accuracies_cmpd_pairs, [(effect.id_, effect.compound_pairs, metrics) for effect in effects]).get()
+        print("  Calculating scores...")
+        start_calc = time.time()
+        os.makedirs(benchmark_name,exist_ok=True)
+        if self.ncpus > 1:
+            pool = mp.Pool(self.ncpus)
+            #accs = pool.starmap_async(self.calc_accuracies_cmpd_pairs, [(effect.id_, effect.compound_pairs, metrics) for effect in effects]).get()
+            pool.starmap_async(ind_accuracies_cmpd_pair, [(effect.id_, effect.compound_pairs, cp_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects]).get()
             pool.close
             pool.join
         else:
-            accs = [self.calc_accuracies_cmpd_pairs_new(effect.id_, effect.compound_pairs, metrics) for effect in tqdm(effects)]
+            [ind_accuracies_cmpd_pair(effect.id_, effect.compound_pairs, cp_lib, benchmark_name, metrics, approved, n, self.db_name) for effect in effects]
+            #accs = [self.calc_accuracies_cmpd_pairs_new(effect.id_, effect.compound_pairs, metrics) for effect in tqdm(effects)]
+        t_calc = print_time(time.time() - start_calc)
+        print("  Done calculating scores.")
+        print(f"  Time to calculate scores: {t_calc}")
+        with open(t_name,'w') as tw:
+            tw.write(f"Number of CPUs: {self.ncpus}\n")
+            tw.write(f"Time to calculate scores: {t_calc}\n")
 
+        print("  Compiling and saving results...")
         # Average Indication Accuracy
         aia_accs = []
         # Pairwise Accuracy
@@ -3378,31 +3438,53 @@ class CANDO(object):
         top_pairwise = [0.0] * 10
         # Coverage
         cov_count = [0]*len(metrics)
+        # NDCG
+        ndcg = {}
+        for m in metrics:
+            ndcg[m[0]] = {}
         # Results_analysed_named
         #for effect_id in ranks.keys():
-        for effect in effects:
+        #for effect in effects:
+        #    effect_id = effect.id_
+        #    print(effect_id)
+
+        pd.options.display.float_format='{:.3f}'.format
+
+        #for effect in tqdm(effects):
+        pbar = tqdm(range(len(effects)))
+        for i in pbar:
+            effect = effects[i]
             effect_id = effect.id_
-            print(effect_id)
-            db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
-            df_benchmark = pd.read_sql(f"SELECT * FROM results",db_benchmark)
+            pbar.set_description(f"    {effect_id}")
+            db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
+            df_ia = pd.read_sql(f"SELECT * FROM ia_results",db_benchmark)
+            df_pa = pd.read_sql(f"SELECT * FROM pa_results",db_benchmark)
             #effect = self.get_adr(effect_id)
             count = [0.0]*len(metrics)
             tot = len(effect.compound_pairs)
             effect_dct[(effect, tot)] = {}
+            ndcg_l = {}
             for m in metrics:
                 effect_dct[(effect, tot)][m] = 0.0
-            pwa_tot += tot
+                ndcg_l[m[0]] = []
+            #pwa_tot += tot
+            c_ideal = [0]*len(cp_lib)
+            c_ideal[0] = 1
             #for cp_query in ranks[effect_id].keys():
-            for cp_idx in df_benchmark.index:
-                rank = int(df_benchmark.loc[cp_idx,'rank'])
+            for cp_idx in df_ia.index:
+                rank = int(df_ia.loc[cp_idx,'rank'])
+                c_rank = [0]*len(cp_lib)
+                c_rank[rank-1] = 1
                 # Check ranks against each top metric
                 for idx,m in enumerate(metrics):
                     #if ranks[effect_id][cp_query][1] <= m[1]:
                     if rank <= m[1]:
                         effect_dct[(effect, tot)][m] += 1.0
                         count[idx]+=1.0
-                        pwa_count[idx]+=1.0
-
+                        #pwa_count[idx]+=1.0
+                    # NDCG
+                    ndcg_l[m[0]].append(dcg(c_rank, int(m[1])) / dcg(c_ideal, int(m[1])))
+                '''
                 # pairwise results
                 if str(df_benchmark.iloc[cp_idx,2]) == '1':
                 #if s[2] == '1':
@@ -3437,6 +3519,12 @@ class CANDO(object):
                 sj = ','.join(df_benchmark.loc[cp_idx,:].values.tolist())
                 sj += '\n'
                 ra_out.write(sj)
+                '''
+                ra_out.write(','.join(df_ia.loc[cp_idx,:].values.tolist()) + '\n')
+
+            # NDCG
+            for m in metrics:
+                ndcg[m[0]][effect] = np.mean(ndcg_l[m[0]])
 
             count = [(i/tot)*100.0 for i in count]
             for idx,i in enumerate(count):
@@ -3446,21 +3534,36 @@ class CANDO(object):
             #print(effect_id,effect.name,count)
         ra_out.close()
 
-        top_metrics = [str(j) for i,j in metrics]
-        aia_accs = [str(sum(sub_list) / len(sub_list)) for sub_list in zip(*aia_accs)]
-        pwa_accs = [str((i/pwa_tot)*100.0) for i in pwa_count]
-        cov_count = [str(i) for i in cov_count]
+        # Pairwise accuracy
+        pwa_tot += len(df_pa)
+        for c_idx in df_pa.index:
+            rank = int(df_pa.loc[c_idx, 'rank'])
+            for idx, m in enumerate(metrics):
+                # if ranks[effect_id][cp_query][1] <= m[1]:
+                if rank <= m[1]:
+                    pwa_count[idx] += 1.0
+            pwr_out.write(','.join(df_pa.loc[c_idx, :].values.tolist()) + '\n')
+        pa = [(i/pwa_tot)*100.0 for i in pwa_count]
 
-        print("\t".join(top_metrics))
-        print("\t".join(aia_accs))
-        print("\t".join(pwa_accs))
-        print("\t".join(cov_count))
-        # Fix later
-        self.accuracies = effect_dct
-        final_accs = self.results_analysed(ra_named, metrics, effect_type())
-        #ss = sorted(ss, key=lambda xx: xx[0])
-        #ss = sorted(ss, key=lambda xx: int(xx[0]))
+        # NDCG - results_analysed_named
+        with open(ra_named_ndcg, 'w') as o:
+            o.write(
+                f"effect_id\tcmpd_pairs_per_effect\ttop10\ttop25\ttop50\ttop100\ttop{len(cp_lib)}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\teffect_name\n")
+            for effect in effects:
+                o.write(f"{effect.id_}\t{len(effect.compounds)}")
+                for m in metrics:
+                    o.write(f"\t{ndcg[m[0]][effect]:.3f}")
+                o.write(f"\t{effect.name}\n")
 
+        # Create average NDCG
+        nndcg = [0.0] * 10
+        for idx, m in enumerate(metrics):
+            l = []
+            for effect in effects:
+                l.append(ndcg[m[0]][effect])
+            nndcg[idx] = np.mean(l)
+
+        # Indication coverage
         cov = [0] * 10
         for effect, c in list(self.accuracies.keys()):
             accs = self.accuracies[effect, c]
@@ -3468,21 +3571,46 @@ class CANDO(object):
                 v = accs[metrics[m_i]]
                 if v > 0.0:
                     cov[m_i] += 1
+        cov = map(int, cov)
 
-        if continuous:
-            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
-                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
-        else:
-            headers = ['top10', 'top25', 'top50', 'top100', 'top{}'.format(len(self.compound_pairs)),
-                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        #top_metrics = [str(j) for i,j in metrics]
+        #aia_accs = [str(sum(sub_list) / len(sub_list)) for sub_list in zip(*aia_accs)]
+        #pwa_accs = [str((i/pwa_tot)*100.0) for i in pwa_count]
+        #cov_count = [str(i) for i in cov_count]
+
+        #print("\t".join(top_metrics))
+        #print("\t".join(aia_accs))
+        #print("\t".join(pwa_accs))
+        #print("\t".join(cov_count))
+        # Fix later
+        self.accuracies = effect_dct
+        final_accs = self.results_analysed(ra_named, metrics, effect_type())
+        #ss = sorted(ss, key=lambda xx: xx[0])
+        #ss = sorted(ss, key=lambda xx: int(xx[0]))
+
         # Create average indication accuracy list in percent
         ia = []
         for m in metrics:
             ia.append(final_accs[m] * 100.0)
         # Create average pairwise accuracy list in percent
-        pa = [(x * 100.0 / pwa_tot) for x in top_pairwise]
-        # Indication coverage
-        cov = map(int, cov)
+        #pa = [(x * 100.0 / pwa_tot) for x in top_pairwise]
+
+        # Control calculation
+        control_aia = []
+        for n in range(len(metrics)):
+            p = hypergeom.pmf(1, len(cp_lib), 1, metrics[n][1])
+            control_aia.append(p * 100.0)
+
+        print("  Done compiling and saving results.")
+
+        '''
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', f'top{len(cp_lib)}',
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+                               
         # Append 3 lists to df and write to file
         with open(summ, 'w') as sf:
             sf.write("\t" + '\t'.join(headers) + '\n')
@@ -3490,14 +3618,26 @@ class CANDO(object):
             pwst = "\t".join(map(str, [format(x, ".3f") for x in pa]))
             icst = "\t".join(map(str, cov)) + '\n'
             sf.write('aia\t{}\napa\t{}\nic\t{}\n'.format(iast, pwst, icst))
+        '''
 
         # pretty print the average indication accuracies
-        cut = 0
-        print("\taia")
-        for m in metrics:
-            print("{}\t{:.3f}".format(headers[cut], final_accs[m] * 100.0))
-            cut += 1
-        print('\n')
+        if continuous:
+            headers = ['0.1%ile', '.25%ile', '0.5%ile', '1%ile', '5%ile',
+                       '10%ile', '20%ile', '33%ile', '50%ile', '100%ile']
+        else:
+            headers = ['top10', 'top25', 'top50', 'top100', f'top{len(cp_lib)}',
+                       'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        df_summ = pd.DataFrame(list(zip(ia, control_aia, pa, cov, nndcg)), columns=['nAIA','control-nAIA','PA','IC','nNDCG'], index=[headers])
+        print("\nSummary")
+        print(df_summ.T)
+        print()
+        df_summ.T.to_csv(summ, float_format='%.3f', sep='\t')
+        t_tot = print_time(time.time()-start)
+        print("Done running canbenchmark_ddi.")
+        print(f"Total time to run canbenchmark_ddi: {t_tot}\n")
+        with open(t_name,'a') as tw:
+            tw.write(f"Total time to run canbenchmark_ddi: {t_tot}")
+
 
     def calc_accuracies_cmpd_pairs(self, effect_id, cmpd_pairs, metrics):
         if os.path.exists(f'ddi_benchmark/{effect_id}.db'):
@@ -3519,7 +3659,8 @@ class CANDO(object):
             pass
 
 
-        conn = 'sqlite://ddi.db'
+        #conn = 'sqlite://ddi.db'
+        conn = f'sqlite://{self.db_name}'
         #db = create_engine('sqlite:///ddi.db')
         db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
         #df_cp = pd.read_sql(f"SELECT * FROM 'adrs'",db)
@@ -3761,7 +3902,8 @@ class CANDO(object):
             pass
 
 
-        conn = 'sqlite://ddi.db'
+        #conn = 'sqlite://ddi.db'
+        conn = f'sqlite://{self.db_name}'
         #db = create_engine('sqlite:///ddi.db')
         db_benchmark = create_engine(f'sqlite:///ddi_benchmark/{effect_id}.db')
         #df_cp = pd.read_sql(f"SELECT * FROM 'adrs'",db)
@@ -4821,7 +4963,8 @@ class CANDO(object):
         #print("Comparing signature to all CANDO compound pair signatures...")
         #self.generate_similar_sigs_cp(cmpd_pair, sort=True, ncpus=self.ncpus)
         print("Generating ADR predictions using top{} most similar compound pairs...".format(n))
-        conn = 'sqlite://ddi.db'
+        #conn = 'sqlite://ddi.db'
+        conn = f'sqlite://{self.db_name}'
         df_dists = pl.read_sql(f"SELECT * FROM dists WHERE id=={str(cmpd_pair.id_)}", conn)
         c_sorted = json.loads(df_dists.filter(pl.col('id')==str(c)).select(['dists']).item().replace("'",'"'))
         c_sorted = pl.DataFrame(c_sorted)
@@ -4913,7 +5056,8 @@ class CANDO(object):
             self.compound_pair_ids.append(cmpd_pair.id_)
             cmpd_pair.sig = [i+j for i,j in zip(c1.sig,c2.sig)]
         '''
-        conn = 'sqlite://ddi.db'
+        #conn = 'sqlite://ddi.db'
+        conn = f'sqlite://{self.db_name}'
         if verbose:
             print("Using CANDO compound pair {}".format(cmpd_pair.name))
             print("Compound pair has id {} and index {}".format(cmpd_pair.id_, cmpd_pair.index))
@@ -5705,107 +5849,77 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
         x = l_fps.loc[li_bs,0].values.tolist()
         y = l_fps.loc[li_bs].index.tolist()
         z = [float(li_score[li_bs.index(i)]) for i in y]
-        # Pscore
-        if i_score in ['P','CxP','dCxP','avgP','medP']:
-            try:
-                if dist == 'dice':
-                    temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
-                elif dist == 'tani':
-                    temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
-                elif dist == 'cos':
-                    temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
 
-                #Cscore cutoff
-                temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
+        if dist == 'dice':
+            temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
+        elif dist == 'tani':
+            temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
+        elif dist == 'cos':
+            temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
 
-                if i_score == 'dCxP':
-                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-                    if not lig_name:
-                        c_score = stats.percentileofscore(all_scores,temp[1])/100.0
-                        p_score = temp[2]
-                        #p_score = li_score[li_bs.index(temp_c[0])]
-                        scores.append(float(c_score) * float(p_score))
-                    else:
-                        scores.append(temp[0])
-                elif i_score == 'CxP':
-                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-                    if not lig_name:
-                        c_score = temp[1]
-                        p_score = temp[2]
-                        scores.append(float(c_score) * float(p_score))
-                        continue
-                    else:
-                        scores.append(temp[0])
-                elif i_score == 'P':
-                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-                    if not lig_name:
-                        p_score = temp[2]
-                        scores.append(float(p_score))
-                    else:
-                        scores.append(temp[0])
-                elif i_score == 'avgP':
-                    # Will produce a warning when li_score is empty
-                    # temp_p will then == nan, so we check for that
-                    # append 0.00 if True.
-                    temp_p = np.mean(li_score)
-                    if not np.isnan(temp_p):
-                        scores.append(temp_p)
-                    else:
-                        scores.append(0.000)
-                elif i_score == 'medP':
-                    temp_p = np.median(li_score)
-                    if not np.isnan(temp_p):
-                        scores.append(temp_p)
-                    else:
-                        scores.append(0.000)
-            except:
-                if not lig_name:
-                    scores.append(0.000)
-                else:
-                    scores.append("None")
-        # Cscore
-        elif i_score in ['dC','C','avgC','medC']:
-            try:
-                if dist == 'dice':
-                    temp_scores = DataStructs.BulkDiceSimilarity(c_fps[c],x)
-                elif dist == 'tani':
-                    temp_scores = DataStructs.BulkTanimotoSimilarity(c_fps[c],x)
-                elif dist == 'cos':
-                    temp_scores = DataStructs.BulkCosineSimilarity(c_fps[c],x)
+        #Cscore cutoff
+        temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
 
-                #Cscore cutoff
-                temp_scores = [i for i in temp_scores if float(i) >= cscore_cutoff]
-
-                if i_score == 'dC':
-                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-                    if not lig_name:
-                        scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
-                    else:
-                        scores.append(temp[0])
-                elif i_score == 'C':
-                    temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-                    if not lig_name:
-                        scores.append(temp[1])
-                    else:
-                        scores.append(temp[0])
-                elif i_score == 'avgC':
-                    temp_c = np.mean(temp_scores)
-                    if not np.isnan(temp_c):
-                        scores.append(temp_c)
-                    else:
-                        scores.append(0.000)
-                elif i_score == 'medC':
-                    temp_c = np.median(temp_scores)
-                    if not np.isnan(temp_c):
-                        scores.append(temp_c)
-                    else:
-                        scores.append(0.000)
-            except:
-                if not lig_name:
-                    scores.append(0.000)
-                else:
-                    scores.append("None")
-    
+        if i_score == 'dCxP':
+            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            if not lig_name:
+                c_score = stats.percentileofscore(all_scores,temp[1])/100.0
+                scores.append(float(c_score) * float(temp[2]))
+            else:
+                scores.append(temp[0])
+        elif i_score == 'CxP':
+            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            if not lig_name:
+                c_score = temp[1]
+                p_score = temp[2]
+                scores.append(float(temp[1]) * float(temp[2]))
+            else:
+                scores.append(temp[0])
+        elif i_score == 'P':
+            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            if not lig_name:
+                scores.append(float(temp[2]))
+            else:
+                scores.append(temp[0])
+        elif i_score == 'avgP':
+            # Will produce a warning when li_score is empty
+            # temp_p will then == nan, so we check for that
+            # append 0.00 if True.
+            temp_p = np.mean(li_score)
+            if not np.isnan(temp_p):
+                scores.append(temp_p)
+            else:
+                scores.append(0.000)
+        elif i_score == 'medP':
+            temp_p = np.median(li_score)
+            if not np.isnan(temp_p):
+                scores.append(temp_p)
+            else:
+                scores.append(0.000)
+        elif i_score == 'dC':
+            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            if not lig_name:
+                scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
+            else:
+                scores.append(temp[0])
+        elif i_score == 'C':
+            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            if not lig_name:
+                scores.append(temp[1])
+            else:
+                scores.append(temp[0])
+        elif i_score == 'avgC':
+            temp_c = np.mean(list(zip(*temp_scores))[1])
+            if not np.isnan(temp_c):
+                scores.append(temp_c)
+            else:
+                scores.append(0.000)
+        elif i_score == 'medC':
+            temp_c = np.median(list(zip(*temp_scores))[1])
+            if not np.isnan(temp_c):
+                scores.append(temp_c)
+            else:
+                scores.append(0.000)
     return (c, scores)
 
 
@@ -6874,6 +6988,125 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     # Pairwise accuracies
     benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id',
                       'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
+                      'top10%', 'top50%', 'top100%', 'rank', 'dist']
+    df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
+    df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
+    return
+
+def ind_accuracies_cmpd_pair(effect_id, effect_cps, cp_lib, d_name, metrics, approved, n, cando_db):
+    db_name = f'{d_name}/{effect_id}.db'
+    if os.path.exists(db_name):
+        db = create_engine(f'sqlite:///{db_name}')
+        df_ia_results = pd.read_sql("SELECT cmpd_pair_id FROM ia_results", db)
+        df_pa_results = pd.read_sql("SELECT cmpd_pair_id_1 FROM pa_results", db)
+        if len(df_ia_results) == len(effect_cps) and len(df_pa_results) == (math.factorial(len(effect_cps))/(math.factorial(len(effect_cps)-2))):
+            return
+        else:
+            try:
+                # Connecting to sqlite
+                conn = sqlite3.connect(db_name)
+                # Creating a cursor object using the cursor() method
+                cursor = conn.cursor()
+                # Droping dists table if already exists
+                cursor.execute("DROP TABLE ia_results")
+                cursor.execute("DROP TABLE pa_results")
+                # Commit your changes in the database
+                conn.commit()
+                # Closing the connection
+                conn.close()
+            except:
+                # print("dists table does not exist.")
+                pass
+    conn = f'sqlite://{cando_db}'
+    effect_cps = [str(cp) for cp in effect_cps]
+    ss = []
+    pa_ss = []
+    df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(effect_cps)}", connection=conn)
+    dist_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+    if approved:
+        dist_df = dist_df.filter(pl.col('id').is_in(cp_lib))
+    score_df = dist_df.clone()
+    rank_df = dist_df.clone()
+    for c in effect_cps:
+        c_sorted = json.loads(
+            df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
+        c_sorted = pl.DataFrame(c_sorted)
+        if approved:
+            cp_lib_temp = [x for x in cp_lib if x!=c]
+            c_sorted = c_sorted.select(cp_lib_temp)
+        df_temp = c_sorted.transpose().with_columns(pl.Series(name='id', values=c_sorted.columns)).sort('column_0')
+        df_temp = df_temp.with_columns(rank=df_temp['column_0'].rank(method='min'))
+        df_temp = df_temp.with_columns(df_temp['rank'].apply(lambda x: 1 if x <= n else 0).alias(c))
+        score_df = score_df.join(df_temp.select('id',c), on='id', how='left')
+        rank_df = rank_df.join(df_temp.select('id','rank'), on='id', how='left')
+        rank_df = rank_df.rename({'rank': c})
+        dist_df = dist_df.join(df_temp.select('id','column_0'), on='id', how='left')
+        dist_df = dist_df.rename({'column_0': c})
+        # Pairwise accuracy
+        for c2 in effect_cps:
+            if c == c2:
+                continue
+            s = [c, c2, effect_id]
+            rank = rank_df.filter(pl.col('id') == c2)[0, c]
+            dist = dist_df.filter(pl.col('id') == c2)[0, c]
+            for x in metrics:
+                if rank <= x[1]:
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(int(rank)))
+            s.append(str(float(dist)))
+            pa_ss.append(s)
+    del df_dists, c_sorted
+
+    for c_loo in effect_cps:
+        dist_df_loo = dist_df.drop(c_loo)
+        score_df_loo = score_df.drop(c_loo)
+        rank_df_loo = rank_df.drop(c_loo)
+
+        score_df_loo = score_df_loo.with_columns(score=pl.sum_horizontal(score_df_loo.columns[1:]))
+        dist_df_loo = dist_df_loo.with_columns(summed_dist=pl.sum_horizontal(dist_df_loo.columns[1:]))
+        rank_df_loo = rank_df_loo.with_columns(summed_rank=pl.sum_horizontal(rank_df_loo.columns[1:]))
+
+        c_df_loo = dist_df_loo.select('id','summed_dist').join(score_df_loo.select('id','score'), on='id', how='left')
+        c_df_loo = c_df_loo.join(rank_df_loo.select('id','summed_rank'), on='id', how='left')
+        c_df_loo = c_df_loo.with_columns(c_df_loo['score'].apply(lambda x: len(effect_cps)-1 - x).alias('neg_score'))
+        c_df_loo = c_df_loo.with_columns(c_df_loo['summed_rank'].apply(lambda x: x / (len(effect_cps)-1)).alias('avg_rank'))
+        c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cps)-1)).alias('avg_dist'))
+
+        c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
+        # This is competitive ranking
+        # Add other ranking methods using polars.Series.rank
+        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
+
+        rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
+        score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
+        avg_dist = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_dist']
+        avg_rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'avg_rank']
+        conf = 0.5*(score/(len(effect_cps)-1)) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank)
+
+        s = [c_loo, effect_id]
+        for x in metrics:
+            if rank <= x[1]:
+                s.append('1')
+            else:
+                s.append('0')
+        s.append(str(int(rank)))
+        s.append(str(int(score)))
+        s.append(str(float(avg_rank)))
+        s.append(str(float(avg_dist)))
+        s.append(str(float(conf)))
+        ss.append(s)
+    db_benchmark = create_engine(f'sqlite:///{db_name}')
+    # Indication accuracies
+    benchmark_cols = ['cmpd_pair_id', 'effect_id',
+                      'top10', 'top25', 'top50', 'top100', f'top{len(cp_lib)}', 'top1%', 'top5%',
+                      'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+    df_temp = pd.DataFrame(ss, columns=benchmark_cols)
+    df_temp.to_sql('ia_results', db_benchmark, if_exists='append', index=False)
+    # Pairwise accuracies
+    benchmark_cols = ['cmpd_pair_id_1', 'cmpd_pair_id_2', 'effect_id',
+                      'top10', 'top25', 'top50', 'top100', f'top{len(cp_lib)}', 'top1%', 'top5%',
                       'top10%', 'top50%', 'top100%', 'rank', 'dist']
     df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
     df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
