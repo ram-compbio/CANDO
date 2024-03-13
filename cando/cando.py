@@ -977,7 +977,7 @@ class CANDO(object):
                 #r_similar = {}
                 i = 0
                 for chunk in distance_matrix:
-                    for y in chunk: #TQDM3
+                    for y in tqdm(chunk): #TQDM3
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar.pop(i)
@@ -1077,7 +1077,7 @@ class CANDO(object):
                     d_similar = {}
                     i = 0
                     for chunk in distance_matrix:
-                        for y in chunk: ##TQDM1
+                        for y in tqdm(chunk): ##TQDM1
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
@@ -2492,7 +2492,7 @@ class CANDO(object):
             pool.join
         else:
             [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, exclude_indic)\
-             for effect in effects] #TQDM2
+             for effect in tqdm(effects)] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -2518,7 +2518,7 @@ class CANDO(object):
         pd.options.display.float_format='{:.3f}'.format
 
         addl_results = {}
-        pbar = range(len(effects)) #TQDM4
+        pbar = tqdm(range(len(effects))) #TQDM4
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
