@@ -977,7 +977,7 @@ class CANDO(object):
                 #r_similar = {}
                 i = 0
                 for chunk in distance_matrix:
-                    for y in tqdm(chunk): #TQDM3
+                    for y in chunk: #TQDM3
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar.pop(i)
@@ -1077,7 +1077,7 @@ class CANDO(object):
                     d_similar = {}
                     i = 0
                     for chunk in distance_matrix:
-                        for y in tqdm(chunk): ##TQDM1
+                        for y in chunk: ##TQDM1
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
@@ -2492,7 +2492,7 @@ class CANDO(object):
             pool.join
         else:
             [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, exclude_indic)\
-             for effect in tqdm(effects)] #TQDM2
+             for effect in effects] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -2518,7 +2518,7 @@ class CANDO(object):
         pd.options.display.float_format='{:.3f}'.format
 
         addl_results = {}
-        pbar = tqdm(range(len(effects))) #TQDM4
+        pbar = range(len(effects)) #TQDM4
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
@@ -7111,3 +7111,142 @@ def ind_accuracies_cmpd_pair(effect_id, effect_cps, cp_lib, d_name, metrics, app
     df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
     df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
     return
+
+
+
+#---Additional Metric Functions-------------------------------------------------
+def recall(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns recall; equivalent to nAIA when one left out cmpd per trial
+    '''
+    scores = [0]*len(thresholds)
+    for rank in ranks:
+        for i in range(len(thresholds)):
+            if rank <= thresholds[i][1]:
+                scores[i] += 1
+    scores = [100*x/len(ranks) for x in scores]
+    return scores
+
+def precision1(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns averaged precision across all ranks
+        max = 100/threshold for leave-one-out
+    '''
+    scores = [0]*len(thresholds)
+    for rank in ranks:
+        for i in range(len(thresholds)):
+            if rank <= thresholds[i][1] and thresholds[i][1] > 0:
+                scores[i] += 1/thresholds[i][1]
+    scores = [100*x/len(ranks) for x in scores]
+    return scores
+
+def adjust_ranks(ranks):
+    '''
+    ranks - list of int, ranks at which true positives are recalled
+
+    Returns a sorted list of ranks where later ranks are increased as if
+        indicated compounds were all ranked together
+        e.g. [1, 3, 3, 3, 5] becomes [1, 4, 5, 6, 9]
+    Mimics pooling multiple leave-one-out runs into a single trial
+    Does not alter original ranks list
+    '''
+    ranks = sorted(ranks)
+    for i in range(len(ranks)):
+        ranks[i] = ranks[i] + i
+    return ranks
+
+def precision2(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns precision if all attempts ranks are pooled
+        max = min(100, (100*(# of cmpds) / threshold))
+    '''
+    scores = [0]*len(thresholds)
+    for rank in adjust_ranks(ranks):
+        for i in range(len(thresholds)):
+            if rank <= thresholds[i][1]:
+                scores[i] += 1
+    scores = [100*scores[i]/thresholds[i][1] if thresholds[i][1] > 0 else 0 for i in range(len(scores))]
+    return scores
+
+def auroc(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns AUROC through given thresholds
+        Area calculated using trapezoid method
+    '''
+    scores = [0]*len(thresholds)
+    ranks = sorted(ranks)
+    tprs = [0]
+    fprs = [0]
+    i = 0
+    while i < len(ranks):
+        if i+1 < len(ranks) and ranks[i + 1] == ranks[i]:
+            i += 1
+        tprs.append(i + 1)
+        fprs.append((ranks[i]*len(ranks)) - (i + 1))
+        i += 1
+
+    tprs = [x/len(ranks) for x in tprs] + [1]
+    fprs = [x/(len(ranks)*out_of) for x in fprs] + [1]
+    thresholds = [x[1]/out_of for x in thresholds]
+
+    for j in range(len(thresholds)):
+        thresh = thresholds[j]
+        total_area = 0
+        for i in range(1, len(fprs)):
+            if fprs[i] > thresh:
+                run = thresh - fprs[i-1]
+                rise = ((tprs[i] - tprs[i-1])/(fprs[i] - fprs[i -1]))*run
+                total_area += (tprs[i-1]*run) + ((rise*run)/2)
+                break
+            else:
+                run = fprs[i] - fprs[i-1]
+                rise = tprs[i] - tprs[i-1]
+                total_area += (tprs[i-1]*run) + ((rise*run)/2)
+        scores[j] = total_area
+    return scores
+
+def control_auroc(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns AUROC for control curve (slope of 1) at all thresholds
+    '''
+    thresholds = [min(1,x[1]/out_of) for x in thresholds]
+    scores = [0 for x in thresholds]
+    for i in range(len(scores)):
+        scores[i] = (thresholds[i]**2)/2
+    return scores
+
+def ndcg(ranks, thresholds, out_of):
+    '''
+    ranks - list of int, ranks at which true positives recalled
+    thresholds - list of int, ranks above which metrics should be calculated
+    out_of - int, highest possible rank
+
+    Returns NDCG, equivalent to that calculated in canbenchmark
+        Only works for leave-one-out method currently
+    '''
+    dcgs = [0]*len(thresholds)
+    for rank in ranks:
+        for i in range(len(thresholds)):
+            if rank <= thresholds[i][1]:
+                dcgs[i] += 1/math.log(rank + 1, 2)
+    return [x/len(ranks) for x in dcgs]
