@@ -855,7 +855,7 @@ class CANDO(object):
                 elif self.sig_fusion=='average':
                     cm_p.sig = [np.mean([i,j]) for i,j in zip(c1.sig,c2.sig)]
             print("  Done generating compound-compound signatures.\n")
-        print("Done building compound pair-adverse events tables.\n")
+            print("Done building compound pair-adverse events tables.\n")
 
         if self.indication_proteins:
             print('Reading indication-gene associations...')
@@ -897,7 +897,9 @@ class CANDO(object):
                             s = float(scores[j])
                             if similarity:
                                 s = 1 - s
-                            c1.similar.append((self.compounds[j], s))
+                            #c1.similar.append((self.compounds[j], s))
+                            c1.similar.append((j, s))
+
             for c in self.compounds:
                 sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                 c.similar = sorted_scores
@@ -911,6 +913,7 @@ class CANDO(object):
                 print('Computing distances using global pathway signatures...')
                 for c in self.compounds:
                     self.generate_similar_sigs(c, aux=True)
+                    c.similar = [(c.id_,dist)for c,dist in c.similar]
            
             # Still cleaning this code up.
             # Memory issues with full Twosides is a huge limitation
@@ -1023,6 +1026,7 @@ class CANDO(object):
                     #self.compound_pairs[i].similar_sorted = True
                 print('Done computing {} distances for compound pairs.\n'.format(self.dist_metric))
 
+            # Compute distances -- just compounds (not compound pairs)
             else:
                 print('Building {} distance table...'.format(self.dist_metric))
 
@@ -1081,7 +1085,12 @@ class CANDO(object):
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
-                            #self.compounds[i].similar = d_temp
+                            # This is to keep the old versions of canbenchmark and canpredict working
+                            # Need to update those functions to work with sqlite
+                            self.compounds[i].similar = d_temp
+                            self.compounds[i].similar_computed = True
+
+
                             d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
                             d_similar[str(c1)] = str(d_temp)
                             if i % 1000 == 0 or i == len(self.compounds)-1:
@@ -1100,6 +1109,16 @@ class CANDO(object):
                     conn.commit()
                     conn.close()
                     del distance_matrix, d_temp, snp, d_similar
+                elif check:
+                    conn = f'sqlite://{self.db_name}'
+                    df_dists = pl.read_database(query=f"SELECT * FROM dists",
+                                                connection=conn)
+                    for c in self.compounds:
+                        c_id = str(c.id_)
+                        c_sorted = json.loads(df_dists.filter(pl.col('id') == c_id).select(['dists']).item().replace("'", '"'))
+                        c_sorted = [(int(c),c_sorted[c]) for c in c_sorted.keys()]
+                        c.similar = c_sorted
+                        c.similar_computed = True
                 print('Done building {} distance table.\n'.format(self.dist_metric))
 
 
@@ -1826,8 +1845,10 @@ class CANDO(object):
         @return Returns list: Similar Compounds to the given Compound
 
         """
-        q = [cmpd.id_ for cmpd in cmpds]
-        
+        #q = [cmpd.id_ for cmpd in cmpds]
+        q = cmpds
+        cmpds = [self.get_compound(c) for c in cmpds]
+
         if proteins is None:
             ca = [cmpd.sig for cmpd in cmpds]
             oa = [cmpd.sig for cmpd in self.compounds]
@@ -1867,7 +1888,7 @@ class CANDO(object):
 
             if sort:
                 sorted_scores = sorted(cmpds[j].similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                cmpds[j].similar = sorted_scores
+                cmpds[j].similar = [(c.id_,dist) for c,dist in sorted_scores]
                 cmpds[j].similar_computed = True
                 cmpds[j].similar_sorted = True
             else:
@@ -2196,16 +2217,20 @@ class CANDO(object):
             # call c.generate_similar_sigs()
             # use the proteins/pathways specified above
 
-            for c in effect.compounds:
-                for cs in c.similar:
+            for cmpd in effect.compounds:
+                c = self.get_compound(cmpd)
+                for cmpd2 in c.similar:
+                    cs = self.get_compound(cmpd2[0])
                     if adrs:
-                        if effect in cs[0].adrs:
-                            cs_dist = cs[1]
+                        #if effect in cs.adrs:
+                        if cs.id_ in effect.compounds:
+                            cs_dist = cmpd2[1]
                         else:
                             continue
                     else:
-                        if effect in cs[0].indications:
-                            cs_dist = cs[1]
+                        #if effect in cs.indications:
+                        if cs.id_ in effect.compounds:
+                            cs_dist = cmpd2[1]
                         else:
                             continue
 
@@ -2218,7 +2243,7 @@ class CANDO(object):
                         elif ranking == 'standard':
                             value = competitive_standard_bottom(c.similar, cs_dist)
                         elif ranking == 'ordinal':
-                            value = c.similar.index(cs)
+                            value = list(zip(*c.similar))[0].index(cs.id_)
                         else:
                             print("Ranking function {} is incorrect.".format(ranking))
                             exit()
@@ -2227,7 +2252,7 @@ class CANDO(object):
                     elif ranking == 'standard':
                         value = competitive_standard(c.similar, cs_dist)
                     elif ranking == 'ordinal':
-                        value = c.similar.index(cs)
+                        value = c.similar.index(cs.id_)
                     else:    
                         print("Ranking function {} is incorrect.".format(ranking))
                         exit()
@@ -2317,8 +2342,8 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-    def canbenchmark_new(self, file_name, n=100, indications=[], continuous=False, bottom=False,
-                         ranking='standard', adrs=False, approved=False, addl_metrics=[], write_addl=False,\
+    def canbenchmark_new(self, file_name, n=10, indications=[], continuous=False, bottom=False,
+                         ranking='standard', adrs=False, approved=True, addl_metrics=[], write_addl=False,\
                          exclude_indic=False):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
@@ -2715,9 +2740,9 @@ class CANDO(object):
         for ind in cp.indications:
             if len(ind.compounds) >= 2:
                 for c in ind.compounds:
-                    if c.id_ not in good_ids:
-                        good_cs.append(c)
-                        good_ids.append(c.id_)
+                    if c not in good_ids:
+                        good_cs.append(self.get_compound(c))
+                        good_ids.append(c)
         cp.compounds = good_cs
                 
         print('Computing {} distances...'.format(self.dist_metric))
@@ -2730,9 +2755,8 @@ class CANDO(object):
                     pass
                 else:
                     good_sims.append(s)
-            c.similar = good_sims
-            sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-            c.similar = sorted_scores
+            good_sims = [(c.id_,dist) for c,dist in good_sims]
+            c.similar = sorted(good_sims, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
             c.similar_computed = True
             c.similar_sorted = True
         
@@ -2758,7 +2782,7 @@ class CANDO(object):
         for ic in range(len(cp.compounds)):
             cp.generate_similar_sigs(cp.compounds[ic], sort=True)
             sorted_scores = sorted(cp.compounds[ic].similar, key=lambda x: x[1])[::-1]
-            cp.compounds[ic].similar = sorted_scores
+            cp.compounds[ic].similar = [(c.id_,dist) for c,dist in sorted_scores]
             cp.compounds[ic].similar_computed = True
             cp.similar_sorted = True
         
@@ -2867,7 +2891,7 @@ class CANDO(object):
                 return x.sig
 
             def g(x):
-                return x.indications
+                return tuple(x.indications)
 
             def h(x):
                 return x.id_
@@ -2875,7 +2899,7 @@ class CANDO(object):
             sigs = np.array(list(map(f, cmpds)))
             pca = PCA(n_components=10).fit(sigs)
             sigs = pca.transform(sigs)
-            inds = np.array(list(map(g, cmpds)))
+            inds = np.array(map(g, cmpds))
             ids = np.array(list(map(h, cmpds)))
             sigs_train, sigs_test, inds_train, inds_test, ids_train, ids_test = train_test_split(sigs, inds, ids,
                                                                                                  test_size=0.20,
@@ -4153,7 +4177,8 @@ class CANDO(object):
         # gather approved compound signatures for training
         def split_cs(efct, cmpd=None):
             mtrx = []
-            for cm in efct.compounds:
+            for c in efct.compounds:
+                cm = self.get_compound(c)
                 if cmpd:
                     if cm.id_ == cmpd.id_:
                         continue
@@ -4208,7 +4233,8 @@ class CANDO(object):
                 inv = pick_first_last(c, s)
                 return inv
 
-            for ce in efct.compounds:
+            for cmpd in efct.compounds:
+                ce = self.get_compound(cmpd)
                 if hold_out:
                     if ce.id_ == hold_out.id_:
                         continue
@@ -4282,7 +4308,8 @@ class CANDO(object):
                     continue
             tp_fn = [0, 0]
             fp_tn = [0, 0]
-            for c in e.compounds:
+            for cmpd in e.compounds:
+                c = self.get_compound(cmpd)
                 pos = split_cs(e, cmpd=c)
                 negs = choose_negatives(e, s=seed, hold_out=c, avoid=[])
                 already_used = negs[2]
@@ -4624,7 +4651,8 @@ class CANDO(object):
                 self.quantify_pathways(ind)
             else:
                 self.quantify_pathways()
-        for c in ind.compounds:
+        for cmpd in ind.compounds:
+            c = self.get_compound(cmpd)
             if c.similar_computed:
                 continue
             if self.pathways:
@@ -4636,22 +4664,24 @@ class CANDO(object):
 
         print("Generating compound predictions using top{} most similar compounds...\n".format(n))
         c_dct = {}
-        for c in ind.compounds:
+        for cmpd in ind.compounds:
+            c = self.get_compound(cmpd)
             c2_i = 0
             c_count = 0
             while c_count < n:
-                c2 = c.similar[c2_i]
-                if c2[0].status != 'approved' and cmpd_set == 'approved':
+                cmpd2 = c.similar[c2_i]
+                c2 = self.get_compound(cmpd2[0])
+                if c2.status != 'approved' and cmpd_set == 'approved':
                     c2_i += 1
                     continue
-                elif c2[0].is_metabolite and cmpd_set == 'not_metabolite':
+                elif c2.is_metabolite and cmpd_set == 'not_metabolite':
                     c2_i += 1
                     continue
-                if c2[1] == 0.0:
+                if cmpd2[1] == 0.0:
                     c2_i += 1
                     continue
-                already_approved = ind in c2[0].indications
-                k = c2[0].id_
+                already_approved = ind in c2.indications
+                k = c2.id_
                 if k not in c_dct:
                     c_dct[k] = [1, already_approved, c_count]
                 else:
@@ -4728,18 +4758,24 @@ class CANDO(object):
         if topX == -1:
             topX = len(self.indications)
 
+        print(f"Generating indication predictions for {cmpd.name}...")
+
         if type(cmpd) is Compound:
             cmpd = cmpd
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
-        print("Using CANDO compound {}".format(cmpd.name))
-        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
-        print("Comparing signature to all CANDO compound signatures...")
-        self.generate_similar_sigs(cmpd, sort=True)
-        print("Generating indication predictions using top{} most similar compounds...".format(n))
+        print(f"  Compound id = {cmpd.id_}")
+        print(f"  Compound index = {cmpd.index}")
+        print(f"  n = {n}")
+        if not cmpd.similar_computed:
+            print("  Comparing signature to all CANDO compound signatures...")
+            self.generate_similar_sigs(cmpd, sort=True)
+            cmpd.similar = [(c.id_,dist) for c,dist in cmpd.similar]
         i_dct = {}
-        for c in cmpd.similar[0:n]:
-            for ind in c[0].indications:
+        for c in cmpd.similar[:n]:
+            cmpd2 = self.get_compound(c[0])
+            for i in cmpd2.indications:
+                ind = self.get_indication(i)
                 if ind.id_ not in i_dct:
                     i_dct[ind.id_] = [1, len(ind.compounds)]
                 else:
@@ -4774,19 +4810,17 @@ class CANDO(object):
 
         if save:
             fo = open(save, 'w', encoding="utf8")
-            print("Saving the {} highest predicted indications...\n".format(topX))
+            print(f"  Saving the {top} highest predicted indications...")
             fo.write("rank\tprobability\tscore\tind_id\tindication\n")
-        else:
-            print("Printing the {} highest predicted indications...\n".format(topX))
-            print("rank\tprobability\tscore\tind_id    \tindication")
+        print(f"  Printing the {topX} highest predicted indications...\n")
+        print("rank\tprobability\tscore\tind_id    \tindication")
         n_print = topX if len(sorted_x) >= topX else len(sorted_x)
         for i in range(n_print):
             indd = self.get_indication(sorted_x[i][0])
             prb = '%.2e' % Decimal(sorted_x[i][1][1])
+            print("{}\t{}\t{}\t{}\t{}".format(i + 1, prb.ljust(11), sorted_x[i][1][0], indd.id_, indd.name))
             if save:
                 fo.write("{}\t{}\t{}\t{}\t{}\n".format(i+1, prb, sorted_x[i][1][0], indd.id_, indd.name))
-            else:
-                print("{}\t{}\t{}\t{}\t{}".format(i+1, prb.ljust(11), sorted_x[i][1][0], indd.id_, indd.name))
         if save:
             fo.close()
         print('')
@@ -5212,28 +5246,33 @@ class CANDO(object):
         @param save str: path to the file where the results will be written. If empty then results will only be printed. Default: ''.
         @return Returns None
         """
+        print(f"Generating most similar compounds for {cmpd.name}...")
+
         if type(cmpd) is Compound:
             cmpd = cmpd
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
         # Add ability to generate simialr list from an iputted signature
         #elif type(cmpd) is list:
-        print("Using CANDO compound {}".format(cmpd.name))
-        print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
-        print("Comparing signature to all CANDO compound signatures...")
-        self.generate_similar_sigs(cmpd, sort=True)
-        print("Printing top{} most similar compounds...\n".format(n))
-        print("rank\tdist\tid\tname")
+        print(f"Compound id = {cmpd.id_}")
+        print(f"Compound index = {cmpd.index}")
+        if not cmpd.similar_computed:
+            print("Comparing signature to all CANDO compound signatures...")
+            self.generate_similar_sigs(cmpd, sort=True)
+            cmpd.similar = [(c.id_,dist) for c,dist in cmpd.similar]
+        print(f"  Printing {n} most similar compounds...\n")
+        print("  rank\tdist\tid\tname")
         for i in range(n+1):
-            print("{}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
+            c = self.get_compound(cmpd.similar[i][0])
+            print("  {}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], c.id_, c.name))
         print('\n')
         if save:
-            print("Saving top{} most similar compounds...\n".format(n))
+            print(f"  Saving {n} most similar compounds...")
             with open(save, 'w', encoding="utf8") as o:
                 o.write("rank\tdist\tid\tname")
                 for i in range(n+1):
                     o.write("{}\t{:.3f}\t{}\t{}\n".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
-            print("Results saved to {}.\n".format(save))
+            print(f"  Results saved to {save}.\n")
         return
 
     def add_cmpd(self, new_sig, new_name=''):
@@ -5256,15 +5295,18 @@ class CANDO(object):
         cmpd = Compound(new_name, i, i)
         cmpd.sig = n_sig
         self.compounds.append(cmpd)
+        self.compound_ids.append(cmpd.id_)
 
         if self.compounds[0].similar_computed or len(self.compounds[0].similar) > 1:
             dists = self.generate_similar_sigs(cmpd, sort=True)
             for c, dist in dists:
-                c.similar.append((cmpd, dist))
+                c.similar.append((cmpd.id_, dist))
                 c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-
+            dists = sorted(dists, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+        cmpd.similar = [(c.id_,dist) for c,dist in cmpd.similar]
+        print(cmpd.similar)
         print("New compound is " + cmpd.name)
-        print("New compound has id {} and index {}".format(cmpd.id_, cmpd.index))
+        print(f"New compound has id {cmpd.id_} and index {cmpd.index}.\n")
 
     def sigs(self, rm):
         """!
@@ -5302,7 +5344,7 @@ class CANDO(object):
         @param method str: Method of fusion to be used (e.g., sum, mult, etc.)
         @return Returns CANDO object
         """
-        print("Fusing CANDO objects using " + method)
+        print(f"Fusing CANDO objects using {method}...")
         cnd = CANDO(self.c_map, self.i_map)
         if self.rm_cmpds:
             cnd.compounds = self.compounds
@@ -5319,12 +5361,12 @@ class CANDO(object):
             cid_to_ranks[c.id_] = {}
             sims = c.similar
             for i in range(len(sims)):
-                cid_to_ranks[c.id_][sims[i][0].id_] = [i]
+                cid_to_ranks[c.id_][sims[i][0]] = [i]
         for cando_obj in cando_objs:
             for c2 in cando_obj.compounds:
                 sims2 = c2.similar
                 for j in range(len(sims2)):
-                    cid_to_ranks[c2.id_][sims2[j][0].id_].append(j)
+                    cid_to_ranks[c2.id_][sims2[j][0]].append(j)
         for c3 in cnd.compounds:
             ranks_dct = cid_to_ranks[c3.id_]
             for c4 in cnd.compounds:
@@ -5352,6 +5394,7 @@ class CANDO(object):
             cf.similar = sorted_scores
             cf.similar_computed = True
             cf.similar_sorted = True
+        print(f"Fusion of CANDO objects complete.\n")
         return cnd
 
     def normalize(self):
@@ -5818,10 +5861,10 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
    
     mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
-    
-    end = time.time()
-    print("Matrix written to {}/{}.".format(out_path,out_file))
-    print_time(end-start) 
+    print(f"  Matrix written to {out_path}/{out_file}.")
+
+    tot_time = print_time(time.time()-start)
+    print(f"Matrix generation completed in {tot_time}.\n")
 
 
 def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[],lig_name=False):
@@ -6278,9 +6321,8 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
            
-            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
-                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
-                                 ignore_index=True)
+            d_map = pd.concat([d_map, pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])], axis=1)
             rad = int(int(fp[7:])/2)
             if fp[3] == 'f':
                 features = True
@@ -6908,8 +6950,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     score_df = dist_df.clone()
     rank_df = dist_df.clone()
     for c in effect_cmpds:
-        c_sorted = json.loads(
-            df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
+        c_sorted = json.loads(df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
         c_sorted = pl.DataFrame(c_sorted)
         if approved:
             cmpd_lib_temp = [x for x in cmpd_lib if x!=c]
