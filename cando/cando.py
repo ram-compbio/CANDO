@@ -5707,15 +5707,15 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     def print_time(s):
         if s >= 60:
             m = s / 60.0
-            s -= m * 60.0
+            s %= 60.0
             if m >= 60.0:
                 h = m / 60.0
-                m -= h * 60.0
-                print("Matrix generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
+                m %= 60.0
+                return f"{h:.0f} hr {m:.0f} min {s:.0f} s"
             else:
-                print("Matrix generation took {:.0f} min {:.0f} s to finish.".format(m, s))
+                return f"{m:.0f} min {s:.0f} s"
         else:
-            print("Matrix generation took {:.0f} s to finish.".format(s))
+            return f"{s:.0f} s"
 
     print("Generating CANDO matrix...")
     start = time.time()
@@ -5805,11 +5805,8 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
         c_list = list(c_fps.keys())
 
     if ncpus > 1:
-        pbar = tqdm(total=len(c_list))
-        def update(*a):
-            pbar.update()
         pool = mp.Pool(ncpus)
-        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in tqdm(c_list)], callback=update).get()
+        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list], chunksize=20).get()
         pool.close
         pool.join
     else:
@@ -5850,76 +5847,82 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
         y = l_fps.loc[li_bs].index.tolist()
         z = [float(li_score[li_bs.index(i)]) for i in y]
 
-        if dist == 'dice':
-            temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
-        elif dist == 'tani':
-            temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
-        elif dist == 'cos':
-            temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
+        try:
+            if dist == 'dice':
+                temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
+            elif dist == 'tani':
+                temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
+            elif dist == 'cos':
+                temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
 
-        #Cscore cutoff
-        temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
-
-        if i_score == 'dCxP':
-            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+            #Cscore cutoff
+            temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
+    
+            if i_score == 'dCxP':
+                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                if not lig_name:
+                    c_score = stats.percentileofscore(all_scores,temp[1])/100.0
+                    scores.append(float(c_score) * float(temp[2]))
+                else:
+                    scores.append(temp[0])
+            elif i_score == 'CxP':
+                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                if not lig_name:
+                    c_score = temp[1]
+                    p_score = temp[2]
+                    scores.append(float(temp[1]) * float(temp[2]))
+                else:
+                    scores.append(temp[0])
+            elif i_score == 'P':
+                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                if not lig_name:
+                    scores.append(float(temp[2]))
+                else:
+                    scores.append(temp[0])
+            elif i_score == 'avgP':
+                # Will produce a warning when li_score is empty
+                # temp_p will then == nan, so we check for that
+                # append 0.00 if True.
+                temp_p = np.mean(li_score)
+                if not np.isnan(temp_p):
+                    scores.append(temp_p)
+                else:
+                    scores.append(0.000)
+            elif i_score == 'medP':
+                temp_p = np.median(li_score)
+                if not np.isnan(temp_p):
+                    scores.append(temp_p)
+                else:
+                    scores.append(0.000)
+            elif i_score == 'dC':
+                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                if not lig_name:
+                    scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
+                else:
+                    scores.append(temp[0])
+            elif i_score == 'C':
+                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                if not lig_name:
+                    scores.append(temp[1])
+                else:
+                    scores.append(temp[0])
+            elif i_score == 'avgC':
+                temp_c = np.mean(list(zip(*temp_scores))[1])
+                if not np.isnan(temp_c):
+                    scores.append(temp_c)
+                else:
+                    scores.append(0.000)
+            elif i_score == 'medC':
+                temp_c = np.median(list(zip(*temp_scores))[1])
+                if not np.isnan(temp_c):
+                    scores.append(temp_c)
+                else:
+                    scores.append(0.000)
+        except:
             if not lig_name:
-                c_score = stats.percentileofscore(all_scores,temp[1])/100.0
-                scores.append(float(c_score) * float(temp[2]))
-            else:
-                scores.append(temp[0])
-        elif i_score == 'CxP':
-            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-            if not lig_name:
-                c_score = temp[1]
-                p_score = temp[2]
-                scores.append(float(temp[1]) * float(temp[2]))
-            else:
-                scores.append(temp[0])
-        elif i_score == 'P':
-            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-            if not lig_name:
-                scores.append(float(temp[2]))
-            else:
-                scores.append(temp[0])
-        elif i_score == 'avgP':
-            # Will produce a warning when li_score is empty
-            # temp_p will then == nan, so we check for that
-            # append 0.00 if True.
-            temp_p = np.mean(li_score)
-            if not np.isnan(temp_p):
-                scores.append(temp_p)
-            else:
                 scores.append(0.000)
-        elif i_score == 'medP':
-            temp_p = np.median(li_score)
-            if not np.isnan(temp_p):
-                scores.append(temp_p)
             else:
-                scores.append(0.000)
-        elif i_score == 'dC':
-            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-            if not lig_name:
-                scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
-            else:
-                scores.append(temp[0])
-        elif i_score == 'C':
-            temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
-            if not lig_name:
-                scores.append(temp[1])
-            else:
-                scores.append(temp[0])
-        elif i_score == 'avgC':
-            temp_c = np.mean(list(zip(*temp_scores))[1])
-            if not np.isnan(temp_c):
-                scores.append(temp_c)
-            else:
-                scores.append(0.000)
-        elif i_score == 'medC':
-            temp_c = np.median(list(zip(*temp_scores))[1])
-            if not np.isnan(temp_c):
-                scores.append(temp_c)
-            else:
-                scores.append(0.000)
+                scores.append("None")
     return (c, scores)
 
 
