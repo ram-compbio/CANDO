@@ -4654,6 +4654,10 @@ class CANDO(object):
         for cmpd in ind.compounds:
             c = self.get_compound(cmpd)
             if c.similar_computed:
+                if not c.similar_sorted:
+                    sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar = sorted_scores
+                    c.similar_sorted = True
                 continue
             if self.pathways:
                 self.generate_similar_sigs(c, aux=True, sort=True)
