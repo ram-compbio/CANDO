@@ -2455,8 +2455,8 @@ class CANDO(object):
                     effects = self.indications
                 else:
                     effects = filter_indications(indications)
-        # This makes everything above irrelevant I think
-        effects = [effect for effect in self.indications if len(effect.compounds) > 1]
+        
+        effects = [effect for effect in effects if len(effect.compounds) > 1]
         if approved:
             cmpd_lib = [str(self.get_compound(c).id_) for effect in effects for c in effect.compounds]
             #cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
