@@ -1034,8 +1034,7 @@ class CANDO(object):
                 check = False
                 try:
                     db = create_engine(f'sqlite:///{self.db_name}')
-                    #db = create_engine('sqlite:///cando.db')
-                    df_dists = pd.read_sql("SELECT * FROM dists", db)
+                    df_dists = pd.read_sql(f"SELECT * FROM {self.dist_metric}", db)
                     if len(df_dists) == len(self.compounds):
                         print("  Data already exists in table.")
                         check = True
@@ -1045,9 +1044,8 @@ class CANDO(object):
                     print("  Data does not exist in table OR data does not match.")
                     try:
                         conn = sqlite3.connect(f'{self.db_name}')
-                        #conn = sqlite3.connect('cando.db')
                         cursor = conn.cursor()
-                        cursor.execute("DROP TABLE dists")
+                        cursor.execute(f"DROP TABLE {self.dist_metric}")
                         conn.commit()
                         conn.close()
                     except:
@@ -1055,7 +1053,6 @@ class CANDO(object):
 
                     print('  Calculating {} distances...'.format(self.dist_metric))
                     db = create_engine(f'sqlite:///{self.db_name}')
-                    #db = create_engine('sqlite:///cando.db')
                     # put all compound_pair signatures into 2D-array
                     snp = [self.compounds[i].sig for i in range(len(self.compounds))]
                     snp = np.array(snp)  # convert to numpy form
@@ -1069,13 +1066,15 @@ class CANDO(object):
                     if self.dist_metric == "rmsd":
                         distance_matrix = pairwise_distances_chunked(snp,
                                                                      metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()),
-                                                                     n_jobs=self.ncpus)
+                                                                     working_memory=512,
+                                                                     #n_jobs=self.ncpus,
+                                                                     )
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
                                                                      working_memory=512,
                                                                      n_jobs=self.ncpus)
-                    print('  Done calculating {} distances.'.format(self.dist_metric))
+                    print(f'  Done calculating {self.dist_metric} distances.')
 
                     l = [c.id_ for c in self.compounds]
                     d_similar = {}
@@ -1090,28 +1089,26 @@ class CANDO(object):
                             self.compounds[i].similar = d_temp
                             self.compounds[i].similar_computed = True
 
-
                             d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
                             d_similar[str(c1)] = str(d_temp)
                             if i % 1000 == 0 or i == len(self.compounds)-1:
                                 df_temp = pd.DataFrame.from_dict(d_similar, orient='index')
                                 df_temp.index.names = ['id']
                                 df_temp.rename(columns={0: 'dists'}, inplace=True)
-                                df_temp.to_sql('dists', db, if_exists='append')
+                                df_temp.to_sql(self.dist_metric, db, if_exists='append')
                                 del df_temp
                                 d_similar = {}
                             i += 1
                     # Speed the table up with indexes
                     conn = sqlite3.connect(f'{self.db_name}')
-                    #conn = sqlite3.connect('cando.db')
                     cursor = conn.cursor()
-                    cursor.execute("CREATE INDEX d_id_idx ON dists(id)")
+                    cursor.execute(f"CREATE INDEX {self.dist_metric}_id_idx ON {self.dist_metric}(id)")
                     conn.commit()
                     conn.close()
                     del distance_matrix, d_temp, snp, d_similar
                 elif check:
                     conn = f'sqlite://{self.db_name}'
-                    df_dists = pl.read_database(query=f"SELECT * FROM dists",
+                    df_dists = pl.read_database(query=f"SELECT * FROM {self.dist_metric}",
                                                 connection=conn)
                     for c in self.compounds:
                         c_id = str(c.id_)
@@ -1119,7 +1116,7 @@ class CANDO(object):
                         c_sorted = [(int(c),c_sorted[c]) for c in c_sorted.keys()]
                         c.similar = c_sorted
                         c.similar_computed = True
-                print('Done building {} distance table.\n'.format(self.dist_metric))
+                print(f'Done building {self.dist_metric} distance table.\n')
 
 
             if self.save_dists:
@@ -2512,11 +2509,11 @@ class CANDO(object):
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 approved, n, self.db_name, exclude_indic) for effect in effects], chunksize=20).get()
+                                                 approved, n, self.db_name, self.dist_metric, exclude_indic) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, exclude_indic)\
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, self.dist_metric, exclude_indic)\
              for effect in tqdm(effects)] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
@@ -6919,7 +6916,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
-def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, exclude_indic):
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic):
     db_name = f'{d_name}/{effect_id}.db'
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
@@ -6947,8 +6944,8 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     effect_cmpds = [str(c) for c in effect_cmpds]
     ss = []
     pa_ss = []
-    df_dists = pl.read_database(query=f"SELECT * FROM dists WHERE id IN {tuple(effect_cmpds)}", connection=conn)
-    dist_df = pl.read_database(query=f"SELECT id FROM dists", connection=conn).sort('id')
+    df_dists = pl.read_database(query=f"SELECT * FROM {dist_metric} WHERE id IN {tuple(effect_cmpds)}", connection=conn)
+    dist_df = pl.read_database(query=f"SELECT id FROM {dist_metric}", connection=conn).sort('id')
     if approved:
         dist_df = dist_df.filter(pl.col('id').is_in(cmpd_lib))
     score_df = dist_df.clone()
