@@ -2645,7 +2645,7 @@ class CANDO(object):
             for effect in effects:
                 o.write(f"{effect.id_}\t{len(effect.compounds)}")
                 for m in metrics:
-                    o.write(f"\t{ndcg[m[0]][effect]:.3f}")
+                    o.write(f"\t{ndcg[m[0]][effect]:.5f}")
                 o.write(f"\t{effect.name}\n")
 
         if write_addl:
@@ -2709,7 +2709,7 @@ class CANDO(object):
         print("\nSummary")
         print(df_summ.T)
         print()
-        df_summ.T.to_csv(summ, float_format='%.3f', sep='\t')
+        df_summ.T.to_csv(summ, float_format='%.5f', sep='\t')
         t_tot = print_time(time.time()-start)
         print("Done running canbenchmark_new.")
         print(f"Total time to run canbenchmark_new: {t_tot}\n")
@@ -6950,6 +6950,8 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         dist_df = dist_df.filter(pl.col('id').is_in(cmpd_lib))
     score_df = dist_df.clone()
     rank_df = dist_df.clone()
+    nrank_df = dist_df.clone()
+    
     for c in effect_cmpds:
         c_sorted = json.loads(df_dists.filter(pl.col('id') == c).select(['dists']).item().replace("'", '"'))
         c_sorted = pl.DataFrame(c_sorted)
@@ -6959,11 +6961,14 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         df_temp = c_sorted.transpose().with_columns(pl.Series(name='id', values=c_sorted.columns)).sort('column_0')
         df_temp = df_temp.with_columns(rank=df_temp['column_0'].rank(method='min'))
         df_temp = df_temp.with_columns(df_temp['rank'].apply(lambda x: 1 if x <= n else 0).alias(c))
+
         score_df = score_df.join(df_temp.select('id',c), on='id', how='left')
         rank_df = rank_df.join(df_temp.select('id','rank'), on='id', how='left')
         rank_df = rank_df.rename({'rank': c})
         dist_df = dist_df.join(df_temp.select('id','column_0'), on='id', how='left')
         dist_df = dist_df.rename({'column_0': c})
+        nrank_df = nrank_df.join(df_temp.select('id', 'rank').apply(lambda t: (t[0], t[1] if (t[1] <= n) else 0)).rename({'column_0':'id','column_1':c}),\
+                                 on='id', how='left')
         # Pairwise accuracy
         for c2 in effect_cmpds:
             if c == c2:
@@ -6984,10 +6989,12 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         dist_df_loo = dist_df.drop(c_loo)
         score_df_loo = score_df.drop(c_loo)
         rank_df_loo = rank_df.drop(c_loo)
+        nrank_df_loo = nrank_df.drop(c_loo)
 
         score_df_loo = score_df_loo.with_columns(score=pl.sum_horizontal(score_df_loo.columns[1:]))
         dist_df_loo = dist_df_loo.with_columns(summed_dist=pl.sum_horizontal(dist_df_loo.columns[1:]))
         rank_df_loo = rank_df_loo.with_columns(summed_rank=pl.sum_horizontal(rank_df_loo.columns[1:]))
+        nrank_df_loo = nrank_df_loo.with_columns(summed_nrank=pl.sum_horizontal(nrank_df_loo.columns[1:]))
 
         c_df_loo = dist_df_loo.select('id','summed_dist').join(score_df_loo.select('id','score'), on='id', how='left')
         c_df_loo = c_df_loo.join(rank_df_loo.select('id','summed_rank'), on='id', how='left')
@@ -6995,7 +7002,11 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         c_df_loo = c_df_loo.with_columns(c_df_loo['summed_rank'].apply(lambda x: x / (len(effect_cmpds)-1)).alias('avg_rank'))
         c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cmpds)-1)).alias('avg_dist'))
 
-        c_df_loo = c_df_loo.sort('score','avg_rank', 'avg_dist', descending=[True,False,False])
+        df_temp = nrank_df_loo.select('id','summed_nrank').join(score_df_loo.select('id', 'score'), on='id', how='left')
+        df_temp = df_temp.select('id', 'summed_nrank', 'score').apply(lambda t: (t[0], t[1]/t[2] if t[2] > 0 else 0.0)).rename({'column_0':'id', 'column_1':'avg_nrank'})
+        c_df_loo = c_df_loo.join(df_temp.select('id', 'avg_nrank'), on='id', how='left')
+
+        c_df_loo = c_df_loo.sort('score','avg_nrank','avg_rank','avg_dist', descending=[True,False,False,False])
         # This is competitive ranking
         # Add other ranking methods using polars.Series.rank
         if exclude_indic:
@@ -7003,7 +7014,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             other_indic.remove(c_loo)
             c_df_loo = c_df_loo.filter(~pl.col('id').is_in(other_indic))
 
-        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score', 'avg_rank', 'summed_dist').rank(method='min'))
+        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank', 'summed_dist').rank(method='min'))
 
         rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
         score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
