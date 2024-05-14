@@ -7003,7 +7003,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         c_df_loo = c_df_loo.with_columns(c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cmpds)-1)).alias('avg_dist'))
 
         df_temp = nrank_df_loo.select('id','summed_nrank').join(score_df_loo.select('id', 'score'), on='id', how='left')
-        df_temp = df_temp.select('id', 'summed_nrank', 'score').apply(lambda t: (t[0], t[1]/t[2] if t[2] > 0 else 0.0)).rename({'column_0':'id', 'column_1':'avg_nrank'})
+        df_temp = df_temp.select('id', 'summed_nrank', 'score').apply(lambda t: (t[0], t[1]/t[2] if t[2] > 0 else float(len(cmpd_lib)))).rename({'column_0':'id', 'column_1':'avg_nrank'})
         c_df_loo = c_df_loo.join(df_temp.select('id', 'avg_nrank'), on='id', how='left')
 
         c_df_loo = c_df_loo.sort('score','avg_nrank','avg_rank','avg_dist', descending=[True,False,False,False])
