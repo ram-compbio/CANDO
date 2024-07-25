@@ -4523,7 +4523,7 @@ class CANDO(object):
                         count += 1
                         top_hits.append((p.id_, c, si, True))
             if ind_id:
-                already_approved = ind in c.indications
+                already_approved = ind.id_ in c.indications
             else:
                 already_approved = False  # Not relevant since there is no indication
             c_dct[c.id_] = [ss, count, already_approved, min_ss, min_count]
@@ -4681,7 +4681,7 @@ class CANDO(object):
                 if cmpd2[1] == 0.0:
                     c2_i += 1
                     continue
-                already_approved = ind in c2.indications
+                already_approved = ind.id_ in c2.indications
                 k = c2.id_
                 if k not in c_dct:
                     c_dct[k] = [1, already_approved, c_count]
