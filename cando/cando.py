@@ -1066,13 +1066,13 @@ class CANDO(object):
                     if self.dist_metric == "rmsd":
                         distance_matrix = pairwise_distances_chunked(snp,
                                                                      metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()),
-                                                                     working_memory=512,
+                                                                     #working_memory=512,
                                                                      #n_jobs=self.ncpus,
                                                                      )
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
-                                                                     working_memory=512,
+                                                                     #working_memory=512,
                                                                      n_jobs=self.ncpus)
                     print(f'  Done calculating {self.dist_metric} distances.')
 
@@ -1088,7 +1088,6 @@ class CANDO(object):
                             # Need to update those functions to work with sqlite
                             self.compounds[i].similar = d_temp
                             self.compounds[i].similar_computed = True
-
                             d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
                             d_similar[str(c1)] = str(d_temp)
                             if i % 1000 == 0 or i == len(self.compounds)-1:
@@ -1099,6 +1098,7 @@ class CANDO(object):
                                 del df_temp
                                 d_similar = {}
                             i += 1
+                    
                     # Speed the table up with indexes
                     conn = sqlite3.connect(f'{self.db_name}')
                     cursor = conn.cursor()
@@ -1106,16 +1106,25 @@ class CANDO(object):
                     conn.commit()
                     conn.close()
                     del distance_matrix, d_temp, snp, d_similar
-                elif check:
-                    conn = f'sqlite://{self.db_name}'
-                    df_dists = pl.read_database(query=f"SELECT * FROM {self.dist_metric}",
-                                                connection=conn)
+                    
                     for c in self.compounds:
-                        c_id = str(c.id_)
-                        c_sorted = json.loads(df_dists.filter(pl.col('id') == c_id).select(['dists']).item().replace("'", '"'))
+                        c_sorted = c.similar
+                        c_sorted = sorted(c_sorted, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                        c.similar = c_sorted
+                        c.similar_sorted = True
+                elif check:
+                    #conn = f'sqlite://{self.db_name}'
+                    with sqlite3.connect(f'{self.db_name}') as conn:
+                        df_dists = pl.read_database(query=f"SELECT * FROM {self.dist_metric}",
+                                                    connection=conn)
+                    for c in self.compounds:
+                        c_sorted = json.loads(df_dists.filter(pl.col('id') == str(c.id_)).select(['dists']).item().replace("'", '"'))
                         c_sorted = [(int(c),c_sorted[c]) for c in c_sorted.keys()]
+                        c_sorted = sorted(c_sorted, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                         c.similar = c_sorted
                         c.similar_computed = True
+                        c.similar_sorted = True
+                    del df_dists
                 print(f'Done building {self.dist_metric} distance table.\n')
 
 
@@ -2809,11 +2818,13 @@ class CANDO(object):
         for ind in self.indications:
             if len(ind.compounds) < 2:
                 continue
-            approved_ids = [i.id_ for i in ind.compounds]
+            #approved_ids = [i.id_ for i in ind.compounds]
+            approved_ids = ind.compounds
             acc = {}
             for k in range(len(k_s)):
                 acc[k] = []
-            for c in ind.compounds:
+            for c_id in ind.compounds:
+                c = self.get_compound(c_id)
                 if not c.similar_sorted:
                     sorted_scores = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                     c.similar = sorted_scores
@@ -2823,7 +2834,7 @@ class CANDO(object):
                     c_ideal[x] = 1
                 c_rank = []
                 for x in c.similar:
-                    if x[0].id_ in approved_ids:
+                    if x[0] in approved_ids:
                         c_rank.append(1)
                     else:
                         c_rank.append(0)
@@ -5997,10 +6008,10 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     def print_time(s):
         if s >= 60:
             m = s / 60.0
-            s -= m * 60.0
+            s %= 60.0
             if m >= 60.0:
                 h = m / 60.0
-                m -= h * 60.0
+                m %= 60.0
                 print("Signature generation took {:.0f} hr {:.0f} min {:.0f} s to finish.".format(h, m, s))
             else:
                 print("Signature generation took {:.0f} min {:.0f} s to finish.".format(m, s))
