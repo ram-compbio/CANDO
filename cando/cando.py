@@ -1058,8 +1058,8 @@ class CANDO(object):
                     snp = np.array(snp)  # convert to numpy form
 
                     # Remove sigs from Compounds to reduce mem
-                    for i in range(len(self.compounds)):
-                        self.compounds[i].sig = []
+                    #for i in range(len(self.compounds)):
+                    #    self.compounds[i].sig = []
 
                     # call pairwise_distances, speed up with custom RMSD function and parallelism
                     distance_matrix = []
@@ -1283,12 +1283,13 @@ class CANDO(object):
                             continue
                     try:
                         adr = self.get_adr(adr_id)
-                        adr.compounds.append(cmpd)
-                        cmpd.adrs.append(adr)
+                        if adr_id == adr.id_:
+                            cmpd.adrs.append(adr.id_)
+                            adr.compounds.append(c_id)
                     except LookupError:
                         adr = ADR(adr_id, adr_name)
-                        adr.compounds.append(cmpd)
-                        cmpd.adrs.append(adr)
+                        adr.compounds.append(c_id)
+                        cmpd.adrs.append(adr_id)
                         self.adrs.append(adr)
             print('Read {} ADRs.'.format(len(self.adrs)))
 
@@ -1670,6 +1671,7 @@ class CANDO(object):
                 c_sig = cmpd.aux_sig
             else:
                 c_sig = cmpd.sig
+        c_sig = [float(score) for score in c_sig]
         ca = np.array([c_sig])
 
         other_sigs = []
@@ -1679,17 +1681,21 @@ class CANDO(object):
                 q = ci
             other = []
             if proteins is None:
-                other_sigs.append(c.sig)
+                c_sig = [float(score) for score in c.sig]
+                other_sigs.append(c_sig)
             elif proteins:
                 for pro in proteins:
                     index = self.protein_id_to_index[pro.id_]
                     other.append(c.sig[index])
+                    other = [float(score) for score in other]
                 other_sigs.append(other)
             else:
                 if aux:
-                    other_sigs.append(c.aux_sig)
+                    c_sig = [float(score) for score in c.aux_sig]
+                    other_sigs.append(c_sig)
                 else:
-                    other_sigs.append(c.sig)
+                    c_sig = [float(score) for score in c.sig]
+                    other_sigs.append(c_sig)
         oa = np.array(other_sigs)
         
         # call pairwise_distance to enable parallel computing
@@ -1697,7 +1703,7 @@ class CANDO(object):
         if self.dist_metric == "rmsd":
             distances = pairwise_distances(ca, oa, lambda u, v: np.sqrt(np.mean((u - v) ** 2)), n_jobs=self.ncpus)
         elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
-            distances = pairwise_distances(ca, oa, self.dist_metric, n_jobs=self.ncpus)
+            distances = pairwise_distances(ca, oa, self.dist_metric, force_all_finite=False, n_jobs=self.ncpus)
         else:
             print("Incorrect distance metric - {}".format(self.dist_metric))
 
@@ -1708,7 +1714,7 @@ class CANDO(object):
             c2 = self.compounds[i]
             if i == q:
                 continue
-            d = distances[0][i]
+            d = int(distances[0][i])
             cmpd.similar.append((c2, d))
             n += 1
 
@@ -2167,7 +2173,7 @@ class CANDO(object):
             ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
                          "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
 
-        for effect in effects:
+        for effect in tqdm(effects):
             count = len(effect.compounds)
             if count < 2:
                 continue
@@ -2740,7 +2746,7 @@ class CANDO(object):
         @return Returns None
         """
         print("Making CANDO copy with only benchmarking-associated compounds")
-        cp = CANDO(self.c_map, self.i_map, self.matrix, compound_set=self.compound_set)
+        cp = CANDO(self.c_map, self.i_map, matrix=self.matrix, compound_set=self.compound_set, dist_metric=self.dist_metric)
         good_cs = []
         good_ids = []
         for ind in cp.indications:
@@ -2750,7 +2756,7 @@ class CANDO(object):
                         good_cs.append(self.get_compound(c))
                         good_ids.append(c)
         cp.compounds = good_cs
-                
+        
         print('Computing {} distances...'.format(self.dist_metric))
 
         for c in cp.compounds:
@@ -5295,7 +5301,8 @@ class CANDO(object):
         @param new_name str: Name for the new Compound
         @return Returns None
         """
-        with open(new_sig, 'r', encoding="utf8") as nsf:
+        #with open(new_sig, 'r', encoding="utf8") as nsf:
+        with open(new_sig, 'r') as nsf:
             n_sig = [0.00] * len(self.proteins)
             for l in nsf:
                 [pr, sc] = l.strip().split('\t')
@@ -5316,7 +5323,7 @@ class CANDO(object):
                 c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
             dists = sorted(dists, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
         cmpd.similar = [(c.id_,dist) for c,dist in cmpd.similar]
-        print(cmpd.similar)
+        #print(cmpd.similar)
         print("New compound is " + cmpd.name)
         print(f"New compound has id {cmpd.id_} and index {cmpd.index}.\n")
 
@@ -6307,15 +6314,14 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             try:
                 if file_type == 'mol':
                     nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
-                    name = nc.GetProp("_Name")
                 elif file_type == 'smi':
                     nc = Chem.MolFromSmiles("{}".format(c[0]))
-                    name = c[1]
-                    nc.SetProp("_Name", name)
+                    nc.SetProp("_Name", c[1])
                 nc = Chem.RemoveHs(nc)
             except:
                 print("{} cannot load this molecule.".format(c[0]))
                 continue
+            name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
             try:
                 match = str(inchi_dict[inchi_key])
@@ -6424,15 +6430,16 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
         for c in ncs.itertuples(index=False):
             try:
                 if file_type == 'mol':
-                    nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
+                    nc = Chem.MolFromMolFile(f"{cmpd_dir}/{c[0]}.mol")
                     name = nc.GetProp("_Name")
                 elif file_type == 'smi':
-                    nc = Chem.MolFromSmiles("{}".format(c[0]))
-                    name = c[1]
-                    nc.SetProp("_Name", name)
+                    nc = Chem.MolFromSmiles(c[0])
+                    nc.SetProp("_Name", c[1])
+                nc = Chem.RemoveHs(nc)
             except:
                 print("{} cannot load this molecule.".format(c[0]))
                 continue
+            name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
             try:
                 match = str(inchi_dict[inchi_key])
@@ -6507,7 +6514,11 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
 
         for c in ncs.itertuples(index=False):
             try:
-                nc = Chem.MolFromMolFile("{}/{}.mol".format(cmpd_dir, c[0]))
+                if file_type == 'mol':
+                    nc = Chem.MolFromMolFile(f"{cmpd_dir}/{c[0]}.mol")
+                elif file_type == 'smi':
+                    nc = Chem.MolFromSmiles(c[0])
+                    nc.SetProp("_Name", c[1])
                 nc = Chem.RemoveHs(nc)
             except:
                 print("{} cannot load this molecule.".format(c[0]))
@@ -6530,9 +6541,9 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 inchi_dict[inchi_key] = cmpd_num
                 pickle.dump(inchi_dict, f)
            
-            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
-                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
-                                 ignore_index=True)
+            d_map = pd.concat([d_map, pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+                            columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])],
+                            ignore_index=True)
             
             rad = int(int(fp[7:])/2)
             if fp[3] == 'f':

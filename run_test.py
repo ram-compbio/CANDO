@@ -18,14 +18,12 @@ pwp = 'test-pathway-prot.tsv'
 pwm = 'test-pathway-mesh.tsv'
 ncpus = 1
 
-'''
 print("Test #1 - generate a toy matrix")
 print('-------')
 # Add a pull for this matrix and compare the generated one to the downloaded one to confirm functionality of generate_matrix
 cnd.generate_matrix(v="test.0", org="test", out_file=matrix_file, ncpus=1)
-cnd.generate_matrix(v="test.0", org="test", out_file="test-matrix_names.tsv", lig_name=True, ncpus=2)
+cnd.generate_matrix(v="test.0", org="test", out_file="test-matrix_names.tsv", lig_name=True, ncpus=8)
 print('\n')
-'''
 
 print("Test #2 - create CANDO object and run canbenchmark test")
 print('-------')
@@ -139,18 +137,17 @@ print('-------')
 print(os.listdir())
 cnd.add_cmpds(new_cmpds, cmpd_dir=cmpd_dir, v="test.0")
 print(os.listdir())
-cnd.generate_matrix(v="test.1", org="test", out_file=matrix_file, ncpus=ncpus)
+cnd.generate_matrix(v="test.1", org="test", out_file='test-matrix-15.tsv', ncpus=ncpus)
 print('\n')
 
 print("Test #16 - Add and save compound to new library then generate new matrix")
 print('-------')
 cnd.add_cmpds(new_cmpds, cmpd_dir=cmpd_dir)
-cnd.generate_matrix(v="v0.0", org="test", lib_path='.', out_file=matrix_file, ncpus=ncpus)
+cnd.generate_matrix(v="v0.0", org="test", lib_path='.', out_file='test-matrix-16.tsv', ncpus=ncpus)
 print('\n')
 
 print("Cleaning up test data...")
 os.chdir("..")
-shutil.rmtree('test')
-#os.system("rm -r test")
+#shutil.rmtree('test')
 print('Done.\n')
 
