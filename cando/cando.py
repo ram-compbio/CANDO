@@ -240,7 +240,7 @@ class CANDO(object):
                  read_dists='', pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
                  ddi_compounds='', ddi_adrs='', adr_map='', sig_fusion='sum', 
-                 protein_distance=False, protein_map='', ncpus=1):
+                 protein_distance=False, protein_map='', ncpus=1, pbar=True):
         ## @var c_map
         # str: File path to the compound mapping file (relative or absolute)
         self.c_map = c_map
@@ -313,6 +313,10 @@ class CANDO(object):
         ## @var ddi_compounds
         # str: File path to Drug--Drug--ADE mapping file
         self.ddi_adrs = ddi_adrs
+        
+        ## @var pbar
+        # bool: Use TQDM progress bar for certain processes
+        self.pbar = pbar
 
         ## @var proteins
         # List: Protein objects in the platform
@@ -650,14 +654,16 @@ class CANDO(object):
             #db = create_engine('sqlite:///cando.db')
             print("    indications")
             #d_inds = {str(x.id_): [str(x.name), str([cmpd.id_ for cmpd in x.compounds])] for x in tqdm(self.indications)}
-            d_inds = {str(x.id_): [str(x.name), str([cmpd for cmpd in x.compounds])] for x in tqdm(self.indications)}
+            pbar = tqdm(self.indications) if self.pbar else self.indications
+            d_inds = {str(x.id_): [str(x.name), str([cmpd for cmpd in x.compounds])] for x in pbar}
             df_inds = pd.DataFrame.from_dict(d_inds, orient='index')
             df_inds.index.names = ['id']
             df_inds.rename(columns={0: 'name', 1: 'cmpd_ids'}, inplace=True)
             df_inds.to_sql('inds', db, if_exists='replace')
             print("    compounds")
             #d_cmpds = {str(x.id_): [str(x.name), str([ind.id_ for ind in x.indications])] for x in tqdm(self.compounds)}
-            d_cmpds = {str(x.id_): [str(x.name), str([ind for ind in x.indications])] for x in tqdm(self.compounds)}
+            pbar = tqdm(self.compounds) if self.pbar else self.compounds
+            d_cmpds = {str(x.id_): [str(x.name), str([ind for ind in x.indications])] for x in pbar}
             df_cmpds = pd.DataFrame.from_dict(d_cmpds, orient='index')
             df_cmpds.index.names = ['id']
             df_cmpds.rename(columns={0: 'name', 1: 'ind_ids'}, inplace=True)
@@ -722,7 +728,8 @@ class CANDO(object):
             #db = create_engine('sqlite:///ddi.db')
             df_temp = pd.read_sql("SELECT * FROM cmpd_pairs",db)
             print("    compound pairs")
-            for i in tqdm(df_temp.index):
+            pbar = tqdm(df_temp.index) if self.pbar else df_temp.index
+            for i in pbar:
                 cm_p = Compound_pair(ast.literal_eval(df_temp.loc[i,'names']), ast.literal_eval(df_temp.loc[i,'ids']), ast.literal_eval(df_temp.loc[i,'ids']))
                 cm_p.adrs = ast.literal_eval(df_temp.loc[i,'adr_ids'])
                 self.compound_pairs.append(cm_p)
@@ -731,7 +738,8 @@ class CANDO(object):
             # ADRs
             df_temp = pd.read_sql("SELECT * FROM adrs",db)
             print("    adverse drug reactions")
-            for i in tqdm(df_temp.index):
+            pbar = tqdm(df_temp.index) if self.pbar else df_temp.index
+            for i in pbar:
                 adr = ADR(df_temp.loc[i,'id'],df_temp.loc[i,'name'])
                 adr.compound_pairs = ast.literal_eval(df_temp.loc[i,'cmpd_pair_ids'])
                 self.adrs.append(adr)
@@ -753,7 +761,8 @@ class CANDO(object):
             '''
 
             print("Generating compound-compound signatures...")
-            for cm_p in tqdm(self.compound_pairs):
+            pbar = tqdm(self.compound_pairs) if self.pbar else self.compound_pairs
+            for cm_p in pbar:
                 c1 = self.get_compound(cm_p.id_[0])
                 c2 = self.get_compound(cm_p.id_[1])
                 # Add signatures??
@@ -784,7 +793,8 @@ class CANDO(object):
             print("    {} compound pair-adverse event associations.".format(len(idss)))
             idss = list(set(idss))
             # Iterate through list of CANDO ID tuples
-            for ids in tqdm(idss): 
+            pbar = tqdm(idss) if self.pbar else idss
+            for ids in pbar: 
                 if ids in self.compound_pair_ids:
                     cm_p = self.get_compound_pair(ids)
                 elif (ids[1],ids[0]) in self.compound_pair_ids:
@@ -819,7 +829,8 @@ class CANDO(object):
             print('  Done reading compound pair-adverse event associations.\n')
 
             print("  adverse drug reactions")
-            d_adrs = {str(x.id_): [str(x.name), str(x.compound_pairs)] for x in tqdm(self.adrs)}
+            pbar = tqdm(self.adrs) if self.pbar else self.adrs
+            d_adrs = {str(x.id_): [str(x.name), str(x.compound_pairs)] for x in pbar}
             #d_adrs = {str(x.id_): str(x.name) for x in tqdm(self.adrs)}
             df_adrs = pd.DataFrame.from_dict(d_adrs,orient='index')
             df_adrs.index.names = ['id']
@@ -828,7 +839,8 @@ class CANDO(object):
             df_adrs.to_sql('adrs', db, if_exists='replace')
             
             print("  compound pairs")
-            d_cps = {str(x.id_): [str(x.name), str(x.adrs)] for x in tqdm(self.compound_pairs)}
+            pbar = tqdm(self.compound_pairs) if self.pbar else self.compound_pairs
+            d_cps = {str(x.id_): [str(x.name), str(x.adrs)] for x in pbar}
             #d_cps = {str(x.id_): str(x.name) for x in tqdm(self.compound_pairs)}
             df_cps = pd.DataFrame.from_dict(d_cps,orient='index')
             df_cps.index.names = ['ids']
@@ -980,7 +992,8 @@ class CANDO(object):
                 #r_similar = {}
                 i = 0
                 for chunk in distance_matrix:
-                    for y in tqdm(chunk): #TQDM3
+                    pbar = tqdm(chunk) if self.pbar else chunk
+                    for y in pbar: #TQDM3
                         #dists = cdist([snp[i]], snp, dist_metric)[0]
                         #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
                         #self.compound_pairs[i].similar.pop(i)
@@ -1080,7 +1093,8 @@ class CANDO(object):
                     d_similar = {}
                     i = 0
                     for chunk in distance_matrix:
-                        for y in tqdm(chunk): ##TQDM1
+                        pbar = tqdm(chunk) if self.pbar else chunk
+                        for y in pbar: ##TQDM1
                             c1 = str(self.compounds[i].id_)
                             d_temp = list(zip(l, y))
                             d_temp.pop(i)
@@ -2173,7 +2187,8 @@ class CANDO(object):
             ra_out.write("compound_id,{}_id,top10,top25,top50,top100,"
                          "topAll,top1%,top5%,top10%,top50%,top100%,rank\n".format(effect_type()))
 
-        for effect in tqdm(effects):
+        pbar = tqdm(effects) if self.pbar else effects
+        for effect in pbar:
             count = len(effect.compounds)
             if count < 2:
                 continue
@@ -2355,7 +2370,7 @@ class CANDO(object):
         print('\n')
 
     def canbenchmark_new(self, file_name, n=10, indications=[], continuous=False, bottom=False,
-                         ranking='standard', adrs=False, approved=True, addl_metrics=[], write_addl=False,\
+                         ranking='standard', adrs=False, associated=True, addl_metrics=[], write_addl=False,\
                          exclude_indic=False):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
@@ -2406,16 +2421,16 @@ class CANDO(object):
                     c.similar = sorted_scores
                     c.similar_sorted = True
 
-        approved_str = '-approved' if approved else ''
-        ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}{approved_str}.tsv'
-        ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}{approved_str}.tsv"
-        ra = f'raw_results/raw_results-{file_name}-{n}{approved_str}.csv'
-        pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{approved_str}.csv'
-        summ = f'summary-{file_name}-{n}{approved_str}.tsv'
-        benchmark_name = f"canbenchmark-{file_name}-{n}{approved_str}"
-        t_name = f"time-{file_name}-{n}{approved_str}.txt"
+        associated_str = '-associated' if associated else ''
+        ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}{associated_str}.tsv'
+        ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}{associated_str}.tsv"
+        ra = f'raw_results/raw_results-{file_name}-{n}{associated_str}.csv'
+        pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{associated_str}.csv'
+        summ = f'summary-{file_name}-{n}{associated_str}.tsv'
+        benchmark_name = f"canbenchmark-{file_name}-{n}{associated_str}"
+        t_name = f"time-{file_name}-{n}{associated_str}.txt"
         if write_addl:
-            addl_named = f'results_analysed_named/results_analysed_named-%s-{file_name}-{n}{approved_str}.tsv'
+            addl_named = f'results_analysed_named/results_analysed_named-%s-{file_name}-{n}{associated_str}.tsv'
 
         os.makedirs('results_analysed_named', exist_ok=True)
         os.makedirs('raw_results', exist_ok=True)
@@ -2455,6 +2470,14 @@ class CANDO(object):
         ss = []
         c_per_effect = 0
 
+        if associated:
+            cmpd_lib = [str(self.get_compound(c).id_) for effect in self.indications for c in effect.compounds]
+            #cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
+        else:
+            cmpd_lib = [str(c.id_) for c in self.compounds]
+
+        cmpd_lib = list(set(cmpd_lib))
+
         if isinstance(indications, list) and len(indications) >= 1:
             effects = list(map(self.get_indication, indications))
         elif isinstance(indications, list) and len(indications) == 0 and not adrs:
@@ -2469,12 +2492,6 @@ class CANDO(object):
                     effects = filter_indications(indications)
         
         effects = [effect for effect in effects if len(effect.compounds) > 1]
-        if approved:
-            cmpd_lib = [str(self.get_compound(c).id_) for effect in effects for c in effect.compounds]
-            #cmpd_lib = [str(c.id_) for c in self.compounds if len(c.indications)>=1]
-        else:
-            cmpd_lib = [str(c.id_) for c in self.compounds]
-        cmpd_lib = list(set(cmpd_lib))
         def cont_metrics():
             all_v = []
             for c in self.compounds:
@@ -2524,12 +2541,13 @@ class CANDO(object):
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 approved, n, self.db_name, self.dist_metric, exclude_indic) for effect in effects], chunksize=20).get()
+                                                 associated, n, self.db_name, self.dist_metric, exclude_indic) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, approved, n, self.db_name, self.dist_metric, exclude_indic)\
-             for effect in tqdm(effects)] #TQDM2
+            pbar = tqdm(effects) if self.pbar else effects
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, associated, n, self.db_name, self.dist_metric, exclude_indic)\
+             for effect in pbar] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -2555,7 +2573,7 @@ class CANDO(object):
         pd.options.display.float_format='{:.3f}'.format
 
         addl_results = {}
-        pbar = tqdm(range(len(effects))) #TQDM4
+        pbar = tqdm(range(len(effects))) if self.pbar else range(len(effects)) #TQDM4
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
@@ -3489,7 +3507,7 @@ class CANDO(object):
         pd.options.display.float_format='{:.3f}'.format
 
         #for effect in tqdm(effects):
-        pbar = tqdm(range(len(effects)))
+        pbar = tqdm(range(len(effects))) if self.pbar else range(len(effects))
         for i in pbar:
             effect = effects[i]
             effect_id = effect.id_
@@ -5741,7 +5759,7 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
 
 def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
                     p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True,
-                    approved_only=False, lig_name=False, lib_path='', prot_path='', ncpus=1):
+                    approved_only=False, lig_name=False, lib_path='', prot_path='', ncpus=1, pbar=True):
     """!
     Generate a matrix using our in-house protocol BANDOCK.
 
@@ -5872,7 +5890,8 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
         pool.close
         pool.join
     else:
-        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in tqdm(c_list)]
+        bar = tqdm(c_list) if pbar else c_list
+        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in bar]
     scores = {d[0]:d[1] for d in scores}
 
     mat = pd.DataFrame.from_dict(scores)
@@ -6840,7 +6859,7 @@ def get_test():
     print('All test data downloaded.\n')
 
 
-def dl_dir(url, out, l):
+def dl_dir(url, out, l, pbar=True):
     """!
     Function to recursively download a directory.
 
@@ -6858,7 +6877,8 @@ def dl_dir(url, out, l):
             if not os.path.exists("{}/{}".format(out, n)):
                 break
         return
-    for n in tqdm(l):
+    bar = tqdm(l) if pbar else l
+    for n in bar:
         url2 = "{}/{}".format(url, n)
         r = requests.get(url2)
         out_file = "{}/{}".format(out, n)
@@ -6866,7 +6886,7 @@ def dl_dir(url, out, l):
             f.write(r.content)
 
 
-def dl_file(url, out_file):
+def dl_file(url, out_file, pbar=True):
     """!
     Function to download a file.
 
@@ -6892,7 +6912,9 @@ def dl_file(url, out_file):
         else:
             chunk_size = total_length
             num_bars = int(total_length / chunk_size)
-        for chunk in tqdm(r.iter_content(chunk_size=chunk_size), total=num_bars):
+        bar = tqdm(r.iter_content(chunk_size=chunk_size), total=num_bars) if pbar else\
+               r.iter_content(chunk_size=chunk_size)
+        for chunk in bar:
             f.write(chunk)
             f.flush()
             os.fsync(f.fileno())
