@@ -30,6 +30,7 @@ print('-------')
 cando = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, compute_distance=True,
                   save_dists='test_rmsds.tsv', ncpus=1)
 cando.canbenchmark('test')
+cando.canbenchmark_ndcg('test-ndcg')
 print('\n')
 
 print("Test #3 - create CANDO object using cosine distance metric then run continuous, bottom, cluster, "
