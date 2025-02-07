@@ -4931,12 +4931,16 @@ class CANDO(object):
             cmpd = self.get_compound(cmpd)
         print("Using CANDO compound {}".format(cmpd.name))
         print("Compound has id {} and index {}".format(cmpd.id_, cmpd.index))
-        print("Comparing signature to all CANDO compound signatures...")
-        self.generate_similar_sigs(cmpd, sort=True)
+        if not cmpd.similar_computed:
+            print("  Comparing signature to all CANDO compound signatures...")
+            self.generate_similar_sigs(cmpd, sort=True)
+            cmpd.similar = [(c.id_,dist) for c,dist in cmpd.similar]
+        #self.generate_similar_sigs(cmpd, sort=True)
         print("Generating ADR predictions using top{} most similar compounds...".format(n))
         a_dct = {}
         for c in cmpd.similar[0:n]:
-            for adr_id in c[0].adrs:
+            cmpd2 = self.get_compound(c[0])
+            for adr_id in cmpd2.adrs:
                 if adr_id not in a_dct:
                     adr = self.get_adr(adr_id)
                     a_dct[adr_id] = [1, len(adr.compounds)]
