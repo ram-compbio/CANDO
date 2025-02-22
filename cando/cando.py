@@ -1210,7 +1210,8 @@ class CANDO(object):
                     with sqlite3.connect(f'{self.db_name}') as conn:
                         df_dists = pl.read_database(query=f"SELECT * FROM {self.dist_metric}",
                                                     connection=conn)
-                    for c in tqdm(self.compounds):
+                    pbar = tqdm(self.compounds) if self.pbar else self.compounds
+                    for c in pbar:
                         c_sorted = json.loads(df_dists.filter(pl.col('id') == str(c.id_)).select(['dists']).item().replace("'", '"'))
                         #c_sorted = [(int(c),c_sorted[c]) for c in c_sorted.keys()]
                         c_sorted = [(int(c),c_dist) for c, c_dist in c_sorted.items()]
@@ -4799,7 +4800,7 @@ class CANDO(object):
                 prb = hg_dct[p[1][1][0]]
             else:
                 prb_success = 1 / (len(self.compounds) - 1) * n
-                prb = '%.2e' % Decimal(1.0 - stats.binom.cdf(p[1][1][0], len(ind.compounds), prb_success))
+                prb = '%.2e' % Decimal(1.0 - stats.binom.cdf(p[1][1][0]-1, len(ind.compounds), prb_success))
                 hg_dct[p[1][1][0]] = prb
             if p[1][1][1]:
                 st = "{}\t{}\t{}\t{}\t{}\t{}\t{}".format(i + 1, p[1][1][0], round(p[1][1][2] / p[1][1][0], 1),
