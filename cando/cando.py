@@ -979,7 +979,7 @@ class CANDO(object):
                 distance_matrix = []
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances_chunked(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = pairwise_distances_chunked(snp, metric='euclidean', n_jobs=self.ncpus)
                     #distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
@@ -1001,8 +1001,10 @@ class CANDO(object):
                         #d_temp = dict(zip(l, y))
                         #d_temp.pop(cp)
                         #d_temp = dict(sorted(d_temp.items(), key=lambda item: item[1] if not math.isnan(item[1]) else 100000))
-                            
-                        d_temp = list(zip(l, y))
+                        if self.dist_metric == 'rmsd':
+                            d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
+                        else:
+                            d_temp = list(zip(l, y))
                         d_temp.pop(i)
                         #l2 = l.copy()
                         #l2.pop(i)
@@ -1077,11 +1079,9 @@ class CANDO(object):
                     # call pairwise_distances, speed up with custom RMSD function and parallelism
                     distance_matrix = []
                     if self.dist_metric == "rmsd":
-                        distance_matrix = pairwise_distances_chunked(snp,
-                                                                     metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()),
+                        distance_matrix = pairwise_distances_chunked(snp, metric='euclidean',
                                                                      #working_memory=512,
-                                                                     #n_jobs=self.ncpus,
-                                                                     )
+                                                                     n_jobs=self.ncpus)
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
@@ -1096,7 +1096,10 @@ class CANDO(object):
                         pbar = tqdm(chunk) if self.pbar else chunk
                         for y in pbar: ##TQDM1
                             c1 = str(self.compounds[i].id_)
-                            d_temp = list(zip(l, y))
+                            if self.dist_metric == 'rmsd':
+                                d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
+                            else:
+                                d_temp = list(zip(l, y))
                             d_temp.pop(i)
                             # This is to keep the old versions of canbenchmark and canpredict working
                             # Need to update those functions to work with sqlite
@@ -1112,7 +1115,7 @@ class CANDO(object):
                                 del df_temp
                                 d_similar = {}
                             i += 1
-                    
+
                     # Speed the table up with indexes
                     conn = sqlite3.connect(f'{self.db_name}')
                     cursor = conn.cursor()
@@ -2371,7 +2374,7 @@ class CANDO(object):
 
     def canbenchmark_new(self, file_name, n=10, indications=[], continuous=False, bottom=False,
                          ranking='standard', adrs=False, associated=True, addl_metrics=[], write_addl=False,\
-                         exclude_indic=False):
+                         exclude_indic=False, tierank='min'):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
         This function tests the performance of canpredict_compounds
@@ -2388,6 +2391,8 @@ class CANDO(object):
             output - either single # result (eg AUROC) or tuple of one # per threshold
         @param write_addl bool: If True, will create a results_analysed_named file for each addl_metrics func (default: False)
         @param exlude_indic: If True, will only rank left out compound against non-indicated compounds (default: False)
+        @param tierank str: rank that tied compounds will take; see polars.Expr.rank for full options (default: min)
+            options - min, max, average, ordinal, random (for 3 tied compounds, could result in: 1/1/1, 3/3/3, 2/2/2, 1/2/3, 3/1/2)
         @return Returns None
         """
 
@@ -2541,12 +2546,12 @@ class CANDO(object):
             # tqdm progressbar is not working for multiprocessing
             pool = mp.Pool(processes=self.ncpus)
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 associated, n, self.db_name, self.dist_metric, exclude_indic) for effect in effects], chunksize=20).get()
+                                                 associated, n, self.db_name, self.dist_metric, exclude_indic, tierank) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
             pbar = tqdm(effects) if self.pbar else effects
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, associated, n, self.db_name, self.dist_metric, exclude_indic)\
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, associated, n, self.db_name, self.dist_metric, exclude_indic, tierank)\
              for effect in pbar] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
@@ -6960,7 +6965,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
-def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic):
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic, tierank):
     db_name = f'{d_name}/{effect_id}.db'
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
@@ -7058,7 +7063,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             other_indic.remove(c_loo)
             c_df_loo = c_df_loo.filter(~pl.col('id').is_in(other_indic))
 
-        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank', 'summed_dist').rank(method='min'))
+        c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank', 'summed_dist').rank(method=tierank))
 
         rank = c_df_loo.filter(pl.col('id') == c_loo)[0, 'rank']
         score = c_df_loo.filter(pl.col('id') == c_loo)[0, 'score']
