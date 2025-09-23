@@ -1731,7 +1731,8 @@ class CANDO(object):
             c2 = self.compounds[i]
             if i == q:
                 continue
-            d = int(distances[0][i])
+            #d = int(distances[0][i])
+            d = distances[0][i]
             cmpd.similar.append((c2, d))
             n += 1
 
@@ -5293,7 +5294,7 @@ class CANDO(object):
             cmpd = cmpd
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
-        # Add ability to generate simialr list from an iputted signature
+        # Add ability to generate simialr list from an inputted signature
         #elif type(cmpd) is list:
         print(f"Compound id = {cmpd.id_}")
         print(f"Compound index = {cmpd.index}")
@@ -5304,13 +5305,12 @@ class CANDO(object):
         print(f"  Printing {n} most similar compounds...\n")
         print("  rank\tdist\tid\tname")
         for i in range(n+1):
-            c = self.get_compound(cmpd.similar[i][0])
-            print("  {}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], c.id_, c.name))
+            print("  {}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
         if save:
             print(f"  Saving {n} most similar compounds...")
             with open(save, 'w', encoding="utf8") as o:
-                o.write("rank\tdist\tid\tname")
+                o.write("rank\tdist\tid\tname\n")
                 for i in range(n+1):
                     o.write("{}\t{:.3f}\t{}\t{}\n".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
             print(f"  Results saved to {save}.\n")
@@ -6133,7 +6133,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     return(mat.iloc[:,0].values)
 
 def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
-                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=False, out_file='', out_path=".", nr_ligs=True,
+                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=True, out_file='', out_path=".", nr_ligs=True,
                        prot_path='', lig_name=False):
     """!
        Generate an interaction signature for a query compound using our in-house protocol BANDOCK. Note: the parameters
