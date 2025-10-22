@@ -1059,7 +1059,7 @@ class CANDO(object):
                 distance_matrix = []
                 # call pairwise_distances, speed up with custom RMSD function and parallelism
                 if self.dist_metric == "rmsd":
-                    distance_matrix = pairwise_distances_chunked(snp, metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()), n_jobs=self.ncpus)
+                    distance_matrix = pairwise_distances_chunked(snp, metric='euclidean', n_jobs=self.ncpus)
                     #distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
@@ -1081,8 +1081,10 @@ class CANDO(object):
                         #d_temp = dict(zip(l, y))
                         #d_temp.pop(cp)
                         #d_temp = dict(sorted(d_temp.items(), key=lambda item: item[1] if not math.isnan(item[1]) else 100000))
-                            
-                        d_temp = list(zip(l, y))
+                        if self.dist_metric == 'rmsd':
+                            d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
+                        else:
+                            d_temp = list(zip(l, y))
                         d_temp.pop(i)
                         #l2 = l.copy()
                         #l2.pop(i)
@@ -1157,11 +1159,9 @@ class CANDO(object):
                     # call pairwise_distances, speed up with custom RMSD function and parallelism
                     distance_matrix = []
                     if self.dist_metric == "rmsd":
-                        distance_matrix = pairwise_distances_chunked(snp,
-                                                                     metric=lambda u, v: np.sqrt(((u - v) ** 2).mean()),
+                        distance_matrix = pairwise_distances_chunked(snp, metric='euclidean',
                                                                      #working_memory=512,
-                                                                     #n_jobs=self.ncpus,
-                                                                     )
+                                                                     n_jobs=self.ncpus)
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
@@ -1176,7 +1176,10 @@ class CANDO(object):
                         pbar = tqdm(chunk) if self.pbar else chunk
                         for y in pbar: ##TQDM1
                             c1 = str(self.compounds[i].id_)
-                            d_temp = list(zip(l, y))
+                            if self.dist_metric == 'rmsd':
+                                d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
+                            else:
+                                d_temp = list(zip(l, y))
                             d_temp.pop(i)
                             # This is to keep the old versions of canbenchmark and canpredict working
                             # Need to update those functions to work with sqlite
@@ -1192,7 +1195,7 @@ class CANDO(object):
                                 del df_temp
                                 d_similar = {}
                             i += 1
-                    
+
                     # Speed the table up with indexes
                     conn = sqlite3.connect(f'{self.db_name}')
                     cursor = conn.cursor()
@@ -1770,6 +1773,7 @@ class CANDO(object):
             c2 = self.compounds[i]
             if i == q:
                 continue
+            #d = int(distances[0][i])
             d = distances[0][i]
             cmpd.similar.append((c2, d))
             n += 1
@@ -2413,7 +2417,7 @@ class CANDO(object):
 
     def canbenchmark_new(self, file_name, n=10, indications=[], continuous=False, bottom=False,
                          ranking='standard', adrs=False, associated=True, addl_metrics=[], write_addl=False,\
-                         exclude_indic=False):
+                         exclude_indic=False, tierank='min'):
         """!
         Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
         This function tests the performance of canpredict_compounds
@@ -2430,6 +2434,8 @@ class CANDO(object):
             output - either single # result (eg AUROC) or tuple of one # per threshold
         @param write_addl bool: If True, will create a results_analysed_named file for each addl_metrics func (default: False)
         @param exlude_indic: If True, will only rank left out compound against non-indicated compounds (default: False)
+        @param tierank str: rank that tied compounds will take; see polars.Expr.rank for full options (default: min)
+            options - min, max, average, ordinal, random (for 3 tied compounds, could result in: 1/1/1, 3/3/3, 2/2/2, 1/2/3, 3/1/2)
         @return Returns None
         """
 
@@ -2587,13 +2593,13 @@ class CANDO(object):
             pool = mp.Pool(processes=self.ncpus)
             conn = f'sqlite://{self.db_name}'
             pool.starmap_async(ind_accuracies, [(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics,\
-                                                 associated, n, self.db_name, self.dist_metric, exclude_indic) for effect in effects]).get()
+                                                 associated, n, self.db_name, self.dist_metric, exclude_indic, tierank) for effect in effects], chunksize=20).get()
             pool.close
             pool.join
         else:
             pbar = tqdm(effects) if self.pbar else effects
-            conn = f'sqlite://{self.db_name}'
-            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, associated, n, self.db_name, self.dist_metric, exclude_indic) for effect in pbar] #TQDM2
+            [ind_accuracies(effect.id_, effect.compounds, cmpd_lib, benchmark_name, metrics, associated, n, self.db_name, self.dist_metric, exclude_indic, tierank)\
+             for effect in pbar] #TQDM2
         t_calc = print_time(time.time() - start_calc)
         print("  Done calculating scores.")
         print(f"  Time to calculate scores: {t_calc}")
@@ -5345,7 +5351,7 @@ class CANDO(object):
             cmpd = cmpd
         elif type(cmpd) is int:
             cmpd = self.get_compound(cmpd)
-        # Add ability to generate simialr list from an iputted signature
+        # Add ability to generate simialr list from an inputted signature
         #elif type(cmpd) is list:
         print(f"Compound id = {cmpd.id_}")
         print(f"Compound index = {cmpd.index}")
@@ -5356,13 +5362,12 @@ class CANDO(object):
         print(f"  Printing {n} most similar compounds...\n")
         print("  rank\tdist\tid\tname")
         for i in range(n+1):
-            c = self.get_compound(cmpd.similar[i][0])
-            print("  {}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], c.id_, c.name))
+            print("  {}\t{:.3f}\t{}\t{}".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
         print('\n')
         if save:
             print(f"  Saving {n} most similar compounds...")
             with open(save, 'w', encoding="utf8") as o:
-                o.write("rank\tdist\tid\tname")
+                o.write("rank\tdist\tid\tname\n")
                 for i in range(n+1):
                     o.write("{}\t{:.3f}\t{}\t{}\n".format(i+1, cmpd.similar[i][1], cmpd.similar[i][0].id_, cmpd.similar[i][0].name))
             print(f"  Results saved to {save}.\n")
@@ -6185,7 +6190,7 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     return(mat.iloc[:,0].values)
 
 def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
-                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=False, out_file='', out_path=".", nr_ligs=True,
+                       p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", save_sig=True, out_file='', out_path=".", nr_ligs=True,
                        prot_path='', lig_name=False):
     """!
        Generate an interaction signature for a query compound using our in-house protocol BANDOCK. Note: the parameters
@@ -7017,7 +7022,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
-def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic):
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic, tierank):
     db_name = f'{d_name}/{effect_id}.db'
     #print(db_name)
     if os.path.exists(db_name):
@@ -7097,15 +7102,18 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         nrank_df_loo = nrank_df.copy().drop(c_loo, axis=1)
 
         dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
+        dist_df_loo['summed_dist'] = dist_df_loo.iloc[:,1:].sum(axis=1)
         score_df_loo['score'] = score_df_loo.iloc[:,1:].sum(axis=1)
         score_df_loo['neg_score'] = score_df_loo['score'].apply(lambda x: len(effect_cmpds)-1 - x)
         rank_df_loo['avg_rank'] = rank_df_loo.iloc[:,1:].mean(axis=1)
+        rank_df_loo['summed_rank'] = rank_df_loo.iloc[:,1:].sum(axis=1)
         nrank_df_loo['summed_nrank'] = nrank_df_loo.iloc[:,1:].sum(axis=1)
         
         c_df_loo = score_df_loo.loc[:,['id','score','neg_score']].merge(nrank_df_loo.loc[:,['id','summed_nrank']], on='id', how='left')
         c_df_loo['avg_nrank'] = c_df_loo.loc[:,['summed_nrank','score']].apply(lambda x: x[0]/x[1] if x[1] > 0 else float(len(cmpd_lib)))
-        c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','avg_dist']], on='id', how='left')
-        c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','avg_rank']], on='id', how='left')
+        
+        c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','avg_dist','summed_dist']], on='id', how='left')
+        c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','avg_rank','summed_rank']], on='id', how='left')
 
         c_df_loo = c_df_loo.sort_values(by=['score','avg_nrank','avg_rank','avg_dist'], ascending=[True,False,False,False])
         # This is competitive ranking
@@ -7114,8 +7122,9 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             other_indic = effect_cmpds[:]
             other_indic.remove(c_loo)
             c_df_loo = c_df_loo.loc[~c_df_loo['id'.isin(other_indic)]]
-
-        c_df_loo['rank'] = c_df_loo[['neg_score','avg_nrank','avg_rank']].apply(tuple,axis=1).rank(method='min')
+        
+        c_df_loo['rank'] = c_df_loo[['neg_score','avg_nrank','avg_rank','summed_dist']].apply(tuple,axis=1).rank(method=tierank).astype(int)
+        #c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank', 'summed_dist').rank(method=tierank))
 
         rank = c_df_loo.loc[c_df_loo['id']==c_loo,'rank'].values[0]
         score = c_df_loo.loc[c_df_loo['id']==c_loo,'score'].values[0]
