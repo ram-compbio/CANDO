@@ -653,8 +653,9 @@ class CANDO(object):
                 lcount = 0
                 for l in lines[1:]:
                     ls = l.strip().split('\t')
-                    adr_name = ls[h2i['CONDITION_MESH_NAME']]
-                    adr_id = ls[h2i['CONDITION_MESH_ID']]
+                    adr_name = ls[h2i['COND_NAME']]
+                    adr_id = ls[h2i['COND_MEDDRA_ID']]
+                    #adr_id = ls[h2i['COND_DB_ID']]
                     c_id = int(ls[h2i['CANDO_ID']])
                     #adr_name = ls[h2i['condition_concept_name']]
                     #c_id = int(ls[h2i['drug_cando_id']])
@@ -783,7 +784,7 @@ class CANDO(object):
                 df_adrs = pd.read_sql("SELECT * FROM adrs",db)
                 # Get ADRs from inputted cmpd_pair-ind mapping
                 ddi = pd.read_csv(self.ddi_adrs, sep='\t')
-                l_adrs = ddi['COND_DB_ID'].drop_duplicates().to_list()
+                l_adrs = ddi['COND_MEDDRA_ID'].drop_duplicates().to_list()
                 # Pull cmpd_pairs from table
                 df_cps = pd.read_sql("SELECT * FROM cmpd_pairs",db)
                 # Get cmpd_pairs from inputted cmpd_pair-ind mapping
@@ -888,7 +889,8 @@ class CANDO(object):
                 for x in adrs.index:
                     #ADRs
                     adr_name = ddi.loc[x,'COND_NAME']
-                    adr_id = ddi.loc[x,'COND_DB_ID']
+                    adr_id = ddi.loc[x,'COND_MEDDRA_ID']
+                    #adr_id = ddi.loc[x,'COND_DB_ID']
                     #adr_name = ddi.loc[x,'CONDITION_MESH_NAME']
                     #adr_id = ddi.loc[x,'CONDITION_MESH_ID']
                     if adr_id in self.adr_ids:
@@ -1768,7 +1770,7 @@ class CANDO(object):
             c2 = self.compounds[i]
             if i == q:
                 continue
-            d = int(distances[0][i])
+            d = distances[0][i]
             cmpd.similar.append((c2, d))
             n += 1
 
@@ -4689,7 +4691,7 @@ class CANDO(object):
                     fo.write(st + '\n')
         return
 
-    def canpredict_compounds(self, ind_id, n=10, topX=10, consensus=True, keep_associated=False, cmpd_set='all',
+    def canpredict_compounds(self, ind_id, n=10, topX=10, consensus=True, keep_associated=False, adrs=False, cmpd_set='all',
                              save=''):
         """!
         This function is used for predicting putative therapeutics for an indication
@@ -4703,7 +4705,7 @@ class CANDO(object):
         refers to the number of times the compound shows up in the top 'n' drugs associated with
         the indication and 'score2' is the average of the ranks for 'score1' (note: 'score2' <= 'n').
 
-        @param ind_id str: Indication id
+        @param ind_id str: Indication id (or ADR id)
         @param n int: top number of similar Compounds to be used for each Compound associated with the given Indication
         @param topX int: top number of predicted Compounds to be printed
         @param consensus bool: if True, only compounds with at least 2 votes will be printed
@@ -4718,8 +4720,12 @@ class CANDO(object):
         if int(n) == -1:
             n = len(self.compounds)-1
 
-        i = self.indication_ids.index(ind_id)
-        ind = self.indications[i]
+        if adrs:
+            #i = self.adr_ids.index(ind_id)
+            ind = self.get_adr(ind_id)
+        else:
+            i = self.indication_ids.index(ind_id)
+            ind = self.indications[i]
         print("{0} compounds found for {1} --> {2}".format(len(ind.compounds), ind.id_, ind.name))
 
         if self.pathways:
@@ -4815,6 +4821,8 @@ class CANDO(object):
             else:
                 print(st)
             i += 1
+        if save:
+            fo.close()
         print('\n')
 
     def canpredict_indications(self, cmpd, n=10, topX=10, consensus=True, sorting='prob', save=''):
@@ -4915,7 +4923,7 @@ class CANDO(object):
 
         @param cmpd Compound: Compound object to be used
         @param n int: top number of similar Compounds to be used for prediction
-        @param topX int: top number of predicted Indications to be printed
+        @param topX int: top number of predicted ADRs to be printed
         @param consensus bool: if True, only ADRs with at least 2 votes will be printed
         @param sorting str: whether to sort the ADRs by probability ('prob') or score ('score')
         @param save str: path to file to save output
@@ -7011,6 +7019,7 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
 def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic):
     db_name = f'{d_name}/{effect_id}.db'
+    #print(db_name)
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
         df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
@@ -7126,7 +7135,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         s.append(str(float(avg_dist)))
         s.append(str(float(conf)))
         ss.append(s)
-    db_benchmark = create_engine(f'sqlite:///{db_name}')
+    db_benchmark = create_engine(f'sqlite:///{db_name}', pool_pre_ping=True)
     # Indication accuracies
     benchmark_cols = ['cmpd_id', 'effect_id',
                       'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
