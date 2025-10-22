@@ -7091,10 +7091,10 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             pa_ss.append(s)
     del df_dists, c_sorted
     for c_loo in effect_cmpds:
-        dist_df_loo = dist_df.drop(c_loo, axis=1)
-        score_df_loo = score_df.drop(c_loo, axis=1)
-        rank_df_loo = rank_df.drop(c_loo, axis=1)
-        nrank_df_loo = nrank_df.drop(c_loo, axis=1)
+        dist_df_loo = dist_df.copy().drop(c_loo, axis=1)
+        score_df_loo = score_df.copy().drop(c_loo, axis=1)
+        rank_df_loo = rank_df.copy().drop(c_loo, axis=1)
+        nrank_df_loo = nrank_df.copy().drop(c_loo, axis=1)
 
         dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
         score_df_loo['score'] = score_df_loo.iloc[:,1:].sum(axis=1)
