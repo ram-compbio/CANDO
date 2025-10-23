@@ -1162,6 +1162,13 @@ class CANDO(object):
                         distance_matrix = pairwise_distances_chunked(snp, metric='euclidean',
                                                                      #working_memory=512,
                                                                      n_jobs=self.ncpus)
+                    '''
+                    elif self.dist_metric == "dot":
+                        sig_len = len(self.compounds[0].sig)
+                        distance_matrix = pairwise_distances_chunked(snp,
+                                                                     metric=lambda u, v: 1 - (np.dot(u,v)/sig_len),
+                                                                     )
+                    '''
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      force_all_finite=False,
@@ -7058,7 +7065,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     score_df = dist_df.copy()
     rank_df = dist_df.copy()
     nrank_df = dist_df.copy()
-    
+   
     for c in effect_cmpds:
         c_sorted = json.loads(df_dists.loc[df_dists['id']==c,'dists'].values[0].replace("'",'"'))
         df_temp = pd.DataFrame.from_dict(c_sorted, orient='index')
@@ -7101,30 +7108,36 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         rank_df_loo = rank_df.copy().drop(c_loo, axis=1)
         nrank_df_loo = nrank_df.copy().drop(c_loo, axis=1)
 
-        dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
+        #dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
         dist_df_loo['summed_dist'] = dist_df_loo.iloc[:,1:].sum(axis=1)
         score_df_loo['score'] = score_df_loo.iloc[:,1:].sum(axis=1)
         score_df_loo['neg_score'] = score_df_loo['score'].apply(lambda x: len(effect_cmpds)-1 - x)
-        rank_df_loo['avg_rank'] = rank_df_loo.iloc[:,1:].mean(axis=1)
+        #rank_df_loo['avg_rank'] = rank_df_loo.iloc[:,1:].mean(axis=1)
         rank_df_loo['summed_rank'] = rank_df_loo.iloc[:,1:].sum(axis=1)
         nrank_df_loo['summed_nrank'] = nrank_df_loo.iloc[:,1:].sum(axis=1)
         
         c_df_loo = score_df_loo.loc[:,['id','score','neg_score']].merge(nrank_df_loo.loc[:,['id','summed_nrank']], on='id', how='left')
-        c_df_loo['avg_nrank'] = c_df_loo.loc[:,['summed_nrank','score']].apply(lambda x: x[0]/x[1] if x[1] > 0 else float(len(cmpd_lib)))
+        c_df_loo['avg_nrank'] = c_df_loo.loc[:,['summed_nrank','score']].apply(lambda x: x[0]/x[1] if x[1] > 0 else float(len(cmpd_lib)), axis=1)
         
-        c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','avg_dist','summed_dist']], on='id', how='left')
-        c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','avg_rank','summed_rank']], on='id', how='left')
+        #c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','avg_dist','summed_dist']], on='id', how='left')
+        c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','summed_dist']], on='id', how='left')
+        c_df_loo['avg_dist'] = c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cmpds)-1))
+        #c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','avg_rank','summed_rank']], on='id', how='left')
+        c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','summed_rank']], on='id', how='left')
+        c_df_loo['avg_rank'] = c_df_loo['summed_rank'].apply(lambda x: x / (len(effect_cmpds)-1))
 
-        c_df_loo = c_df_loo.sort_values(by=['score','avg_nrank','avg_rank','avg_dist'], ascending=[True,False,False,False])
+        c_df_loo = c_df_loo.sort_values(by=['score','avg_nrank','avg_rank','avg_dist'], ascending=[False,True,True,True])
         # This is competitive ranking
         # Add other ranking methods using polars.Series.rank
         if exclude_indic:
             other_indic = effect_cmpds[:]
             other_indic.remove(c_loo)
             c_df_loo = c_df_loo.loc[~c_df_loo['id'.isin(other_indic)]]
-        
+       
         c_df_loo['rank'] = c_df_loo[['neg_score','avg_nrank','avg_rank','summed_dist']].apply(tuple,axis=1).rank(method=tierank).astype(int)
-        #c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank', 'summed_dist').rank(method=tierank))
+        #c_df_loo = pl.DataFrame(c_df_loo)
+        #c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank','summed_dist').rank(method=tierank))
+        #c_df_loo = c_df_loo.to_pandas(use_pyarrow_extension_array=True)
 
         rank = c_df_loo.loc[c_df_loo['id']==c_loo,'rank'].values[0]
         score = c_df_loo.loc[c_df_loo['id']==c_loo,'score'].values[0]
