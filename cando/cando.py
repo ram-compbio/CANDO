@@ -18,6 +18,7 @@ from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import NearestNeighbors
 from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
@@ -219,21 +220,27 @@ class Pathway(object):
 
 class ADR(object):
     """!
-    An object to represent an adverse reaction
+    An object to represent an adverse drug reaction
     """
     def __init__(self, id_, name):
         ## @var id_
-        # str: Identification for the given ADR
+        # str: Internal CANDO identification for the given ADR
         self.id_ = id_
         ## @var name
         # str: Name of the given ADR
         self.name = name
         ## @var compounds
-        # list: Compound objects associated with the given ADR
+        # list: Compound identifications associated with the given ADR
         self.compounds = []
         ## @var compound_pairs
-        # List: Compound_pair object pairs (tuples) associated with the given ADR
+        # List: Compound_pair identifications (tuples) associated with the given ADR
         self.compound_pairs = []
+        ## @var meddra_id_
+        # str: MedDRA identification for the given ADR
+        self.meddra_id_ = ''
+        ## @var snomed_id_
+        # str: SNOMED identification for the given ADR
+        self.snomed_id_ = ''
 
 
 class CANDO(object):
@@ -248,7 +255,7 @@ class CANDO(object):
     def __init__(self, c_map, i_map, matrix='', db_name='', compound_set='all', compute_distance=False, save_dists='',
                  read_dists='', pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 ddi_compounds='', ddi_adrs='', adr_map='', sig_fusion='sum', 
+                 ddi_map='', ddi_adr_map='', adr_map='', sig_fusion='sum', 
                  protein_distance=False, protein_map='', ncpus=1, pbar=True):
         ## @var c_map
         # str: File path to the compound mapping file (relative or absolute)
@@ -317,11 +324,11 @@ class CANDO(object):
         # str: File path to Protein metadata mapping file
         self.protein_map = protein_map
         ## @var ddi_compounds
-        # str: File path to Drug--drug mapping file
-        self.ddi_compounds = ddi_compounds
+        # str: File path to drug-drug mapping file
+        self.ddi_map = ddi_map
         ## @var ddi_compounds
-        # str: File path to Drug--Drug--ADE mapping file
-        self.ddi_adrs = ddi_adrs
+        # str: File path to Drug-Drug-ADR mapping file
+        self.ddi_adr_map = ddi_adr_map
         
         ## @var pbar
         # bool: Use TQDM progress bar for certain processes
@@ -373,12 +380,14 @@ class CANDO(object):
         ignored_set = []
         # create all of the compound objects from the compound map
         with open(c_map, 'r', encoding="utf8") as c_f:
-            lines = c_f.readlines()
-            header = lines[0]
+            #lines = c_f.readlines()
+            #header = lines[0]
+            header = c_f.readline()
             h2i = {}
             for i, h in enumerate(header.strip().split('\t')):
                 h2i[h] = i
-            for l in lines[1:]:
+            #for l in lines[1:]:
+            for l in c_f:
                 ls = l.strip().split('\t')
                 name = ls[h2i['GENERIC_NAME']]
                 id_ = int(ls[h2i['CANDO_ID']])
@@ -428,7 +437,7 @@ class CANDO(object):
                 if include_cmpd:
                     self.compounds.append(cm)
                     self.compound_ids.append(id_)
-        del lines
+        #del lines
 
         assert not self.compound_set or len(self.compounds) > 0,\
                'No compounds passed filtering, please check input parameters.'
@@ -444,12 +453,14 @@ class CANDO(object):
         # had to remove those compounds from the indication mapping in
         # order for it to work
         with open(i_map, 'r', encoding="utf8") as i_f:
-            lines = i_f.readlines()
-            header = lines[0]
+            #lines = i_f.readlines()
+            #header = lines[0]
+            header = i_f.readline()
             h2i = {}
             for i, h in enumerate(header.strip().split('\t')):
                 h2i[h] = i
-            for l in lines[1:]:
+            #for l in lines[1:]:
+            for l in i_f:
                 ls = l.strip().split('\t')
                 c_id = int(ls[h2i['CANDO_ID']])
                 if c_id in ignored_set:
@@ -476,7 +487,7 @@ class CANDO(object):
                     # Reduce memory usage
                     #cm.add_indication(ind)
                     cm.add_indication(ind_id)
-        del lines
+        #del lines
 
         # add proteins, add signatures and such to compounds
         if self.protein_set:
@@ -644,18 +655,19 @@ class CANDO(object):
         if adr_map:
             print('Reading ADR mapping file...')
             with open(adr_map, 'r', encoding="utf8") as amf:
-                lines = amf.readlines()
-                header = lines[0]
+                #lines = amf.readlines()
+                #header = lines[0]
+                header = amf.readline()
                 h2i = {}
                 for i, h in enumerate(header.strip().split('\t')):
                     h2i[h] = i
                 prev_id = -1
                 lcount = 0
-                for l in lines[1:]:
+                #for l in lines[1:]:
+                for l in amf:
                     ls = l.strip().split('\t')
-                    adr_name = ls[h2i['COND_NAME']]
-                    adr_id = ls[h2i['COND_MEDDRA_ID']]
-                    #adr_id = ls[h2i['COND_DB_ID']]
+                    adr_name = ls[h2i['CONDITION_NAME']]
+                    adr_id = ls[h2i['CONDITION_MEDDRA_ID']]
                     c_id = int(ls[h2i['CANDO_ID']])
                     #adr_name = ls[h2i['condition_concept_name']]
                     #c_id = int(ls[h2i['drug_cando_id']])
@@ -682,6 +694,7 @@ class CANDO(object):
                         adr.compounds.append(c_id)
                         cmpd.adrs.append(adr_id)
                         self.adrs.append(adr)
+                        self.adr_ids.append(adr_id)
             print(f'Read {len(self.adrs)} ADRs.\n')
 
 
@@ -692,14 +705,14 @@ class CANDO(object):
         print("  Checking if data exists in tables...")
         try:
             db = create_engine(f'sqlite:///{self.db_name}')
-            #db = create_engine('sqlite:///cando.db')
             ind_pass = True
             cmpd_pass = True
             adr_pass = True
-            df_inds = pd.read_sql("SELECT * FROM inds", db)
-            df_cmpds = pd.read_sql("SELECT * FROM cmpds", db)
+            df_inds = pd.read_sql_query("SELECT * FROM inds", db)
+            df_cmpds = pd.read_sql_query("SELECT * FROM cmpds", db)
+            ## ZF - need to add a DDI map check here too!
             if adr_map:
-                df_adrs = pd.read_sql("SELECT * FROM adrs", db)
+                df_adrs = pd.read_sql_query("SELECT * FROM adrs", db)
                 if len(df_adrs) != len(self.adrs): adr_pass = False
             if len(df_cmpds) != len(self.compounds): cmpd_pass = False
             if len(df_inds) != len(self.indications): ind_pass = False
@@ -714,7 +727,6 @@ class CANDO(object):
 
         if not check:
             db = create_engine(f'sqlite:///{self.db_name}')
-            #db = create_engine('sqlite:///cando.db')
             print("    indications")
             #d_inds = {str(x.id_): [str(x.name), str([cmpd.id_ for cmpd in x.compounds])] for x in tqdm(self.indications)}
             pbar = tqdm(self.indications) if self.pbar else self.indications
@@ -759,9 +771,9 @@ class CANDO(object):
             conn.close()
         print("Done building compound-indication tables.\n")
 
-        if self.ddi_compounds:
+        if self.ddi_map:
             print("Reading compound-compound associations...")
-            ddi = pd.read_csv(ddi_compounds, sep='\t')
+            ddi = pd.read_csv(ddi_map, sep='\t')
             for x in ddi.index:
                 c1 = self.get_compound(int(ddi.loc[x,'CANDO_ID-1']))
                 c2 = self.get_compound(int(ddi.loc[x,'CANDO_ID-2']))
@@ -771,26 +783,24 @@ class CANDO(object):
                     c2.compounds.append(c1)
             print('Done reading compound-compound associations.\n')
 
-        if self.ddi_adrs:
+        if self.ddi_adr_map:
             print("Building compound pair-adverse events tables...")
             print("  Checking if data exists in tables...")
             check = False
             # Check
             # If pass, do not recreate but pull from db
             try:
-                #db = create_engine('sqlite:///ddi.db')
                 db = create_engine(f'sqlite:///{self.db_name}')
                 # Pull ADRs from table
                 df_adrs = pd.read_sql("SELECT * FROM adrs",db)
                 # Get ADRs from inputted cmpd_pair-ind mapping
-                ddi = pd.read_csv(self.ddi_adrs, sep='\t')
-                l_adrs = ddi['COND_MEDDRA_ID'].drop_duplicates().to_list()
+                ddi = pd.read_csv(self.ddi_adr_map, sep='\t')
+                l_adrs = ddi['CONDITION_MEDDRA_ID'].drop_duplicates().to_list()
                 # Pull cmpd_pairs from table
                 df_cps = pd.read_sql("SELECT * FROM cmpd_pairs",db)
                 # Get cmpd_pairs from inputted cmpd_pair-ind mapping
                 l_cps = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
                 l_cps = list(set(l_cps))
-                #l_adrs = set(ddi.loc[:,'CONDITION_MESH_ID'].to_list())
                 if len(df_adrs)==len(l_adrs) and len(df_cps)==len(l_cps):
                     print("  Data already in tables.")
                     check=True
@@ -800,11 +810,10 @@ class CANDO(object):
                 print("  Data does not exist OR data does not match.")
                 #os.system(f"rm {self.db_name}")
 
-        if self.ddi_adrs and check==True:
+        if self.ddi_adr_map and check==True:
             print("  Reading adverse drug reaction and compound pair associations from tables...")
             # Compound pairs
             db = create_engine(f'sqlite:///{self.db_name}')
-            #db = create_engine('sqlite:///ddi.db')
             df_temp = pd.read_sql("SELECT * FROM cmpd_pairs",db)
             print("    compound pairs")
             pbar = tqdm(df_temp.index) if self.pbar else df_temp.index
@@ -862,11 +871,11 @@ class CANDO(object):
  
             print("Done generating compound-compound signatures.\n")
 
-        if self.ddi_adrs and check==False:
+        if self.ddi_adr_map and check==False:
             #db = create_engine('sqlite:///ddi.db')
             db = create_engine(f'sqlite:///{self.db_name}')
             print("  Reading compound pair-adverse events associations...")
-            ddi = pd.read_csv(ddi_adrs,sep='\t')
+            ddi = pd.read_csv(ddi_adr_map,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
             idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
             print("    {} compound pair-adverse event associations.".format(len(idss)))
@@ -888,11 +897,8 @@ class CANDO(object):
                 # Iterate through ADRs for this compound pair 
                 for x in adrs.index:
                     #ADRs
-                    adr_name = ddi.loc[x,'COND_NAME']
-                    adr_id = ddi.loc[x,'COND_MEDDRA_ID']
-                    #adr_id = ddi.loc[x,'COND_DB_ID']
-                    #adr_name = ddi.loc[x,'CONDITION_MESH_NAME']
-                    #adr_id = ddi.loc[x,'CONDITION_MESH_ID']
+                    adr_name = ddi.loc[x,'CONDITION_NAME']
+                    adr_id = ddi.loc[x,'CONDITION_MEDDRA_ID']
                     if adr_id in self.adr_ids:
                         adr = self.get_adr(adr_id)
                     else:
@@ -904,6 +910,7 @@ class CANDO(object):
                     #cm_p.add_adr(adr)
                     adr.compound_pairs.append(ids)
                     #adr.compound_pairs.append(cm_p)
+            
             print("    {} compound pairs.".format(len(self.compound_pairs)))
             print("    {} adverse events.".format(len(self.adrs)))
             print('  Done reading compound pair-adverse event associations.\n')
@@ -911,21 +918,17 @@ class CANDO(object):
             print("  adverse drug reactions")
             pbar = tqdm(self.adrs) if self.pbar else self.adrs
             d_adrs = {str(x.id_): [str(x.name), str(x.compound_pairs)] for x in pbar}
-            #d_adrs = {str(x.id_): str(x.name) for x in tqdm(self.adrs)}
             df_adrs = pd.DataFrame.from_dict(d_adrs,orient='index')
             df_adrs.index.names = ['id']
             df_adrs.rename(columns={0:'name',1:'cmpd_pair_ids'},inplace=True)
-            #df_adrs.rename(columns={0:'name'},inplace=True)
             df_adrs.to_sql('adrs', db, if_exists='replace')
             
             print("  compound pairs")
             pbar = tqdm(self.compound_pairs) if self.pbar else self.compound_pairs
             d_cps = {str(x.id_): [str(x.name), str(x.adrs)] for x in pbar}
-            #d_cps = {str(x.id_): str(x.name) for x in tqdm(self.compound_pairs)}
             df_cps = pd.DataFrame.from_dict(d_cps,orient='index')
             df_cps.index.names = ['ids']
             df_cps.rename(columns={0:'names', 1:'adr_ids'},inplace=True)
-            #df_cps.rename(columns={0:'names'},inplace=True)
             df_cps.to_sql('cmpd_pairs', db, if_exists='replace')
 
             print("  Generating compound-compound signatures...")
@@ -1001,7 +1004,7 @@ class CANDO(object):
 
         # if compute distance is true, generate similar compounds for each
         if compute_distance and not read_dists:
-            if self.pathways and not self.indication_pathways and not ddi_adrs:
+            if self.pathways and not self.indication_pathways and not ddi_adr_map:
                 print('Computing distances using global pathway signatures...')
                 for c in self.compounds:
                     self.generate_similar_sigs(c, aux=True)
@@ -1009,13 +1012,13 @@ class CANDO(object):
            
             # Still cleaning this code up.
             # Memory issues with full Twosides is a huge limitation
-            ## Do not compute all distances, but rather generate_simialr on the fly
+            ## Do not compute all distances, but rather generate_similar on the fly
             ## do not populate the similar list for each Compound_pair object
             ## This will increase computing time, but decrease mem allocation
-            elif ddi_adrs:
+            elif ddi_adr_map:
                 #print('Will not compute {} distances for compound pairs due to memory issues...'.format(self.dist_metric))
                 #print('Can compute individually on-the-fly for canpredict and/or canbennchmark.')
-                print('Computing {} distances for compound pairs...'.format(self.dist_metric))
+                print(f'Computing {self.dist_metric} distances for compound pairs...')
                
                 try: 
                     #Connecting to sqlite
@@ -1034,24 +1037,6 @@ class CANDO(object):
                     #print("dists table does not exist.")
                     pass
 
-                '''
-                try: 
-                    #Connecting to sqlite
-                    conn = sqlite3.connect('ddi.db')
-                    #Creating a cursor object using the cursor() method
-                    cursor = conn.cursor()
-                    #Droping dists table if already exists
-                    cursor.execute("DROP TABLE ranks")
-                    print("ranks table dropped.")
-                    #Commit your changes in the database
-                    conn.commit()
-                    #Closing the connection
-                    conn.close()
-                except:
-                    print("ranks table does not exist.")
-                '''
-
-                #db = create_engine('sqlite:///ddi.db')
                 db = create_engine(f'sqlite:///{self.db_name}')
                 # put all compound_pair signatures into 2D-array
                 snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
@@ -1065,62 +1050,51 @@ class CANDO(object):
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
                     #distance_matrix = squareform(distance_matrix)
                     distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
-                            force_all_finite=False,
+                            #ensure_all_finite=False,
                             n_jobs=self.ncpus)
                 l = [cpp.id_ for cpp in self.compound_pairs]
                 d_similar = {}
-                #r_similar = {}
+                # iterator for compound pair to identify self match
                 i = 0
                 for chunk in distance_matrix:
                     pbar = tqdm(chunk) if self.pbar else chunk
                     for y in pbar: #TQDM3
-                        #dists = cdist([snp[i]], snp, dist_metric)[0]
-                        #self.compound_pairs[i].similar = dict(zip(self.compound_pairs, dists))
-                        #self.compound_pairs[i].similar.pop(i)
-                        cp = self.compound_pairs[i].id_
-                        #d_temp = dict(zip(l, y))
-                        #d_temp.pop(cp)
-                        #d_temp = dict(sorted(d_temp.items(), key=lambda item: item[1] if not math.isnan(item[1]) else 100000))
-                        if self.dist_metric == 'rmsd':
-                            d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
-                        else:
-                            d_temp = list(zip(l, y))
+                        # compound pair id as string
+                        cp = str(self.compound_pairs[i].id_)
+                        # zip together all compound pair ids and distances to the current compound pair
+                        d_temp = list(zip(l, y))
+                        # remove the self comparison
                         d_temp.pop(i)
-                        #l2 = l.copy()
-                        #l2.pop(i)
-                        #y = np.delete(y, i)
-                        #d_temp = sorted(d_temp, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
-                            
-                        # Calculate ranks for each compound pair
-                        #rank_sorted = stats.rankdata(y, method='max')
-                        #rank_sorted = stats.rankdata(list(zip(*d_temp))[1], method='max')
-
-                        # Save as a list
-                        #d_temp = list(zip(l2,y,rank_sorted))
-                        #d_temp = list(zip(list(zip(*d_temp))[0],list(zip(*d_temp))[1],rank_sorted))
-                        # Save as a dict
-                        #d_temp = {sctr(cp2): [dist2,rank2] for cp2,dist2,rank2 in d_temp}
-                        d_temp = {str(cp2): dist2 for cp2,dist2 in d_temp}
-                        #d_similar[str(cp)] = d_temp
-                        d_similar[str(cp)] = str(d_temp)
+                        # save as a key-value pair in dict as a str dict
+                        # this is for storing in sqlite and retreival later
+                        d_similar[cp] = str({str(cp2): dist2 for cp2,dist2 in d_temp})
+                        
+                        # ZF - Thought this would be faster, but it isnt (3iter/s vs 5iter/s)
+                        #cp = str(self.compound_pairs[i].id_)
+                        #similar_dict = {str(cp2): dist2 for j,(cp2,dist2) in enumerate(zip(l,y)) if j != i}
+                        #d_similar[cp] = str(similar_dict)
+                        
                         if i%1000==0 or i==len(self.compound_pairs)-1:
                             df_temp = pd.DataFrame.from_dict(d_similar,orient='index')
                             df_temp.index.names = ['id']
                             df_temp.rename(columns={0:'dists'},inplace=True)
                             df_temp.to_sql('dists', db, if_exists='append')
                             d_similar = {}
-                                
-                            #df_temp = pd.DataFrame.from_dict(r_similar,orient='index')
-                            #df_temp.index.names = ['id']
-                            #df_temp.to_sql('ranks', db, if_exists='append')
-                            #r_similar = {}
                         i+=1
-                        #df_temp = pd.DataFrame.from_dict(d_similar, index=[str(self.compound_pairs[i].id_)], columns=['dists'])
-                    #df_temp.to_sql('dists', db, if_exists='append')
                     #self.compound_pairs[i].similar_computed = True
                     #self.compound_pairs[i].similar_sorted = True
                 print('Done computing {} distances for compound pairs.\n'.format(self.dist_metric))
-
+                '''
+                nn = NearestNeighbors(
+                        n_neighbors=10,
+                        metric=self.dist_metric,
+                        algorithm="brute",
+                        n_jobs=self.ncpus
+                )
+                nn.fit(snp)
+                distances, indices = nn.kneighbors([snp[0]])
+                print(list(zip(indices.tolist()[0],distances.tolist()[0])))
+                '''
             # Compute distances -- just compounds (not compound pairs)
             else:
                 print('Building {} distance table...'.format(self.dist_metric))
@@ -1171,7 +1145,7 @@ class CANDO(object):
                     '''
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
-                                                                     force_all_finite=False,
+                                                                     #ensure_all_finite=False,
                                                                      #working_memory=512,
                                                                      n_jobs=self.ncpus)
                     print(f'  Done calculating {self.dist_metric} distances.')
@@ -1193,7 +1167,7 @@ class CANDO(object):
                             self.compounds[i].similar = d_temp
                             self.compounds[i].similar_computed = True
                             d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
-                            d_similar[str(c1)] = str(d_temp)
+                            d_similar[c1] = str(d_temp)
                             if i % 1000 == 0 or i == len(self.compounds)-1:
                                 df_temp = pd.DataFrame.from_dict(d_similar, orient='index')
                                 df_temp.index.names = ['id']
@@ -1431,7 +1405,7 @@ class CANDO(object):
                 return c
             elif c.id_ == (ids[1],ids[0]):
                 return c
-        print("{0} not in {1}".format(ids, self.ddi_adrs))
+        print("{0} not in {1}".format(ids, self.ddi_adr_map))
         return None
 
     def get_protein(self, protein_id):
@@ -5394,7 +5368,7 @@ class CANDO(object):
             for l in nsf:
                 [pr, sc] = l.strip().split('\t')
                 pr_i = self.protein_id_to_index[pr]
-                n_sig[pr_i] = sc
+                n_sig[pr_i] = float(sc)
         i = max([cm.id_ for cm in self.compounds]) + 1
         if not new_name:
             new_name = 'compound_{}'.format(i)
@@ -6411,6 +6385,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 continue
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
+            inchi = Chem.MolToInchi(nc)
             try:
                 match = str(inchi_dict[inchi_key])
             except:
