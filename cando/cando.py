@@ -1136,13 +1136,11 @@ class CANDO(object):
                         distance_matrix = pairwise_distances_chunked(snp, metric='euclidean',
                                                                      #working_memory=512,
                                                                      n_jobs=self.ncpus)
-                    '''
                     elif self.dist_metric == "dot":
                         sig_len = len(self.compounds[0].sig)
                         distance_matrix = pairwise_distances_chunked(snp,
                                                                      metric=lambda u, v: 1 - (np.dot(u,v)/sig_len),
                                                                      )
-                    '''
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      #ensure_all_finite=False,
@@ -3290,7 +3288,7 @@ class CANDO(object):
             cut += 1
         print('\n')
 
-    def canbenchmark_ddi(self, file_name, adrs=[], continuous=False, n=100, approved=False,
+    def canbenchmark_ddi(self, file_name, adrs=True, continuous=False, n=100, approved=False,
                           bottom=False, ranking='standard'):
         """!
         Benchmarks the platform based on compound pairs known to cause ADRs
@@ -3346,11 +3344,11 @@ class CANDO(object):
         benchmark_name = f"canbenchmark-ddi_adr-{file_name}-{n}{approved_str}"
         t_name = f"time-ddi_adr-{file_name}-{n}{approved_str}.txt"
 
-        '''
         os.makedirs('results_analysed_named', exist_ok=True)
         os.makedirs('raw_results', exist_ok=True)
         os.makedirs('pairwise_results', exist_ok=True)
         os.makedirs(benchmark_name, exist_ok=True)
+        '''
         if not os.path.exists('./results_analysed_named'):
             print("Directory 'results_analysed_named' does not exist, creating directory")
             #os.system('mkdir results_analysed_named')
