@@ -667,7 +667,8 @@ class CANDO(object):
                 for l in amf:
                     ls = l.strip().split('\t')
                     adr_name = ls[h2i['CONDITION_NAME']]
-                    adr_id = ls[h2i['CONDITION_MEDDRA_ID']]
+                    adr_id = ls[h2i['CONDITION_DB_ID']]
+                    #adr_id = ls[h2i['CONDITION_MEDDRA_ID']]
                     c_id = int(ls[h2i['CANDO_ID']])
                     #adr_name = ls[h2i['condition_concept_name']]
                     #c_id = int(ls[h2i['drug_cando_id']])
@@ -795,7 +796,8 @@ class CANDO(object):
                 df_adrs = pd.read_sql("SELECT * FROM adrs",db)
                 # Get ADRs from inputted cmpd_pair-ind mapping
                 ddi = pd.read_csv(self.ddi_adr_map, sep='\t')
-                l_adrs = ddi['CONDITION_MEDDRA_ID'].drop_duplicates().to_list()
+                l_adrs = ddi['CONDITION_DB_ID'].drop_duplicates().to_list()
+                #l_adrs = ddi['CONDITION_MEDDRA_ID'].drop_duplicates().to_list()
                 # Pull cmpd_pairs from table
                 df_cps = pd.read_sql("SELECT * FROM cmpd_pairs",db)
                 # Get cmpd_pairs from inputted cmpd_pair-ind mapping
@@ -878,6 +880,7 @@ class CANDO(object):
             ddi = pd.read_csv(ddi_adr_map,sep='\t')
             # Create a unique set of tuples using CANDO IDs for compound pairs
             idss = list(zip(ddi.loc[:,'CANDO_ID-1'].values.tolist(),ddi.loc[:,'CANDO_ID-2'].values.tolist()))
+            idss = [tuple(sorted(ids)) for ids in idss]
             print("    {} compound pair-adverse event associations.".format(len(idss)))
             idss = list(set(idss))
             # Iterate through list of CANDO ID tuples
@@ -886,7 +889,8 @@ class CANDO(object):
                 if ids in self.compound_pair_ids:
                     cm_p = self.get_compound_pair(ids)
                 elif (ids[1],ids[0]) in self.compound_pair_ids:
-                    cm_p = self.get_compound_pair((ids[1],ids[0]))
+                    ids = (ids[1],ids[0])
+                    cm_p = self.get_compound_pair(ids)
                 else:
                     names = (self.get_compound(ids[0]).name,self.get_compound(ids[1]).name)
                     cm_p = Compound_pair(names, ids, ids)
@@ -894,23 +898,30 @@ class CANDO(object):
                     self.compound_pair_ids.append(ids)
                 # Pull list of ADRs for this compound pair
                 adrs = ddi.loc[(ddi['CANDO_ID-1']==ids[0]) & (ddi['CANDO_ID-2']==ids[1])]
+                adrs_alt = ddi.loc[(ddi['CANDO_ID-1']==ids[1]) & (ddi['CANDO_ID-2']==ids[0])]
+                adrs = pd.concat([adrs,adrs_alt], axis=0, ignore_index=False)
+                #adrs.drop_duplicates(subset=['CONDITION_MEDDRA_ID'],inplace=True)
+                #adrs.dropna(subset=['CONDITION_MEDDRA_ID'],inplace=True)
+                adrs.drop_duplicates(subset=['CONDITION_DB_ID'],inplace=True)
+                adrs.dropna(subset=['CONDITION_DB_ID'],inplace=True)
                 # Iterate through ADRs for this compound pair 
-                for x in adrs.index:
+                #for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_MEDDRA_ID']].itertuples():
+                for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_DB_ID']].itertuples():
                     #ADRs
-                    adr_name = ddi.loc[x,'CONDITION_NAME']
-                    adr_id = ddi.loc[x,'CONDITION_MEDDRA_ID']
+                    #adr_name = ddi.loc[x,'CONDITION_NAME']
+                    #adr_id = ddi.loc[x,'CONDITION_MEDDRA_ID']
                     if adr_id in self.adr_ids:
                         adr = self.get_adr(adr_id)
                     else:
                         adr = ADR(adr_id,adr_name)
                         self.adrs.append(adr)
                         self.adr_ids.append(adr.id_)
-                    # Add comppund pair to ADR and vice versa
-                    cm_p.add_adr(adr_id)
-                    #cm_p.add_adr(adr)
-                    adr.compound_pairs.append(ids)
-                    #adr.compound_pairs.append(cm_p)
-            
+                    # Add compound pair to ADR and vice versa
+                    if adr_id not in cm_p.adrs:
+                        cm_p.add_adr(adr_id)
+                    if ids not in adr.compound_pairs:
+                        adr.compound_pairs.append(ids)
+                print() 
             print("    {} compound pairs.".format(len(self.compound_pairs)))
             print("    {} adverse events.".format(len(self.adrs)))
             print('  Done reading compound pair-adverse event associations.\n')
@@ -3348,20 +3359,6 @@ class CANDO(object):
         os.makedirs('raw_results', exist_ok=True)
         os.makedirs('pairwise_results', exist_ok=True)
         os.makedirs(benchmark_name, exist_ok=True)
-        '''
-        if not os.path.exists('./results_analysed_named'):
-            print("Directory 'results_analysed_named' does not exist, creating directory")
-            #os.system('mkdir results_analysed_named')
-            os.mkdir('results_analysed_named')
-        if not os.path.exists('./raw_results'):
-            print("Directory 'raw_results' does not exist, creating directory")
-            #os.system('mkdir raw_results')
-            os.mkdir('raw_results')
-
-        ra_named = 'results_analysed_named/results_analysed_named_' + file_name + '-ddi_adr.tsv'
-        ra = 'raw_results/raw_results_' + file_name + '-ddi_adr.csv'
-        summ = 'summary_' + file_name + '-ddi_adr.tsv'
-        '''
 
         ra_out = open(ra, 'w')
         pwr_out = open(pwr, 'w')
@@ -3586,7 +3583,7 @@ class CANDO(object):
                     ndcg_l[m[0]].append(dcg(c_rank, int(m[1])) / dcg(c_ideal, int(m[1])))
 
                 # compound-indication results
-                ra_out.write(','.join(df_ia.loc[c_idx,:].values.tolist()) + '\n')
+                ra_out.write(','.join([str(x) for x in df_ia.loc[c_idx,:].values.tolist()]) + '\n')
 
             for i in range(len(addl_metrics)):
                 func = addl_metrics[i]
@@ -3601,7 +3598,7 @@ class CANDO(object):
                     #if ranks[effect_id][cp_query][1] <= m[1]:
                     if rank <= m[1]:
                         pwa_count[idx]+=1.0
-                pwr_out.write(','.join(df_pa.loc[c_idx,:].values.tolist()) + '\n')
+                pwr_out.write(','.join([str(x) for x in df_pa.loc[c_idx,:].values.tolist()]) + '\n')
 
             # NDCG
             for m in metrics:
@@ -3641,7 +3638,7 @@ class CANDO(object):
         #print("\t".join(cov_count))
         # Fix later
         self.accuracies = effect_dct
-        final_accs = self.results_analysed(ra_named, metrics, effect_type)
+        final_accs = self.results_analysed(ra_named, metrics, effect_type())
         #ss = sorted(ss, key=lambda xx: xx[0])
         #ss = sorted(ss, key=lambda xx: int(xx[0]))
 
@@ -5521,6 +5518,8 @@ class CANDO(object):
                 [pr, sc] = l.strip().split('\t')
                 pr_i = self.protein_id_to_index[pr]
                 n_sig[pr_i] = float(sc)
+                p = self.get_protein(pr)
+                p.sig.append(float(sc))
         i = max([cm.id_ for cm in self.compounds]) + 1
         if not new_name:
             new_name = 'compound_{}'.format(i)
@@ -6098,7 +6097,7 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
 
     tot_time = print_time(time.time()-start)
     print(f"Matrix generation completed in {tot_time}.\n")
-
+    return(mat)
 
 def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[],lig_name=False):
     if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
@@ -6524,6 +6523,12 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             inchi_dict = pickle.load(f)
         cmpd_num = len(inchi_dict)
 
+        rad = int(int(fp[7:])/2)
+        if fp[3] == 'f':
+            features = True
+        else:
+            features = False
+
         for c in ncs.itertuples(index=False):
             try:
                 if file_type == 'mol':
@@ -6550,32 +6555,33 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             else:
                 print("    Adding compound {} - {}".format(cmpd_num,name))
             
-            with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
-                inchi_dict[inchi_key] = cmpd_num
-                pickle.dump(inchi_dict, f)
+            inchi_dict[inchi_key] = cmpd_num
+            
+            #with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+            #    inchi_dict[inchi_key] = cmpd_num
+            #    pickle.dump(inchi_dict, f)
            
             d_map = pd.concat([d_map, pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
                                               columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])], axis=1)
-            rad = int(int(fp[7:])/2)
-            if fp[3] == 'f':
-                features = True
-            else:
-                features = False
 
             if vect == 'int':
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
-                    c_fps = pickle.load(f)
+            #    with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
+            #        c_fps = pickle.load(f)
                 c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc, rad, useFeatures=features)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
-                    pickle.dump(c_fps, f)
+            #    with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+            #        pickle.dump(c_fps, f)
             else:
                 bits = int(vect[:4])
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
-                    c_fps = pickle.load(f)
+            #    with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
+            #        c_fps = pickle.load(f)
                 c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc, rad, useFeatures=features, nBits=bits)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
-                    pickle.dump(c_fps, f)
+            #    with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+            #        pickle.dump(c_fps, f)
             cmpd_num += 1
+        with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+            pickle.dump(inchi_dict, f)
+        with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+            pickle.dump(c_fps, f)
     elif v and v not in vs:
         new_v = v
         print("Creating new compound library {}...".format(new_v))
@@ -6642,7 +6648,7 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
             ind2id = {}
             curr_ind_id = 0
 
-        for c in ncs.itertuples(index=False):
+        for c in tqdm(ncs.itertuples(index=False)):
             try:
                 if file_type == 'mol':
                     nc = Chem.MolFromMolFile(f"{cmpd_dir}/{c[0]}.mol")
@@ -6656,25 +6662,30 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 continue
             name = nc.GetProp("_Name")
             inchi_key = Chem.MolToInchiKey(nc)
-            try:
-                match = str(inchi_dict[inchi_key])
-            except:
-                match = None
-            if match:
-                print("    {} is the same as {} - {} in the library".format(name, int(match),
-                                                                            d_map.loc[(d_map['CANDO_ID'] == int(match)),
-                                                                                      'GENERIC_NAME'].values[0], match))
-                continue
-            else:
-                print("    Adding compound {} - {}".format(cmpd_num, name))
+            #try:
+            #    match = str(inchi_dict[inchi_key])
+            #except:
+            #    match = None
+            #if match:
+            #    print("    {} is the same as {} - {} in the library".format(name, int(match),
+            #                                                                d_map.loc[(d_map['CANDO_ID'] == int(match)),
+            #                                                                          'GENERIC_NAME'].values[0], match))
+            #    continue
+            #else:
+            #    print("    Adding compound {} - {}".format(cmpd_num, name))
             
-            with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
-                inchi_dict[inchi_key] = cmpd_num
-                pickle.dump(inchi_dict, f)
-           
-            d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
-                                              columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
-                                 ignore_index=True)
+            inchi_dict[inchi_key] = cmpd_num
+            #with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+            #    inchi_dict[inchi_key] = cmpd_num
+            #    pickle.dump(inchi_dict, f)
+ 
+            d_map = pd.concat([d_map,pd.DataFrame([[cmpd_num, 'NA', name, 'other']],columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS'])],
+                                ignore_index=True)
+
+          
+            #d_map = d_map.append(pd.DataFrame([[cmpd_num, 'NA', name, 'other']],
+            #                                  columns=['CANDO_ID', 'DRUGBANK_ID', 'GENERIC_NAME', 'DRUG_GROUPS']),
+            #                     ignore_index=True)
 
             if map_indications:
                 if name in cname2inds:
@@ -6695,18 +6706,22 @@ def add_cmpds(cmpd_list, file_type='smi', fp="rd_ecfp4", vect="int", cmpd_dir=".
                 features = False
 
             if vect == 'int':
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
-                    c_fps = pickle.load(f)
+                #with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
+                #    c_fps = pickle.load(f)
                 c_fps[cmpd_num] = AllChem.GetMorganFingerprint(nc, rad, useFeatures=features)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
-                    pickle.dump(c_fps, f)
+                #with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+                #    pickle.dump(c_fps, f)
             else:
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
-                    c_fps = pickle.load(f)
+                #with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'rb') as f:
+                #    c_fps = pickle.load(f)
                 c_fps[cmpd_num] = AllChem.GetMorganFingerprintAsBitVect(nc, rad, useFeatures=features, nBits=bits)
-                with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
-                    pickle.dump(c_fps, f)
+                #with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+                #    pickle.dump(c_fps, f)
             cmpd_num += 1
+        with open('{}/inchi_keys.pickle'.format(cmpd_path), 'wb') as f:
+            pickle.dump(inchi_dict, f)
+        with open('{}/{}-{}_vect.pickle'.format(cmpd_path, fp, vect), 'wb') as f:
+            pickle.dump(c_fps, f)
  
     elif not v:
         new_v = "v0.0"
@@ -7158,7 +7173,6 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
 def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic, tierank, cmpd_pairs=False):
     db_name = f'{d_name}/{effect_id}.db'
-    #print(db_name)
     if os.path.exists(db_name):
         db = create_engine(f'sqlite:///{db_name}')
         if not cmpd_pairs:
@@ -7167,7 +7181,7 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         else:
             df_ia_results = pd.read_sql("SELECT cmpd_pair_id FROM ia_results", db)
             df_pa_results = pd.read_sql("SELECT cmpd_pair_id_1 FROM pa_results", db)
-        if len(df_ia_results) == len(effect_cmpds) and len(df_pa_results) == (math.factorial(len(effect_cmpds))/(math.factorial(len(effect_cmpds)-2))):
+        if len(df_ia_results) == len(effect_cmpds) and len(df_pa_results) == len(effect_cmpds) * (len(effect_cmpds)-1):
             return
         else:
             try:
@@ -7185,8 +7199,10 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             except:
                 # print("dists table does not exist.")
                 pass
-    conn = f'sqlite://{cando_db}'
+    print(effect_id)
+    #conn = f'sqlite://{cando_db}'
     effect_cmpds = [str(c) for c in effect_cmpds]
+    print(len(effect_cmpds))
     ss = []
     pa_ss = []
     db = create_engine(f'sqlite:///{cando_db}')
@@ -7194,14 +7210,17 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
         df_dists = pd.read_sql(f"SELECT * FROM {dist_metric} WHERE id IN {tuple(effect_cmpds)}", db)
     else:
         df_dists = pd.read_sql(f"SELECT * FROM dists WHERE id IN {tuple(effect_cmpds)}", db)
+    print(df_dists.head())
+    dists_map = dict(zip(df_dists['id'], df_dists['dists']))
     dist_df = pd.DataFrame({"id":cmpd_lib})
     dist_df.sort_values(by="id", inplace=True)
     score_df = dist_df.copy()
     rank_df = dist_df.copy()
     nrank_df = dist_df.copy()
    
-    for c in effect_cmpds:
-        c_sorted = json.loads(df_dists.loc[df_dists['id']==c,'dists'].values[0].replace("'",'"'))
+    for c in tqdm(effect_cmpds, desc=f"    {effect_id}"):
+        c_sorted = json.loads(dists_map[c].replace("'", '"'))
+        #c_sorted = json.loads(df_dists.loc[df_dists['id']==c,'dists'].values[0].replace("'",'"'))
         df_temp = pd.DataFrame.from_dict(c_sorted, orient='index')
         df_temp.rename(columns={0:'dists'}, inplace=True)
         if approved:
@@ -7237,10 +7256,10 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
             pa_ss.append(s)
     del df_dists, c_sorted
     for c_loo in effect_cmpds:
-        dist_df_loo = dist_df.copy().drop(c_loo, axis=1)
-        score_df_loo = score_df.copy().drop(c_loo, axis=1)
-        rank_df_loo = rank_df.copy().drop(c_loo, axis=1)
-        nrank_df_loo = nrank_df.copy().drop(c_loo, axis=1)
+        dist_df_loo = dist_df.drop(c_loo, axis=1)
+        score_df_loo = score_df.drop(c_loo, axis=1)
+        rank_df_loo = rank_df.drop(c_loo, axis=1)
+        nrank_df_loo = nrank_df.drop(c_loo, axis=1)
 
         #dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
         dist_df_loo['summed_dist'] = dist_df_loo.iloc[:,1:].sum(axis=1)
