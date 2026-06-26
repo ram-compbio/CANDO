@@ -5942,7 +5942,9 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
 
     print("Interaction between {} and {}.".format(c_id,p_id))
 
-    score = calc_scores(c_id,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name)
+    prot_data = prep_prot_data(l_fps, p_dict, p_cutoff)
+    nr_lig_fps = l_fps.loc[nr_ligs,0].values.tolist() if (i_score in ['dC','dCxP'] or percentile_cutoff != 0.0) else None
+    score = calc_scores(c_id,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name)
     print("Interaction score between {} and {} = {}".format(c_id,p_id,score[1][0]))
 
     end = time.time()
@@ -6078,14 +6080,22 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     else:
         c_list = list(c_fps.keys())
 
+    # Precompute compound-independent per-protein data once, then reuse it for
+    # every compound instead of rebuilding it inside each calc_scores call.
+    prot_data = prep_prot_data(l_fps, p_dict, p_cutoff)
+    if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
+        nr_lig_fps = l_fps.loc[nr_ligs,0].values.tolist()
+    else:
+        nr_lig_fps = None
+
     if ncpus > 1:
         pool = mp.Pool(ncpus)
-        scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in c_list], chunksize=20).get()
+        scores = pool.starmap_async(calc_scores, [(c,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name) for c in c_list], chunksize=20).get()
         pool.close
         pool.join
     else:
         bar = tqdm(c_list) if pbar else c_list
-        scores = [calc_scores(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name) for c in bar]
+        scores = [calc_scores(c,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name) for c in bar]
     scores = {d[0]:d[1] for d in scores}
 
     mat = pd.DataFrame.from_dict(scores)
@@ -6099,49 +6109,77 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     print(f"Matrix generation completed in {tot_time}.\n")
     return(mat)
 
-def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_ligs=[],lig_name=False):
-    if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
-        if dist == 'dice':
-            all_scores = DataStructs.BulkDiceSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
-        elif dist == 'tani':
-            all_scores = DataStructs.BulkTanimotoSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
-        elif dist == 'cos':
-            all_scores = DataStructs.BulkCosineSimilarity(c_fps[c],l_fps.loc[nr_ligs,0].values.tolist())
-    if percentile_cutoff != 0.0:
-        cscore_cutoff = np.percentile(all_scores,percentile_cutoff)
-    scores = []
+def prep_prot_data(l_fps, p_dict, pscore_cutoff=0.0):
+    """!
+    Precompute, once per (ligand library, protein set), the per-protein data
+    that calc_scores needs: the binding-site ligand fingerprints, their ids,
+    and their pscores. This work is independent of the query compound, so doing
+    it here instead of inside calc_scores avoids repeating it for every compound.
+
+    @param l_fps DataFrame: ligand fingerprints (index == ligand id, col 0 == fp)
+    @param p_dict dict: protein id -> list of (binding-site id, pscore) tuples
+    @param pscore_cutoff float: minimum pscore to keep a binding site
+    @return list of (fps, ids, pscores, raw_scores) tuples, one per protein,
+            in p_dict iteration order
+    """
+    # Membership test against a set is O(1); pandas Index.__contains__ is not.
+    l_fps_index = set(l_fps.index)
+    prot_data = []
     for p in p_dict.keys():
-        li = [i[0:2] for i in p_dict[p] if i[0] in l_fps.index and float(i[1]) >= pscore_cutoff]
+        li = [i[0:2] for i in p_dict[p] if i[0] in l_fps_index and float(i[1]) >= pscore_cutoff]
         if li:
             li_bs, li_score = zip(*li)
             li_bs = list(li_bs)
             li_score = list(li_score)
         else:
             li_bs = li_score = []
-        x = l_fps.loc[li_bs,0].values.tolist()
-        y = l_fps.loc[li_bs].index.tolist()
-        z = [float(li_score[li_bs.index(i)]) for i in y]
+        # Single .loc reindex instead of two, and a first-occurrence score map
+        # to avoid an O(n^2) list.index() lookup per binding site.
+        sub = l_fps.loc[li_bs]
+        x = sub[0].values.tolist()
+        y = sub.index.tolist()
+        score_of = {}
+        for bs, sc in zip(li_bs, li_score):
+            if bs not in score_of:
+                score_of[bs] = float(sc)
+        z = [score_of[i] for i in y]
+        prot_data.append((x, y, z, li_score))
+    return prot_data
 
+
+def calc_scores(c,c_fps,prot_data,dist,cscore_cutoff=0.0,percentile_cutoff=0.0,i_score='P',nr_lig_fps=None,lig_name=False):
+    if i_score in ['dC','dCxP'] or percentile_cutoff != 0.0:
+        if dist == 'dice':
+            all_scores = DataStructs.BulkDiceSimilarity(c_fps[c],nr_lig_fps)
+        elif dist == 'tani':
+            all_scores = DataStructs.BulkTanimotoSimilarity(c_fps[c],nr_lig_fps)
+        elif dist == 'cos':
+            all_scores = DataStructs.BulkCosineSimilarity(c_fps[c],nr_lig_fps)
+    if percentile_cutoff != 0.0:
+        cscore_cutoff = np.percentile(all_scores,percentile_cutoff)
+    cfp = c_fps[c]
+    scores = []
+    for (x, y, z, li_score) in prot_data:
         try:
             if dist == 'dice':
-                temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(c_fps[c],x),z))
+                temp_scores = list(zip(y,DataStructs.BulkDiceSimilarity(cfp,x),z))
             elif dist == 'tani':
-                temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(c_fps[c],x),z))
+                temp_scores = list(zip(y,DataStructs.BulkTanimotoSimilarity(cfp,x),z))
             elif dist == 'cos':
-                temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(c_fps[c],x),z))
+                temp_scores = list(zip(y,DataStructs.BulkCosineSimilarity(cfp,x),z))
 
             #Cscore cutoff
             temp_scores = [i for i in temp_scores if float(i[1]) >= cscore_cutoff]
     
             if i_score == 'dCxP':
-                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                temp = max(temp_scores, key=lambda i:(i[1],i[2]))
                 if not lig_name:
                     c_score = stats.percentileofscore(all_scores,temp[1])/100.0
                     scores.append(float(c_score) * float(temp[2]))
                 else:
                     scores.append(temp[0])
             elif i_score == 'CxP':
-                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                temp = max(temp_scores, key=lambda i:(i[1],i[2]))
                 if not lig_name:
                     c_score = temp[1]
                     p_score = temp[2]
@@ -6149,7 +6187,7 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                 else:
                     scores.append(temp[0])
             elif i_score == 'P':
-                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                temp = max(temp_scores, key=lambda i:(i[1],i[2]))
                 if not lig_name:
                     scores.append(float(temp[2]))
                 else:
@@ -6170,13 +6208,13 @@ def calc_scores(c,c_fps,l_fps,p_dict,dist,pscore_cutoff=0.0,cscore_cutoff=0.0,pe
                 else:
                     scores.append(0.000)
             elif i_score == 'dC':
-                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                temp = max(temp_scores, key=lambda i:(i[1],i[2]))
                 if not lig_name:
                     scores.append(stats.percentileofscore(all_scores, temp[1]) / 100.0)
                 else:
                     scores.append(temp[0])
             elif i_score == 'C':
-                temp = sorted(temp_scores, key = lambda i:(i[1],i[2]),reverse=True)[0]
+                temp = max(temp_scores, key=lambda i:(i[1],i[2]))
                 if not lig_name:
                     scores.append(temp[1])
                 else:
@@ -6306,7 +6344,9 @@ def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="n
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pd.read_pickle(f)
 
-    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs)
+    prot_data = prep_prot_data(l_fps, p_dict, p_cutoff)
+    nr_lig_fps = l_fps.loc[nr_ligs,0].values.tolist() if (i_score in ['dC','dCxP'] or percentile_cutoff != 0.0) else None
+    scores = calc_scores(0,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps)
     #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
     scores = {scores[0]:scores[1]}
 
@@ -6436,7 +6476,9 @@ def generate_signature_smi(smi, fp="rd_ecfp4", vect="int", dist="dice", org="nrp
     with open('{}/{}-{}_vect.pickle'.format(lig_path,fp,vect), 'rb') as f:
         l_fps = pd.read_pickle(f)
 
-    scores = calc_scores(0,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs,lig_name)
+    prot_data = prep_prot_data(l_fps, p_dict, p_cutoff)
+    nr_lig_fps = l_fps.loc[nr_ligs,0].values.tolist() if (i_score in ['dC','dCxP'] or percentile_cutoff != 0.0) else None
+    scores = calc_scores(0,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name)
     #scores = pool.starmap_async(calc_scores, [(c,c_fps,l_fps,p_dict,dist,p_cutoff,c_cutoff,percentile_cutoff,i_score,nr_ligs) for c in c_list]).get()
     scores = {scores[0]:scores[1]}
 
