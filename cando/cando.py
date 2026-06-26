@@ -6089,10 +6089,17 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
         nr_lig_fps = None
 
     if ncpus > 1:
-        pool = mp.Pool(ncpus)
-        scores = pool.starmap_async(calc_scores, [(c,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name) for c in c_list], chunksize=20).get()
-        pool.close
-        pool.join
+        # Ship the big shared args once per worker via the initializer; each task
+        # then carries only a compound id. A few chunks per worker keeps the load
+        # balanced without re-pickling overhead per compound.
+        chunksize = max(1, len(c_list) // (ncpus * 4))
+        with mp.Pool(ncpus, initializer=_init_score_worker,
+                     initargs=(c_fps, prot_data, dist, c_cutoff, percentile_cutoff,
+                               i_score, nr_lig_fps, lig_name)) as pool:
+            it = pool.imap(_score_one, c_list, chunksize=chunksize)
+            if pbar:
+                it = tqdm(it, total=len(c_list))
+            scores = list(it)
     else:
         bar = tqdm(c_list) if pbar else c_list
         scores = [calc_scores(c,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name) for c in bar]
@@ -6237,6 +6244,27 @@ def calc_scores(c,c_fps,prot_data,dist,cscore_cutoff=0.0,percentile_cutoff=0.0,i
             else:
                 scores.append("None")
     return (c, scores)
+
+
+# Per-worker scratch for the multiprocessing pool. The large, compound-independent
+# arguments (c_fps, prot_data, nr_lig_fps) are sent to each worker exactly once via
+# the pool initializer instead of being re-pickled with every task, so workers map
+# over just a compound id.
+_score_ctx = {}
+
+
+def _init_score_worker(c_fps, prot_data, dist, cscore_cutoff, percentile_cutoff,
+                       i_score, nr_lig_fps, lig_name):
+    _score_ctx.update(c_fps=c_fps, prot_data=prot_data, dist=dist,
+                      cscore_cutoff=cscore_cutoff, percentile_cutoff=percentile_cutoff,
+                      i_score=i_score, nr_lig_fps=nr_lig_fps, lig_name=lig_name)
+
+
+def _score_one(c):
+    ctx = _score_ctx
+    return calc_scores(c, ctx['c_fps'], ctx['prot_data'], ctx['dist'],
+                       ctx['cscore_cutoff'], ctx['percentile_cutoff'],
+                       ctx['i_score'], ctx['nr_lig_fps'], ctx['lig_name'])
 
 
 def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
