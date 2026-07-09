@@ -31,6 +31,14 @@ cando = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, compute_distance=True,
                   save_dists='test_rmsds.tsv', ncpus=1)
 cando.canbenchmark('test')
 cando.canbenchmark_ndcg('test-ndcg')
+# Leave-one-out similarity/consensus recall@k, precision@k, and NDCG@k (macro + micro)
+cando.canbenchmark_cmpds('test')
+# LOO condition-prediction benchmark (dual of canbenchmark_cmpds): consensus recall/precision/NDCG@k
+cando.canbenchmark_conds('test')
+# Exercise the parallel paths; results must match the serial runs above
+cando_par = cnd.CANDO(cmpd_map, inds_map, matrix=matrix_file, compute_distance=True, ncpus=2)
+cando_par.canbenchmark_cmpds('test-par')
+cando_par.canbenchmark_conds('test-par')
 print('\n')
 
 print("Test #3 - create CANDO object using cosine distance metric then run continuous, bottom, cluster, "

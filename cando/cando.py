@@ -14,7 +14,7 @@ from decimal import Decimal
 from tqdm import tqdm
 from rdkit import Chem, DataStructs
 from rdkit.Chem import AllChem
-from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score, ndcg_score
+from sklearn.metrics import pairwise_distances, pairwise_distances_chunked, roc_curve, roc_auc_score, average_precision_score
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
@@ -28,17 +28,9 @@ import shutil # change1
 from scipy.stats import hypergeom
 
 import sqlite3, json
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, bindparam
 os.environ["POLARS_MAX_THREADS"] = "1"
 import polars as pl
-import dask
-dask.config.set({'logging.distributed': 'error'})
-from dask import delayed
-from dask.distributed import Client, progress
-import dask.array as da
-import dask.bag as db
-from dask.diagnostics import ProgressBar
-from tqdm.dask import TqdmCallback
 
 class Protein(object):
     """!
@@ -252,10 +244,10 @@ class CANDO(object):
     or precomputed compound-compound distance matrix (read_rmsds=), but those are optional.
 
     """
-    def __init__(self, c_map, i_map, matrix='', db_name='', compound_set='all', compute_distance=False, save_dists='',
+    def __init__(self, c_map, i_map, matrix='', db_name='', db_path='', compound_set='all', compute_distance=False, save_dists='',
                  read_dists='', pathways='', pathway_quantifier='max', indication_pathways='', indication_proteins='',
                  similarity=False, dist_metric='rmsd', protein_set='', rm_zeros=False, rm_compounds='',
-                 ddi_map='', ddi_adr_map='', adr_map='', sig_fusion='sum', 
+                 ddi_map='', ddi_adr_map='', adr_map='', sig_fusion='sum',
                  protein_distance=False, protein_map='', ncpus=1, pbar=True):
         ## @var c_map
         # str: File path to the compound mapping file (relative or absolute)
@@ -269,6 +261,13 @@ class CANDO(object):
         ## @var db_name
         # str: Name of the sqlite database file that will be created
         self.db_name = db_name
+        ## @var db_path
+        # str: Directory under which ALL sqlite databases are placed -- the main distance db
+        # (self.db_name) and the per-effect benchmark dbs written by canbenchmark/canbenchmark_cmpds/
+        # canbenchmark_ddi_adr. Default '' keeps the historical behaviour (databases in the cwd);
+        # set it to node-local scratch (e.g. $SLURM_TMPDIR) for HPC runs to avoid shared-filesystem
+        # contention across many parallel workers.
+        self.db_path = db_path
         ## @var compound_set
         # str or List str: what compounds to use, such as all, approved, experimental, etc
         self.compound_set = compound_set
@@ -376,6 +375,12 @@ class CANDO(object):
 
         if not self.db_name:
             self.db_name = f"cando-{self.short_matrix_path.replace('.tsv','')}-{self.short_c_map.replace('.tsv','')}-{self.short_i_map.replace('.tsv','')}.db"
+
+        # Redirect all sqlite databases under db_path when given. os.path.join leaves the name
+        # unchanged for the default (db_path='') and defers to db_name if it is already absolute.
+        if self.db_path:
+            os.makedirs(self.db_path, exist_ok=True)
+            self.db_name = os.path.join(self.db_path, self.db_name)
 
         ignored_set = []
         # create all of the compound objects from the compound map
@@ -667,8 +672,8 @@ class CANDO(object):
                 for l in amf:
                     ls = l.strip().split('\t')
                     adr_name = ls[h2i['CONDITION_NAME']]
-                    adr_id = ls[h2i['CONDITION_DB_ID']]
-                    #adr_id = ls[h2i['CONDITION_MEDDRA_ID']]
+                    #adr_id = ls[h2i['CONDITION_DB_ID']]
+                    adr_id = ls[h2i['CONDITION_MEDDRA_ID']]
                     c_id = int(ls[h2i['CANDO_ID']])
                     #adr_name = ls[h2i['condition_concept_name']]
                     #c_id = int(ls[h2i['drug_cando_id']])
@@ -796,8 +801,8 @@ class CANDO(object):
                 df_adrs = pd.read_sql("SELECT * FROM adrs",db)
                 # Get ADRs from inputted cmpd_pair-ind mapping
                 ddi = pd.read_csv(self.ddi_adr_map, sep='\t')
-                l_adrs = ddi['CONDITION_DB_ID'].drop_duplicates().to_list()
-                #l_adrs = ddi['CONDITION_MEDDRA_ID'].drop_duplicates().to_list()
+                #l_adrs = ddi['CONDITION_DB_ID'].drop_duplicates().to_list()
+                l_adrs = ddi['CONDITION_MEDDRA_ID'].drop_duplicates().to_list()
                 # Pull cmpd_pairs from table
                 df_cps = pd.read_sql("SELECT * FROM cmpd_pairs",db)
                 # Get cmpd_pairs from inputted cmpd_pair-ind mapping
@@ -900,13 +905,13 @@ class CANDO(object):
                 adrs = ddi.loc[(ddi['CANDO_ID-1']==ids[0]) & (ddi['CANDO_ID-2']==ids[1])]
                 adrs_alt = ddi.loc[(ddi['CANDO_ID-1']==ids[1]) & (ddi['CANDO_ID-2']==ids[0])]
                 adrs = pd.concat([adrs,adrs_alt], axis=0, ignore_index=False)
-                #adrs.drop_duplicates(subset=['CONDITION_MEDDRA_ID'],inplace=True)
-                #adrs.dropna(subset=['CONDITION_MEDDRA_ID'],inplace=True)
-                adrs.drop_duplicates(subset=['CONDITION_DB_ID'],inplace=True)
-                adrs.dropna(subset=['CONDITION_DB_ID'],inplace=True)
+                adrs.drop_duplicates(subset=['CONDITION_MEDDRA_ID'],inplace=True)
+                adrs.dropna(subset=['CONDITION_MEDDRA_ID'],inplace=True)
+                #adrs.drop_duplicates(subset=['CONDITION_DB_ID'],inplace=True)
+                #adrs.dropna(subset=['CONDITION_DB_ID'],inplace=True)
                 # Iterate through ADRs for this compound pair 
-                #for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_MEDDRA_ID']].itertuples():
-                for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_DB_ID']].itertuples():
+                #for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_DB_ID']].itertuples():
+                for idx, adr_name, adr_id in adrs[['CONDITION_NAME','CONDITION_MEDDRA_ID']].itertuples():
                     #ADRs
                     #adr_name = ddi.loc[x,'CONDITION_NAME']
                     #adr_id = ddi.loc[x,'CONDITION_MEDDRA_ID']
@@ -1049,51 +1054,34 @@ class CANDO(object):
                     pass
 
                 db = create_engine(f'sqlite:///{self.db_name}')
-                # put all compound_pair signatures into 2D-array
-                snp = [self.compound_pairs[i].sig for i in range(0, len(self.compound_pairs))]
-                snp = np.array(snp)  # convert to numpy form
+                # compound-pair signatures as a single float32 matrix (memory + BLAS)
+                snp = np.asarray([cpp.sig for cpp in self.compound_pairs], dtype=np.float32)
+                inv_sqrt_p = 1.0 / np.sqrt(snp.shape[1])   # RMSD = euclidean / sqrt(signature length)
                 distance_matrix = []
-                # call pairwise_distances, speed up with custom RMSD function and parallelism
+                # call pairwise_distances, speed up with parallelism
                 if self.dist_metric == "rmsd":
                     distance_matrix = pairwise_distances_chunked(snp, metric='euclidean', n_jobs=self.ncpus)
                     #distance_matrix = squareform(distance_matrix)
                 elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                     #distance_matrix = pairwise_distances(snp, metric=self.dist_metric, n_jobs=self.ncpus)
                     #distance_matrix = squareform(distance_matrix)
-                    distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric, 
+                    distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                             #ensure_all_finite=False,
                             n_jobs=self.ncpus)
                 l = [cpp.id_ for cpp in self.compound_pairs]
-                d_similar = {}
                 # iterator for compound pair to identify self match
                 i = 0
-                for chunk in distance_matrix:
-                    pbar = tqdm(chunk) if self.pbar else chunk
-                    for y in pbar: #TQDM3
-                        # compound pair id as string
-                        cp = str(self.compound_pairs[i].id_)
-                        # zip together all compound pair ids and distances to the current compound pair
-                        d_temp = list(zip(l, y))
-                        # remove the self comparison
-                        d_temp.pop(i)
-                        # save as a key-value pair in dict as a str dict
-                        # this is for storing in sqlite and retreival later
-                        d_similar[cp] = str({str(cp2): dist2 for cp2,dist2 in d_temp})
-                        
-                        # ZF - Thought this would be faster, but it isnt (3iter/s vs 5iter/s)
-                        #cp = str(self.compound_pairs[i].id_)
-                        #similar_dict = {str(cp2): dist2 for j,(cp2,dist2) in enumerate(zip(l,y)) if j != i}
-                        #d_similar[cp] = str(similar_dict)
-                        
-                        if i%1000==0 or i==len(self.compound_pairs)-1:
-                            df_temp = pd.DataFrame.from_dict(d_similar,orient='index')
-                            df_temp.index.names = ['id']
-                            df_temp.rename(columns={0:'dists'},inplace=True)
-                            df_temp.to_sql('dists', db, if_exists='append')
-                            d_similar = {}
-                        i+=1
-                    #self.compound_pairs[i].similar_computed = True
-                    #self.compound_pairs[i].similar_sorted = True
+                with _DistWriter(self.db_name, 'dists') as writer:
+                    for chunk in distance_matrix:
+                        if self.dist_metric == 'rmsd':
+                            chunk = chunk * inv_sqrt_p   # normalize like the compound RMSD path
+                        pbar = tqdm(chunk) if self.pbar else chunk
+                        for y in pbar: #TQDM3
+                            cp = str(self.compound_pairs[i].id_)
+                            # full distance row as a compact float32 blob (id order stored once below)
+                            writer.add(cp, _encode_dist_row(np.asarray(y, dtype=np.float32)))
+                            i += 1
+                _store_dist_ids(db, 'dists', l)   # canonical id order for decoding blobs
                 print('Done computing {} distances for compound pairs.\n'.format(self.dist_metric))
                 '''
                 nn = NearestNeighbors(
@@ -1133,25 +1121,21 @@ class CANDO(object):
 
                     print('  Calculating {} distances...'.format(self.dist_metric))
                     db = create_engine(f'sqlite:///{self.db_name}')
-                    # put all compound_pair signatures into 2D-array
-                    snp = [self.compounds[i].sig for i in range(len(self.compounds))]
-                    snp = np.array(snp)  # convert to numpy form
+                    # Signatures as a single float32 matrix (halves memory / speeds up BLAS; the
+                    # distances are only kept to ~3 decimals so float32 precision is ample).
+                    snp = np.asarray([c.sig for c in self.compounds], dtype=np.float32)
+                    inv_sqrt_p = 1.0 / np.sqrt(len(self.proteins))   # RMSD = euclidean / sqrt(#proteins)
 
-                    # Remove sigs from Compounds to reduce mem
-                    #for i in range(len(self.compounds)):
-                    #    self.compounds[i].sig = []
-
-                    # call pairwise_distances, speed up with custom RMSD function and parallelism
+                    # call pairwise_distances, speed up with parallelism
                     distance_matrix = []
                     if self.dist_metric == "rmsd":
                         distance_matrix = pairwise_distances_chunked(snp, metric='euclidean',
                                                                      #working_memory=512,
                                                                      n_jobs=self.ncpus)
                     elif self.dist_metric == "dot":
-                        sig_len = len(self.compounds[0].sig)
-                        distance_matrix = pairwise_distances_chunked(snp,
-                                                                     metric=lambda u, v: 1 - (np.dot(u,v)/sig_len),
-                                                                     )
+                        # Vectorized single GEMM instead of a per-pair Python lambda.
+                        sig_len = snp.shape[1]
+                        distance_matrix = [1.0 - (snp @ snp.T) / sig_len]
                     elif self.dist_metric in ['cosine', 'correlation', 'euclidean', 'cityblock']:
                         distance_matrix = pairwise_distances_chunked(snp, metric=self.dist_metric,
                                                                      #ensure_all_finite=False,
@@ -1160,39 +1144,26 @@ class CANDO(object):
                     print(f'  Done calculating {self.dist_metric} distances.')
 
                     l = [c.id_ for c in self.compounds]
-                    d_similar = {}
+                    # Bulk-write the distance rows in one transaction (executemany + single commit).
                     i = 0
-                    for chunk in distance_matrix:
-                        pbar = tqdm(chunk) if self.pbar else chunk
-                        for y in pbar: ##TQDM1
-                            c1 = str(self.compounds[i].id_)
+                    with _DistWriter(self.db_name, self.dist_metric) as writer:
+                        for chunk in distance_matrix:
                             if self.dist_metric == 'rmsd':
-                                d_temp = [(l[i], y[i]/(len(self.proteins)**0.5)) for i in range(len(y))]
-                            else:
-                                d_temp = list(zip(l, y))
-                            d_temp.pop(i)
-                            # This is to keep the old versions of canbenchmark and canpredict working
-                            # Need to update those functions to work with sqlite
-                            self.compounds[i].similar = d_temp
-                            self.compounds[i].similar_computed = True
-                            d_temp = {str(c2): dist2 for c2, dist2 in d_temp}
-                            d_similar[c1] = str(d_temp)
-                            if i % 1000 == 0 or i == len(self.compounds)-1:
-                                df_temp = pd.DataFrame.from_dict(d_similar, orient='index')
-                                df_temp.index.names = ['id']
-                                df_temp.rename(columns={0: 'dists'}, inplace=True)
-                                df_temp.to_sql(self.dist_metric, db, if_exists='append')
-                                del df_temp
-                                d_similar = {}
-                            i += 1
-
-                    # Speed the table up with indexes
-                    conn = sqlite3.connect(f'{self.db_name}')
-                    cursor = conn.cursor()
-                    cursor.execute(f"CREATE INDEX {self.dist_metric}_id_idx ON {self.dist_metric}(id)")
-                    conn.commit()
-                    conn.close()
-                    del distance_matrix, d_temp, snp, d_similar
+                                chunk = chunk * inv_sqrt_p   # vectorized normalization
+                            pbar = tqdm(chunk) if self.pbar else chunk
+                            for y in pbar: ##TQDM1
+                                c1 = str(self.compounds[i].id_)
+                                yf = np.asarray(y, dtype=np.float32)
+                                # in-memory .similar (self excluded), kept for the old canbenchmark/
+                                # canpredict paths that read from the Compound objects
+                                self.compounds[i].similar = [(l[j], float(yf[j]))
+                                                             for j in range(len(yf)) if j != i]
+                                self.compounds[i].similar_computed = True
+                                # DB: full row as a compact float32 blob (id order stored once below)
+                                writer.add(c1, _encode_dist_row(yf))
+                                i += 1
+                    _store_dist_ids(db, self.dist_metric, l)   # canonical id order for decoding blobs
+                    del distance_matrix, snp
                     
                     for c in self.compounds:
                         c_sorted = c.similar
@@ -1201,15 +1172,14 @@ class CANDO(object):
                         c.similar_sorted = True
                 elif check:
                     print(f'  Loading and sorting {self.dist_metric} distances...')
-                    #conn = f'sqlite://{self.db_name}'
-                    with sqlite3.connect(f'{self.db_name}') as conn:
-                        df_dists = pl.read_database(query=f"SELECT * FROM {self.dist_metric}",
-                                                    connection=conn)
+                    eng = create_engine(f'sqlite:///{self.db_name}')
+                    df_dists = pd.read_sql(f"SELECT * FROM {self.dist_metric}", eng)
+                    ids = _load_dist_ids(self.db_name, self.dist_metric)
+                    row_by_id = dict(zip(df_dists['id'].astype(str), df_dists['dists']))
                     pbar = tqdm(self.compounds) if self.pbar else self.compounds
                     for c in pbar:
-                        c_sorted = json.loads(df_dists.filter(pl.col('id') == str(c.id_)).select(['dists']).item().replace("'", '"'))
-                        #c_sorted = [(int(c),c_sorted[c]) for c in c_sorted.keys()]
-                        c_sorted = [(int(c),c_dist) for c, c_dist in c_sorted.items()]
+                        c_sorted = _decode_dist_row(row_by_id[str(c.id_)], ids, str(c.id_))
+                        c_sorted = [(int(k), v) for k, v in c_sorted.items()]
                         c_sorted = sorted(c_sorted, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
                         c.similar = c_sorted
                         c.similar_computed = True
@@ -2465,7 +2435,7 @@ class CANDO(object):
         ra = f'raw_results/raw_results-{file_name}-{n}{associated_str}.csv'
         pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{associated_str}.csv'
         summ = f'summary-{file_name}-{n}{associated_str}.tsv'
-        benchmark_name = f"canbenchmark-{file_name}-{n}{associated_str}"
+        benchmark_name = os.path.join(self.db_path, f"canbenchmark-{file_name}-{n}{associated_str}")
         t_name = f"time-{file_name}-{n}{associated_str}.txt"
         if write_addl:
             addl_named = f'results_analysed_named/results_analysed_named-%s-{file_name}-{n}{associated_str}.tsv'
@@ -2791,6 +2761,552 @@ class CANDO(object):
         with open(t_name,'a') as tw:
             tw.write(f"Total time to run canbenchmark_new: {t_tot}")
 
+        return df_summ
+
+    def canbenchmark_cmpds(self, file_name, n=10, indications=[], associated=True,
+                           exclude_indic=False, tierank='min', pairs=False, adrs=False,
+                           alpha=0.05, write_raw=False):
+        """!
+        Leave-one-out (LOO) benchmark reporting recall@k, precision@k, and NDCG@k for both
+        the per-compound similarity list (as in canbenchmark) and the LOO consensus list
+        (all-but-the-left-out compound, as in canbenchmark_new). Each metric is reported
+        macro-averaged (mean over compounds within a disease, then mean over diseases) and
+        micro-averaged as a ratio of pooled sums over all associations (recall = sum(hits)/sum(R),
+        precision = sum(hits)/(n_queries*k), NDCG = sum(DCG)/sum(IDCG)).
+
+        For a disease with associated compounds A:
+          - Similarity: for query compound a in A, its similarity-ranked candidate list is the
+            retrieved list and the relevant set is A \\ {a}. LOO is inherent (a queries the rest).
+          - Consensus: for left-out compound a, a consensus list is built from A \\ {a} (via
+            ind_accuracies); the relevant set is the single left-out compound {a}, and its rank
+            in that list drives the metric.
+        NDCG uses binary relevance (positives = 1, negatives = 0).
+
+        The k thresholds are top10, top25, top50, top100, topAll (100% of the candidate library),
+        top1%, top5%, top10%, top50%, and top100%, matching canbenchmark_new.
+
+        @param file_name str: base name for the output summary file
+        @param n int: consensus score threshold passed to ind_accuracies (a compound scores a
+            "hit" toward the consensus when it ranks within the top n of a member's list)
+        @param indications list of str: Indication ids to benchmark; empty uses all indications
+        @param associated bool: if True the candidate library is the set of disease-associated
+            compounds; if False it is every compound in the matrix
+        @param exclude_indic bool: passed to ind_accuracies; rank the left-out compound only
+            against non-indicated compounds
+        @param tierank str: tie-handling method for the consensus rank (see ind_accuracies)
+        @param pairs bool: benchmark compound pairs per ADR (Compound_pair objects, like
+            canbenchmark_ddi) instead of compounds per disease. Requires the compound-pair distance
+            table (built when the CANDO object is loaded with a ddi_adr_map and compute_distance).
+        @param adrs bool: benchmark compounds per ADR (using adr.compounds) instead of per
+            indication/disease. Ignored when pairs=True (pair mode already benchmarks ADRs).
+        @param alpha float: significance level for the per-query hypergeometric test used by the
+            *_significant / *_significant_pct rows (fraction of queries beating a random ranking).
+        @param write_raw bool: if True, write the per-association raw_results/ CSVs
+            (consensus_results, similarity_results, pairwise_results). Default False, which also
+            skips the O(m^2) pairwise (pa_results) computation entirely for the compound case --
+            the summary metrics are identical either way (similarity uses the in-memory neighbour
+            lists, not pa_results), so leave it False on large libraries to bound memory/IO and set
+            it True only when you need the raw per-pair output. (Pair mode still computes pa_results,
+            which its similarity metric requires, but only writes the CSVs when write_raw=True.)
+        @return Returns a pandas DataFrame of the macro/micro metric summary. In addition it
+            includes a macro-averaged random-ranking control row per metric (*_control_macro) --
+            the expected value under a random ranking (hypergeometric) -- coverage rows
+            (similarity_coverage, consensus_coverage; count of conditions with a non-zero recall@k)
+            and the matching *_coverage_pct rows (as a percentage of the conditions evaluated).
+            It also includes a hypergeometric coverage control (*_coverage_control expected count /
+            *_coverage_control_pct expected %), the null "at least one hit" baseline for coverage,
+            and per-query significance rows (*_significant count / *_significant_pct %) counting the
+            queries whose top-k retrieval beats a random ranking at level alpha.
+
+        Output files (in addition to the returned summary and summary-cmpds-*.tsv):
+          - results_analysed_named/results_analysed_named-cmpds-<metric>-<file_name>[...].tsv:
+            one file per metric with the per-disease value at each k threshold
+          - raw_results/consensus_results-cmpds-<file_name>[...].csv: per compound-disease
+            association, the LOO consensus rank/score and top-k hit flags
+          - raw_results/similarity_results-cmpds-<file_name>[...].csv: per compound-disease
+            association, the best (minimum) similarity rank of any other associated compound
+            and top-k hit flags
+          - raw_results/pairwise_results-cmpds-<file_name>[...].csv: per compound-compound
+            association within a disease, the similarity rank and top-k flags
+        """
+        print("Begin running canbenchmark_cmpds...")
+        start = time.time()
+
+        # Ensure each compound's similarity list is sorted (pairs use the db, not in-memory lists)
+        if not pairs and not self.indication_proteins and not self.indication_pathways:
+            if not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar_sorted = True
+
+        # pairs mode always benchmarks ADRs; the -pairs suffix already distinguishes it.
+        pairs_str = '-pairs' if pairs else ''
+        adr_str = '-adr' if (adrs and not pairs) else ''
+        associated_str = '-associated' if associated else ''
+        eff_str = f'{pairs_str}{adr_str}'
+        benchmark_name = os.path.join(self.db_path, f"canbenchmark_cmpds{eff_str}-{file_name}-{n}{associated_str}")
+        summ = f"summary-cmpds{eff_str}-{file_name}-{n}{associated_str}.tsv"
+        # Per-effect results (one file per metric) and per-association raw/pairwise results.
+        ra_named = 'results_analysed_named/results_analysed_named-cmpds{}-%s-{}{}.tsv'.format(eff_str, file_name, associated_str)
+        # All per-association results live in raw_results/: consensus (LOO), similarity, and pairwise.
+        cons_file = f'raw_results/consensus_results-cmpds{eff_str}-{file_name}{associated_str}.csv'
+        sim_file = f'raw_results/similarity_results-cmpds{eff_str}-{file_name}{associated_str}.csv'
+        pwr = f'raw_results/pairwise_results-cmpds{eff_str}-{file_name}{associated_str}.csv'
+        os.makedirs(benchmark_name, exist_ok=True)
+        os.makedirs('results_analysed_named', exist_ok=True)
+        os.makedirs('raw_results', exist_ok=True)
+
+        # In pair mode the "effect" is an ADR, the "unit" a compound pair, and the candidate library
+        # is the set of compound pairs; similarity/consensus come from ind_accuracies(cmpd_pairs=True).
+        if pairs:
+            cmpd_lib = list(set(str(cp.id_) for cp in self.compound_pairs))
+            effects = [e for e in self.adrs if len(e.compound_pairs) > 1]
+            members = {e.id_: [str(p) for p in e.compound_pairs] for e in effects}
+            member_count = {e.id_: len(e.compound_pairs) for e in effects}
+            cmpd_lib_set = None
+        else:
+            # The "effect" is an ADR (adrs=True) or an indication/disease (default); both expose a
+            # .compounds list, so the single-compound similarity/consensus machinery is identical.
+            effect_pool = self.adrs if adrs else self.indications
+            if associated:
+                cmpd_lib = [str(self.get_compound(c).id_) for effect in effect_pool for c in effect.compounds]
+            else:
+                cmpd_lib = [str(c.id_) for c in self.compounds]
+            cmpd_lib = list(set(cmpd_lib))
+            cmpd_lib_set = set(int(c) for c in cmpd_lib)
+            if not adrs and isinstance(indications, list) and len(indications) >= 1:
+                effects = list(map(self.get_indication, indications))
+            else:
+                effects = effect_pool
+            effects = [effect for effect in effects if len(effect.compounds) > 1]
+            members = {e.id_: [str(c) for c in e.compounds] for e in effects}
+            member_count = {e.id_: len(e.compounds) for e in effects}
+
+        # k thresholds: absolute counts (top1..top100 + topAll), then percentiles of the library
+        x = len(cmpd_lib) / 100.0
+        metrics = [(1, 1), (2, 5), (3, 10), (4, 25), (5, 50), (6, 100), (7, int(x * 100.0001)),
+                   (8, int(x * 1.0001)), (9, int(x * 5.0001)), (10, int(x * 10.0001)),
+                   (11, int(x * 50.0001)), (12, int(x * 100.0001))]
+        K = [m[1] for m in metrics]
+        nk = len(metrics)
+        # The "topAll" cutoff column is titled with the candidate-library size (the true cutoff)
+        # so every output file (summary, results_analysed_named, raw_results, pairwise_results) agrees.
+        n_lib = len(cmpd_lib)
+        headers = ['top1', 'top5', 'top10', 'top25', 'top50', 'top100', f'top{n_lib}',
+                   'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+
+        # Compute and store the LOO consensus data (reuses ind_accuracies; cmpd_pairs flag for pairs)
+        print("  Calculating LOO consensus (ind_accuracies)...")
+        # metric_cols=headers so ind_accuracies writes one flag column per cutoff (incl. top1/top5)
+        ia_args = [(effect.id_, members[effect.id_], cmpd_lib, benchmark_name, metrics,
+                    associated, n, self.db_name, self.dist_metric, exclude_indic, tierank, pairs,
+                    headers, write_raw)
+                   for effect in effects]
+        t_ia = time.time()
+        if self.ncpus > 1:
+            # imap_unordered + chunksize=1 hands out diseases one at a time, so an idle worker grabs
+            # the next (possibly heavy) disease instead of stalling on a fixed starmap chunk -- better
+            # tail balancing when disease sizes are skewed. Order is irrelevant: each ind_accuracies
+            # call writes its own per-effect db and returns nothing.
+            with mp.Pool(processes=self.ncpus) as pool:
+                it = pool.imap_unordered(_ind_accuracies_star, ia_args, chunksize=1)
+                it = tqdm(it, total=len(ia_args)) if self.pbar else it
+                for _ in it:
+                    pass
+        else:
+            pbar = tqdm(ia_args) if self.pbar else ia_args
+            for args in pbar:
+                ind_accuracies(*args)
+        print(f"    LOO consensus stage ({self.ncpus} cpu): {time.time() - t_ia:.2f} s")
+
+        # Per-effect metric computation is independent -> done per effect and (optionally) in
+        # parallel. Compound mode reads similarity from in-memory lists (shipped via the pool
+        # initializer); pair mode reads both similarity (pa_results) and consensus (ia_results)
+        # from the on-disk dbs written by ind_accuracies.
+        print("  Computing similarity and consensus metrics...")
+        if pairs:
+            tasks = [effect.id_ for effect in effects]
+            init_args = (members, K, benchmark_name, len(cmpd_lib), alpha)
+            worker, init_fn = _cmpds_pair_metrics_worker, _init_cmpds_pair_worker
+        else:
+            cmpd_by_id = {c.id_: c for c in self.compounds}
+            query_ids = set(int(c) for effect in effects for c in effect.compounds)
+            similar_map = {a: cmpd_by_id[a].similar for a in query_ids if a in cmpd_by_id}
+            tasks = [(effect.id_, [int(c) for c in effect.compounds]) for effect in effects]
+            init_args = (similar_map, cmpd_lib_set, K, benchmark_name, alpha)
+            worker, init_fn = _cmpds_metrics_worker, _init_cmpds_worker
+
+        t_m = time.time()
+        if self.ncpus > 1:
+            chunksize = max(1, len(tasks) // (self.ncpus * 4))
+            with mp.Pool(self.ncpus, initializer=init_fn, initargs=init_args) as pool:
+                results = pool.map(worker, tasks, chunksize=chunksize)
+        else:
+            init_fn(*init_args)
+            it = tqdm(tasks) if self.pbar else tasks
+            results = [worker(t) for t in it]
+        print(f"    metrics stage ({self.ncpus} cpu): {time.time() - t_m:.2f} s")
+
+        # Macro accumulators hold one length-nk vector per disease; micro accumulators sum over
+        # every compound-disease association.
+        effect_by_id = {effect.id_: effect for effect in effects}
+        macro = {name: [] for name in _CMPDS_METRIC_NAMES}
+        macro_ctrl = {name: [] for name in _CMPDS_METRIC_NAMES}   # random-ranking control (macro)
+        pool = {f'{fam}_{q}': (0.0 if q == 'R' else np.zeros(nk))  # pooled micro sums
+                for fam in ('sim', 'cons') for q in ('hits', 'dcg', 'idcg', 'R')}
+        cov_ctrl = {'sim': [], 'cons': []}                  # per-disease P(covered) under random ranking
+        sig_tot = {'sim': np.zeros(nk), 'cons': np.zeros(nk)}  # summed per-query significance counts
+        micro_count = 0
+        per_disease = {}   # effect_id -> {metric_name: length-nk per-disease (macro) vector}
+        for effect_id, d, p, dc, n_inst, covd, sigd in results:
+            if n_inst == 0:
+                continue
+            per_disease[effect_id] = {name: d[name] / n_inst for name in macro}
+            for name in macro:
+                macro[name].append(d[name] / n_inst)   # per-disease mean (macro)
+                macro_ctrl[name].append(dc[name] / n_inst)
+            for key in pool:
+                pool[key] += p[key]                    # pool raw hits/dcg/idcg/R for micro
+            cov_ctrl['sim'].append(covd['sim'])
+            cov_ctrl['cons'].append(covd['cons'])
+            sig_tot['sim'] += sigd['sim']
+            sig_tot['cons'] += sigd['cons']
+            micro_count += n_inst
+
+        # Micro = ratio of pooled sums: recall = Sigma hits / Sigma R; precision = Sigma hits /
+        # (n_queries * k); NDCG = Sigma DCG / Sigma IDCG. Each query retrieves k candidates.
+        _Kd = np.maximum(1, np.array(K, dtype=float))
+        micro = {}
+        for fam, prefix in [('sim', 'similarity'), ('cons', 'consensus')]:
+            Rtot, hits = pool[f'{fam}_R'], pool[f'{fam}_hits']
+            idcg = pool[f'{fam}_idcg']
+            micro[f'{prefix}_recall'] = hits / Rtot if Rtot else np.zeros(nk)
+            micro[f'{prefix}_precision'] = hits / (micro_count * _Kd) if micro_count else np.zeros(nk)
+            micro[f'{prefix}_ndcg'] = np.divide(pool[f'{fam}_dcg'], idcg,
+                                                out=np.zeros(nk), where=idcg > 0)
+
+        metric_labels = [('sim_recall', 'similarity_recall'), ('sim_prec', 'similarity_precision'),
+                         ('sim_ndcg', 'similarity_ndcg'), ('cons_recall', 'consensus_recall'),
+                         ('cons_prec', 'consensus_precision'), ('cons_ndcg', 'consensus_ndcg')]
+
+        # Per-disease results, one results_analysed_named file per metric (sorted by disease size).
+        # Column titles reuse `headers` so the topN cutoff matches every other output file.
+        unit_col = 'pairs_per_effect' if pairs else 'cmpds_per_effect'
+        ra_header = f"effect_id\t{unit_col}\t" + "\t".join(headers) + "\teffect_name\n"
+        effects_sorted = sorted((e for e in effects if e.id_ in per_disease),
+                                key=lambda e: (member_count[e.id_], e.id_), reverse=True)
+        for name, label in metric_labels:
+            with open(ra_named % label, 'w', encoding="utf8") as fo:
+                fo.write(ra_header)
+                for effect in effects_sorted:
+                    vals = per_disease[effect.id_][name]
+                    fo.write("{}\t{}\t{}\t{}\n".format(
+                        effect.id_, member_count[effect.id_],
+                        '\t'.join(f'{v:.5f}' for v in vals), effect.name))
+
+        # Per-association raw_results/ CSVs, read back from the per-effect dbs (opt-in via write_raw;
+        # they require pa_results, the O(m^2) pairwise table). Three files, all in raw_results/:
+        #   consensus_results  - per compound-disease LOO consensus rank/score (from ia_results)
+        #   pairwise_results   - per compound-compound similarity rank (from pa_results)
+        #   similarity_results - per compound-disease similarity summary: the best (minimum) rank of
+        #                        any other associated compound, and top-k hit flags (from pa_results)
+        if write_raw:
+            if pairs:
+                ia_id, pa_id1, pa_id2 = 'cmpd_pair_id', 'cmpd_pair_id_1', 'cmpd_pair_id_2'
+            else:
+                ia_id, pa_id1, pa_id2 = 'cmpd_id', 'cmpd_id-1', 'cmpd_id-2'
+            ia_cols = [ia_id, 'effect_id'] + headers + ['rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+            pa_cols = [pa_id1, pa_id2, 'effect_id'] + headers + ['rank', 'dist']
+            sim_cols = [ia_id, 'effect_id'] + headers + ['rank']
+            with open(cons_file, 'w', encoding="utf8") as cons_out, \
+                 open(pwr, 'w', encoding="utf8") as pwr_out, \
+                 open(sim_file, 'w', encoding="utf8") as sim_out:
+                cons_out.write(','.join(ia_cols) + '\n')
+                pwr_out.write(','.join(pa_cols) + '\n')
+                sim_out.write(','.join(sim_cols) + '\n')
+                for effect in effects:
+                    db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect.id_}.db')
+                    df_ia = pd.read_sql("SELECT * FROM ia_results", db_benchmark)
+                    df_pa = pd.read_sql("SELECT * FROM pa_results", db_benchmark)
+                    for c_idx in df_ia.index:
+                        cons_out.write(','.join(map(str, df_ia.loc[c_idx, :].values.tolist())) + '\n')
+                    for c_idx in df_pa.index:
+                        pwr_out.write(','.join(map(str, df_pa.loc[c_idx, :].values.tolist())) + '\n')
+                    # Similarity per query unit: for each query (pa_id1), summarize its pairwise
+                    # rankings to the other members -> best (minimum) rank + OR of top-k flags.
+                    flag_cols = [c for c in df_pa.columns if c.startswith('top')]
+                    df_pa['rank'] = df_pa['rank'].astype(int)
+                    df_pa[flag_cols] = df_pa[flag_cols].astype(int)
+                    for c1, grp in df_pa.groupby(pa_id1, sort=False):
+                        flags = [str(int(grp[c].max())) for c in flag_cols]
+                        best_rank = int(grp['rank'].min())
+                        sim_out.write(','.join([str(c1), effect.id_] + flags + [str(best_rank)]) + '\n')
+
+        # Assemble summary: each metric family as a macro and a micro row
+        rows = {}
+        for name, label in metric_labels:
+            macro_avg = np.mean(np.vstack(macro[name]), axis=0) if macro[name] else np.zeros(nk)
+            rows[f'{label}_macro'] = macro_avg
+            rows[f'{label}_micro'] = micro[label]
+            # Random-ranking (hypergeometric) control: expected metric value under random ranking,
+            # macro-averaged over conditions (matching the *_macro rows).
+            rows[f'{label}_control_macro'] = (np.mean(np.vstack(macro_ctrl[name]), axis=0)
+                                              if macro_ctrl[name] else np.zeros(nk))
+
+        # Coverage: how many conditions have a non-zero recall@k (a hit for at least one of their
+        # members), as a discrete count and as a percentage of the conditions evaluated.
+        n_eval = len(per_disease)
+        for rec_name, cov_label in [('sim_recall', 'similarity_coverage'),
+                                    ('cons_recall', 'consensus_coverage')]:
+            cov = np.array([sum(1 for eid in per_disease if per_disease[eid][rec_name][j] > 0)
+                            for j in range(nk)], dtype=float)
+            rows[cov_label] = cov
+            rows[f'{cov_label}_pct'] = cov / n_eval * 100.0 if n_eval else np.zeros(nk)
+
+        # Coverage control (hypergeometric): the null "at least one hit" baseline for coverage.
+        # Per disease P(covered) = 1 - prod_over_members(1 - P(query retrieves >=1 relevant));
+        # reported as an expected count (sum over diseases) and expected percentage (mean), so it
+        # lines up with the observed coverage / coverage_pct rows above.
+        for fam, prefix in [('sim', 'similarity'), ('cons', 'consensus')]:
+            stack = np.vstack(cov_ctrl[fam]) if cov_ctrl[fam] else np.zeros((1, nk))
+            rows[f'{prefix}_coverage_control'] = stack.sum(axis=0)
+            rows[f'{prefix}_coverage_control_pct'] = stack.mean(axis=0) * 100.0 if n_eval else np.zeros(nk)
+        # Significance: number (and %) of queries whose top-k retrieval beats a random ranking at
+        # level alpha (upper-tail hypergeometric p-value < alpha), pooled over all associations.
+        for fam, prefix in [('sim', 'similarity'), ('cons', 'consensus')]:
+            rows[f'{prefix}_significant'] = sig_tot[fam]
+            rows[f'{prefix}_significant_pct'] = (sig_tot[fam] / micro_count * 100.0
+                                                 if micro_count else np.zeros(nk))
+
+        df_summ = pd.DataFrame.from_dict(rows, orient='index', columns=headers)
+        df_summ.to_csv(summ, sep='\t', float_format='%.5f')
+        print("\nSummary (recall@k / precision@k / NDCG@k)")
+        print(df_summ)
+        print()
+        t_tot = time.time() - start
+        print(f"Done running canbenchmark_cmpds ({t_tot:.0f} s).\n")
+        return df_summ
+
+    def canbenchmark_conds(self, file_name, n=10, adrs=False, pairs=False, alpha=0.05, write_raw=False):
+        """!
+        Leave-one-out benchmark of the conditions (indications or ADRs) predicted for each compound
+        -- the dual of canbenchmark_cmpds and the LOO version of canpredict_indications/canpredict_adr.
+
+        For each compound, its conditions are predicted from the conditions of its top-n most similar
+        compounds using the same vote-count + hypergeometric-probability consensus as canpredict
+        (the compound is naturally left out, since it is not in its own similarity list). Every
+        condition in the library is ranked by (probability ascending, votes descending), and the
+        compound's true conditions form the relevant set. Reports consensus recall@k, precision@k
+        and NDCG@k, each macro-averaged (mean over compounds) and micro-averaged as a ratio of
+        pooled sums over all associations (recall = sum(hits)/sum(R), precision =
+        sum(hits)/(n_queries*k), NDCG = sum(DCG)/sum(IDCG)). NDCG uses binary relevance.
+
+        The k thresholds match canbenchmark_cmpds: top1, top5, top10, top25, top50, top100, topAll
+        (100% of the condition library), top1%, top5%, top10%, top50%, top100%.
+
+        @param file_name str: base name for the output files
+        @param n int: number of most-similar compounds used to vote for conditions (as in canpredict)
+        @param adrs bool: benchmark ADR prediction instead of indication prediction
+        @param pairs bool: predict ADRs for compound pairs (Compound_pair objects) instead of
+            compounds; neighbours come from the compound-pair distance table. Forces adrs=True.
+        @param alpha float: significance level for the per-compound hypergeometric test used by the
+            consensus_significant / consensus_significant_pct rows.
+        @param write_raw bool: if True, write the raw_results/consensus_results CSV (one row per
+            compound-condition association). Default False (summary metrics are unaffected).
+        @return Returns a pandas DataFrame of the macro/micro metric summary. In addition it
+            includes a macro-averaged random-ranking control row per metric
+            (consensus_*_control_macro) -- the expected value under a random ranking
+            (hypergeometric) -- a consensus_coverage row (count of compounds with a non-zero
+            recall@k) and a consensus_coverage_pct row (as a percentage of the compounds evaluated).
+            It also includes a hypergeometric coverage control (consensus_coverage_control expected
+            count / consensus_coverage_control_pct expected %), the null "at least one hit" baseline
+            for coverage, and per-compound significance rows (consensus_significant count /
+            consensus_significant_pct %) counting compounds whose top-k retrieval beats a random
+            ranking at level alpha.
+
+        Output files:
+          - summary-conds-<file_name>-<n>[-adrs].tsv
+          - results_analysed_named/results_analysed_named-conds-<metric>-<file_name>[-adrs].tsv:
+            one file per metric with the per-compound value at each k threshold
+          - raw_results/consensus_results-conds-<file_name>[-adrs].csv: per compound-condition
+            association, the predicted rank of the true condition and top-k hit flags
+        """
+        print("Begin running canbenchmark_conds...")
+        start = time.time()
+
+        # Compound pairs only ever carry ADRs; force the ADR condition type in pair mode.
+        if pairs:
+            adrs = True
+        pairs_str = '-pairs' if pairs else ''
+        adrs_str = '-adrs' if adrs else ''
+        summ = f"summary-conds{pairs_str}-{file_name}-{n}{adrs_str}.tsv"
+        ra_named = 'results_analysed_named/results_analysed_named-conds{}-%s-{}{}.tsv'.format(pairs_str, file_name, adrs_str)
+        cons_file = f'raw_results/consensus_results-conds{pairs_str}-{file_name}{adrs_str}.csv'
+        os.makedirs('results_analysed_named', exist_ok=True)
+        os.makedirs('raw_results', exist_ok=True)
+
+        # The "unit" being benchmarked is a compound (default) or a compound pair (pairs=True).
+        # unit_conds/similar_top/n_app/M are the only things that differ between the two modes;
+        # the per-unit prediction and metric aggregation below are identical.
+        if pairs:
+            units = self.compound_pairs
+            conds = self.adrs
+            unit_conds = {str(u.id_): u.adrs for u in units}
+            cond_size = {cond.id_: len(cond.compound_pairs) for cond in conds}
+            M = len(self.compound_pairs) - 1
+            unit_name = {str(u.id_): str(u.id_) for u in units}
+            # pairs have no in-memory .similar; read neighbours from the dist table
+            similar_top = _load_pair_similar(self.db_name, top=n)
+        else:
+            if not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar_sorted = True
+            units = self.compounds
+            conds = self.adrs if adrs else self.indications
+            unit_conds = {c.id_: (c.adrs if adrs else c.indications) for c in units}
+            cond_size = {cond.id_: len(cond.compounds) for cond in conds}
+            M = len(self.compounds) - 1
+            unit_name = {c.id_: c.name for c in units}
+            similar_top = {c.id_: c.similar[:n] for c in units}
+
+        # Condition library (universe that gets ranked) and per-condition sizes
+        cond_ids = [cond.id_ for cond in conds]
+        cond_index = {cid: i for i, cid in enumerate(cond_ids)}
+        n_app = np.array([cond_size[cid] for cid in cond_ids], dtype=float)
+        n_cond = len(cond_ids)
+
+        def unit_key(u):
+            return str(u.id_) if pairs else u.id_
+        # Units worth benchmarking: those with at least one condition in the library
+        query_cmpds = [u for u in units if any(k in cond_index for k in unit_conds[unit_key(u)])]
+
+        # k thresholds: absolute counts (top1..top100 + topAll) then percentiles of the library
+        x = n_cond / 100.0
+        metrics = [(1, 1), (2, 5), (3, 10), (4, 25), (5, 50), (6, 100), (7, int(x * 100.0001)),
+                   (8, int(x * 1.0001)), (9, int(x * 5.0001)), (10, int(x * 10.0001)),
+                   (11, int(x * 50.0001)), (12, int(x * 100.0001))]
+        K = [m[1] for m in metrics]
+        nk = len(metrics)
+        headers = ['top1', 'top5', 'top10', 'top25', 'top50', 'top100', f'top{n_cond}',
+                   'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+
+        # Accumulators: macro sums (per-compound metric), and pooled raw sums for micro
+        macro = {name: np.zeros(nk) for name in ('recall', 'prec', 'ndcg')}
+        macro_ctrl = {name: np.zeros(nk) for name in ('recall', 'prec', 'ndcg')}  # random control
+        w_hits = np.zeros(nk)        # pooled hits@k  (for micro recall/precision)
+        w_dcg = np.zeros(nk)         # pooled DCG@k   (for micro NDCG)
+        w_idcg = np.zeros(nk)        # pooled IDCG@k
+        cov_count = np.zeros(nk)     # compounds with a non-zero recall@k (coverage)
+        cov_ctrl_sum = np.zeros(nk)  # summed P(random retrieves >=1 true condition) (coverage ctrl)
+        sig_sum = np.zeros(nk)       # count of compounds significant at level alpha
+        R_total = 0
+        n_cmpd = 0
+        # per-compound rows for results_analysed_named, and per-association rows for raw consensus
+        per_cmpd = []
+        cons_rows = []
+
+        # Per-unit prediction is independent, so it is optionally parallelised. The top-n
+        # similarity lists and the unit->conditions map are shipped once per worker via the
+        # pool initializer; each task carries only a unit id.
+        unit_label = 'compound pairs' if pairs else ('ADRs' if adrs else 'indications')
+        print(f"  Predicting conditions for {len(query_cmpds)} {'compound pairs' if pairs else 'compounds'}...")
+        tasks = [unit_key(u) for u in query_cmpds]
+        init_args = (similar_top, unit_conds, cond_index, n_app, M, n, K, alpha)
+        t_pred = time.time()
+        if self.ncpus > 1:
+            chunksize = max(1, len(tasks) // (self.ncpus * 4))
+            with mp.Pool(self.ncpus, initializer=_init_conds_worker, initargs=init_args) as pool:
+                results = pool.map(_conds_metrics_worker, tasks, chunksize=chunksize)
+        else:
+            _init_conds_worker(*init_args)
+            it = tqdm(tasks) if self.pbar else tasks
+            results = [_conds_metrics_worker(t) for t in it]
+        print(f"    prediction stage ({self.ncpus} cpu): {time.time() - t_pred:.2f} s")
+
+        name_by_id = unit_name
+        for (c_id, R, row_r, row_p, row_nd, row_h, row_dcg, row_idcg, ctrl_r, ctrl_p, ctrl_nd,
+             rel_ranks, cov_ctrl_row, sig_row) in results:
+            if R == 0:
+                continue
+            macro['recall'] += row_r
+            macro['prec'] += row_p
+            macro['ndcg'] += row_nd
+            macro_ctrl['recall'] += ctrl_r
+            macro_ctrl['prec'] += ctrl_p
+            macro_ctrl['ndcg'] += ctrl_nd
+            w_hits += row_h
+            w_dcg += row_dcg
+            w_idcg += row_idcg
+            cov_count += (row_r > 0)
+            cov_ctrl_sum += cov_ctrl_row
+            sig_sum += sig_row
+            R_total += R
+            n_cmpd += 1
+            per_cmpd.append((c_id, name_by_id[c_id], R, row_r, row_p, row_nd))
+            # raw consensus (opt-in): one row per true condition with its predicted rank + top-k flags
+            if write_raw:
+                for k, rk in rel_ranks:
+                    flags = ['1' if rk <= kk else '0' for kk in K]
+                    cons_rows.append([str(c_id), k] + flags + [str(rk)])
+
+        # Macro = mean over compounds; micro = pooled over compound-condition associations
+        rows = {}
+        # Micro = ratio of pooled sums: recall = Sigma hits / Sigma R; precision = Sigma hits /
+        # (n_queries * k); NDCG = Sigma DCG / Sigma IDCG.
+        rows['consensus_recall_macro'] = macro['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['consensus_recall_micro'] = w_hits / R_total if R_total else np.zeros(nk)
+        rows['consensus_precision_macro'] = macro['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
+        # precision pools hits over the fixed per-query denominator k (so micro equals macro here)
+        rows['consensus_precision_micro'] = w_hits / (n_cmpd * np.maximum(1, np.array(K))) if n_cmpd else np.zeros(nk)
+        rows['consensus_ndcg_macro'] = macro['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['consensus_ndcg_micro'] = np.divide(w_dcg, w_idcg, out=np.zeros(nk), where=w_idcg > 0)
+        # Random-ranking (hypergeometric) control: expected metric value under random ranking,
+        # macro-averaged over compounds (matching the *_macro rows).
+        rows['consensus_recall_control_macro'] = macro_ctrl['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['consensus_precision_control_macro'] = macro_ctrl['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['consensus_ndcg_control_macro'] = macro_ctrl['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
+        # Coverage: how many compounds (units) have a non-zero recall@k, as a discrete count and
+        # as a percentage of the compounds evaluated.
+        rows['consensus_coverage'] = cov_count
+        rows['consensus_coverage_pct'] = cov_count / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+        # Coverage control (hypergeometric "at least one hit" null): each compound is one query, so
+        # the summed P(X>=1) is the expected number of covered compounds (and its mean the pct).
+        rows['consensus_coverage_control'] = cov_ctrl_sum
+        rows['consensus_coverage_control_pct'] = cov_ctrl_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+        # Significance: number (and %) of compounds whose top-k retrieval beats a random ranking at
+        # level alpha (upper-tail hypergeometric p-value < alpha).
+        rows['consensus_significant'] = sig_sum
+        rows['consensus_significant_pct'] = sig_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+
+        # Per-metric results_analysed_named (per compound, sorted by #conditions).
+        # per_cmpd tuple: (cmpd_id, cmpd_name, R, recall_row, precision_row, ndcg_row)
+        ra_header = "cmpd_id\tconds_per_cmpd\t" + "\t".join(headers) + "\tcmpd_name\n"
+        per_cmpd_sorted = sorted(per_cmpd, key=lambda t: (t[2], t[0]), reverse=True)
+        metric_slot = {'consensus_recall': 3, 'consensus_precision': 4, 'consensus_ndcg': 5}
+        for label, slot in metric_slot.items():
+            with open(ra_named % label, 'w', encoding="utf8") as fo:
+                fo.write(ra_header)
+                for tup in per_cmpd_sorted:
+                    c_id, c_name, R = tup[0], tup[1], tup[2]
+                    vals = tup[slot]
+                    fo.write("{}\t{}\t{}\t{}\n".format(
+                        c_id, R, '\t'.join(f'{v:.5f}' for v in vals), c_name))
+
+        # Raw per-association consensus results (opt-in via write_raw)
+        if write_raw:
+            with open(cons_file, 'w', encoding="utf8") as co:
+                co.write(','.join(['cmpd_id', 'cond_id'] + headers + ['rank']) + '\n')
+                for row in cons_rows:
+                    co.write(','.join(row) + '\n')
+
+        df_summ = pd.DataFrame.from_dict(rows, orient='index', columns=headers)
+        df_summ.to_csv(summ, sep='\t', float_format='%.5f')
+        print("\nSummary (consensus recall@k / precision@k / NDCG@k)")
+        print(df_summ)
+        print()
+        t_tot = time.time() - start
+        print(f"Done running canbenchmark_conds ({t_tot:.0f} s).\n")
         return df_summ
 
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
@@ -3352,7 +3868,7 @@ class CANDO(object):
         ra = f'raw_results/raw_results-ddi_adr-{file_name}-{n}{approved_str}.csv'
         pwr = f'pairwise_results/pairwise_results-ddi_adr-{file_name}-{n}{approved_str}.csv'
         summ = f'summary-ddi_adr-{file_name}-{n}{approved_str}.tsv'
-        benchmark_name = f"canbenchmark-ddi_adr-{file_name}-{n}{approved_str}"
+        benchmark_name = os.path.join(self.db_path, f"canbenchmark-ddi_adr-{file_name}-{n}{approved_str}")
         t_name = f"time-ddi_adr-{file_name}-{n}{approved_str}.txt"
 
         os.makedirs('results_analysed_named', exist_ok=True)
@@ -5955,7 +6471,8 @@ def single_interaction(c_id, p_id, v="v2.2", fp="rd_ecfp4", vect="int",
 
 def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
                     p_cutoff=0.0, percentile_cutoff=0.0, i_score="P", out_file='', out_path=".", nr_ligs=True,
-                    approved_only=False, lig_name=False, lib_path='', prot_path='', ncpus=1, pbar=True):
+                    approved_only=False, lig_name=False, lib_path='', prot_path='', ncpus=1, pbar=True,
+                    save_matrix=True):
     """!
     Generate a matrix using our in-house protocol BANDOCK.
 
@@ -5977,7 +6494,11 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     @param lib_path str: specify a local compound fingerprint set for custom analyses
     @param prot_path str: specify a local protein library for custom analyses
     @param ncpus int: number of cores to run on
-    @return Returns None
+    @param save_matrix bool: if True (default) write the matrix to out_path/out_file and return None;
+        if False do not write any file and instead return the full matrix as a pandas DataFrame
+        (rows = proteins, columns = compound ids). Note the returned DataFrame holds the entire
+        matrix in memory (unlike the streamed write), so use it for matrices that fit in RAM.
+    @return None when save_matrix is True; otherwise the full proteins-by-compounds DataFrame.
     """
 
     def print_time(s):
@@ -6088,33 +6609,110 @@ def generate_matrix(v="v2.2", fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb
     else:
         nr_lig_fps = None
 
-    if ncpus > 1:
-        # Ship the big shared args once per worker via the initializer; each task
-        # then carries only a compound id. A few chunks per worker keeps the load
-        # balanced without re-pickling overhead per compound.
-        chunksize = max(1, len(c_list) // (ncpus * 4))
-        with mp.Pool(ncpus, initializer=_init_score_worker,
-                     initargs=(c_fps, prot_data, dist, c_cutoff, percentile_cutoff,
-                               i_score, nr_lig_fps, lig_name)) as pool:
-            it = pool.imap(_score_one, c_list, chunksize=chunksize)
-            if pbar:
-                it = tqdm(it, total=len(c_list))
-            scores = list(it)
+    # Proteins are the matrix rows; compounds the columns. Each compound is scored independently
+    # (one full column), so we sort the compound ids up front (replacing the old sort_index over
+    # 2M columns) and process results in that order.
+    c_list = sorted(c_list)
+    prot_names = list(p_matrix.index)
+    n_prot = len(prot_names)
+    n_cmpd = len(c_list)
+    out_full = "{}/{}".format(out_path, out_file)
+
+    def _score_iter():
+        # Yields (compound_id, score_vector) in c_list order, serial or across a worker pool. The
+        # big shared args are shipped once per worker via the initializer; tasks carry only an id.
+        if ncpus > 1:
+            chunksize = max(1, len(c_list) // (ncpus * 4))
+            with mp.Pool(ncpus, initializer=_init_score_worker,
+                         initargs=(c_fps, prot_data, dist, c_cutoff, percentile_cutoff,
+                                   i_score, nr_lig_fps, lig_name)) as pool:
+                it = pool.imap(_score_one, c_list, chunksize=chunksize)   # lazy: preserves order
+                it = tqdm(it, total=n_cmpd) if pbar else it
+                for res in it:
+                    yield res
+        else:
+            bar = tqdm(c_list) if pbar else c_list
+            for c in bar:
+                yield calc_scores(c, c_fps, prot_data, dist, c_cutoff, percentile_cutoff,
+                                  i_score, nr_lig_fps, lig_name)
+
+    if lig_name:
+        # Ligand-name output is textual, not numeric; keep the simple collect-then-write path
+        # (this mode is for small/debug runs, not full-scale matrices).
+        scores = {c: vec for c, vec in _score_iter()}
+        mat = pd.DataFrame.from_dict(scores)
+        mat.sort_index(axis=1, inplace=True)
+        mat.rename(index=dict(zip(range(n_prot), prot_names)), inplace=True)
+        if save_matrix:
+            mat.to_csv(out_full, sep='\t', index=True, header=False, float_format='%.3f')
+            print(f"  Matrix written to {out_full}.")
+        else:
+            print("  Returning matrix as a DataFrame (not written to file).")
+        print(f"Matrix generation completed in {print_time(time.time()-start)}.\n")
+        return None if save_matrix else mat
+
+    # Numeric path. Each compound's scores go straight into a compact float32 buffer (a disk-backed
+    # memmap laid out compounds x proteins, one contiguous row per compound): ~4 bytes/cell (the raw
+    # data size) instead of ~32 bytes/cell (a boxed Python float + a list pointer per value) plus a
+    # duplicate float64 DataFrame. In parallel mode the workers write their own rows *directly* into
+    # the shared memmap, so results never funnel back through the single parent process, and each
+    # query fingerprint travels with its task (rather than copying the whole compound fp set into
+    # every worker). Both remove the serial-collection and per-worker-memory bottlenecks that
+    # otherwise cap scaling at high core counts.
+    buf_path = out_full + ".buf.tmp"
+    sig = np.memmap(buf_path, dtype=np.float32, mode='w+', shape=(n_cmpd, n_prot))
+    sig.flush()
+    del sig                        # allocate the file at full size; parent/workers reopen it below
+    try:
+        if ncpus > 1:
+            chunksize = max(1, n_cmpd // (ncpus * 4))
+            tasks = ((j, c, c_fps[c]) for j, c in enumerate(c_list))   # fp travels with the task
+            with mp.Pool(ncpus, initializer=_init_mmap_worker,
+                         initargs=(prot_data, dist, c_cutoff, percentile_cutoff, i_score,
+                                   nr_lig_fps, buf_path, (n_cmpd, n_prot))) as pool:
+                it = pool.imap_unordered(_score_to_mmap, tasks, chunksize=chunksize)
+                it = tqdm(it, total=n_cmpd) if pbar else it
+                for _ in it:
+                    pass           # each worker writes its own row; just drain for progress
+        else:
+            sig = np.memmap(buf_path, dtype=np.float32, mode='r+', shape=(n_cmpd, n_prot))
+            bar = tqdm(c_list) if pbar else c_list
+            for j, c in enumerate(bar):
+                sig[j, :] = calc_scores(c, c_fps, prot_data, dist, c_cutoff, percentile_cutoff,
+                                        i_score, nr_lig_fps, lig_name)[1]
+            sig.flush()
+            del sig
+
+        # save_matrix=True: stream proteins x compounds to disk a few rows at a time so we never
+        # hold more than ~row_chunk x n_cmpd float32 in memory; pandas formats each block at C speed
+        # and the transposed reads visit each buffer element once. save_matrix=False: materialize
+        # the whole matrix as a DataFrame to return (the caller opted to hold it in memory).
+        sig = np.memmap(buf_path, dtype=np.float32, mode='r', shape=(n_cmpd, n_prot))
+        if save_matrix:
+            row_bytes = max(1, n_cmpd * 4)
+            row_chunk = max(1, min(n_prot, (256 << 20) // row_bytes))   # ~256 MB per written block
+            with open(out_full, 'w', encoding='utf8') as fo:
+                starts = range(0, n_prot, row_chunk)
+                starts = tqdm(starts, total=math.ceil(n_prot / row_chunk)) if pbar else starts
+                for s in starts:
+                    e = min(s + row_chunk, n_prot)
+                    block = np.ascontiguousarray(sig[:, s:e].T)      # (rows, n_cmpd) float32 copy
+                    pd.DataFrame(block, index=prot_names[s:e]).to_csv(
+                        fo, sep='\t', header=False, index=True, float_format='%.3f')
+            result = None
+        else:
+            result = pd.DataFrame(np.ascontiguousarray(sig.T), index=prot_names, columns=c_list)
+        del sig
+    finally:
+        if os.path.exists(buf_path):
+            os.remove(buf_path)
+
+    if save_matrix:
+        print(f"  Matrix written to {out_full}.")
     else:
-        bar = tqdm(c_list) if pbar else c_list
-        scores = [calc_scores(c,c_fps,prot_data,dist,c_cutoff,percentile_cutoff,i_score,nr_lig_fps,lig_name) for c in bar]
-    scores = {d[0]:d[1] for d in scores}
-
-    mat = pd.DataFrame.from_dict(scores)
-    mat.sort_index(axis=1,inplace=True)
-    mat.rename(index=dict(zip(range(len(p_matrix.index)), p_matrix.index)), inplace=True)
-   
-    mat.to_csv("{}/{}".format(out_path,out_file), sep='\t', index=True, header=False, float_format='%.3f')
-    print(f"  Matrix written to {out_path}/{out_file}.")
-
-    tot_time = print_time(time.time()-start)
-    print(f"Matrix generation completed in {tot_time}.\n")
-    return(mat)
+        print("  Returning matrix as a DataFrame (not written to file).")
+    print(f"Matrix generation completed in {print_time(time.time()-start)}.\n")
+    return result
 
 def prep_prot_data(l_fps, p_dict, pscore_cutoff=0.0):
     """!
@@ -6265,6 +6863,30 @@ def _score_one(c):
     return calc_scores(c, ctx['c_fps'], ctx['prot_data'], ctx['dist'],
                        ctx['cscore_cutoff'], ctx['percentile_cutoff'],
                        ctx['i_score'], ctx['nr_lig_fps'], ctx['lig_name'])
+
+
+# Per-worker scratch for the direct-to-memmap numeric path of generate_matrix. Unlike the textual
+# lig_name path above, the query fingerprint travels *with each task* (so the full compound fp set
+# is never copied into every worker) and each worker opens the shared float32 memmap once and writes
+# its compound's row in place -- no scored vector is streamed back through the parent process.
+_mmap_ctx = {}
+
+
+def _init_mmap_worker(prot_data, dist, cscore_cutoff, percentile_cutoff, i_score, nr_lig_fps,
+                      buf_path, shape):
+    _mmap_ctx.update(prot_data=prot_data, dist=dist, cscore_cutoff=cscore_cutoff,
+                     percentile_cutoff=percentile_cutoff, i_score=i_score, nr_lig_fps=nr_lig_fps,
+                     sig=np.memmap(buf_path, dtype=np.float32, mode='r+', shape=shape))
+
+
+def _score_to_mmap(task):
+    j, c, fp = task
+    ctx = _mmap_ctx
+    # A singleton {c: fp} dict lets calc_scores stay unchanged (it only looks up c_fps[c]).
+    vec = calc_scores(c, {c: fp}, ctx['prot_data'], ctx['dist'], ctx['cscore_cutoff'],
+                      ctx['percentile_cutoff'], ctx['i_score'], ctx['nr_lig_fps'], False)[1]
+    ctx['sig'][j, :] = vec          # write straight into the shared memmap row (float32 cast)
+    return j
 
 
 def generate_signature(cmpd_file, fp="rd_ecfp4", vect="int", dist="dice", org="nrpdb", bs="coach", c_cutoff=0.0,
@@ -7241,179 +7863,549 @@ def load_version(v='v2.3', protlib='nrpdb', i_score='CxP', approved_only=False, 
 
     return cando
 
-def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic, tierank, cmpd_pairs=False):
+def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved, n, cando_db, dist_metric, exclude_indic, tierank, cmpd_pairs=False, metric_cols=None, write_raw=True):
+    # The pairwise table (pa_results) is O(m^2) in the effect's member count. It is only needed for
+    # compound-PAIR similarity metrics (cmpd_pairs) or the raw pairwise CSV output (write_raw); for
+    # the ordinary compound case with write_raw=False it is skipped entirely, which removes the
+    # quadratic per-effect memory/IO (the consensus ia_results, O(m), is always written).
+    need_pa = cmpd_pairs or write_raw
+    ia_col = 'cmpd_pair_id' if cmpd_pairs else 'cmpd_id'
+    pa_col = 'cmpd_pair_id_1' if cmpd_pairs else '`cmpd_id-1`'
     db_name = f'{d_name}/{effect_id}.db'
     if os.path.exists(db_name):
+        # Reuse an existing per-effect db only if it already holds the expected rows (ia always,
+        # pa only when needed); otherwise drop the stale/partial tables and recompute.
         db = create_engine(f'sqlite:///{db_name}')
-        if not cmpd_pairs:
-            df_ia_results = pd.read_sql("SELECT cmpd_id FROM ia_results", db)
-            df_pa_results = pd.read_sql("SELECT `cmpd_id-1` FROM pa_results", db)
-        else:
-            df_ia_results = pd.read_sql("SELECT cmpd_pair_id FROM ia_results", db)
-            df_pa_results = pd.read_sql("SELECT cmpd_pair_id_1 FROM pa_results", db)
-        if len(df_ia_results) == len(effect_cmpds) and len(df_pa_results) == len(effect_cmpds) * (len(effect_cmpds)-1):
+        try:
+            ok = len(pd.read_sql(f"SELECT {ia_col} FROM ia_results", db)) == len(effect_cmpds)
+            if ok and need_pa:
+                ok = len(pd.read_sql(f"SELECT {pa_col} FROM pa_results", db)) == \
+                     len(effect_cmpds) * (len(effect_cmpds) - 1)
+        except Exception:
+            ok = False
+        if ok:
             return
-        else:
-            try:
-                # Connecting to sqlite
-                conn = sqlite3.connect(db_name)
-                # Creating a cursor object using the cursor() method
-                cursor = conn.cursor()
-                # Droping dists table if already exists
-                cursor.execute("DROP TABLE ia_results")
-                cursor.execute("DROP TABLE pa_results")
-                # Commit your changes in the database
-                conn.commit()
-                # Closing the connection
-                conn.close()
-            except:
-                # print("dists table does not exist.")
-                pass
-    print(effect_id)
-    #conn = f'sqlite://{cando_db}'
+        try:
+            conn = sqlite3.connect(db_name)
+            cur = conn.cursor()
+            cur.execute("DROP TABLE IF EXISTS ia_results")
+            cur.execute("DROP TABLE IF EXISTS pa_results")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
     effect_cmpds = [str(c) for c in effect_cmpds]
-    print(len(effect_cmpds))
     ss = []
     pa_ss = []
     db = create_engine(f'sqlite:///{cando_db}')
-    if not cmpd_pairs:
-        df_dists = pd.read_sql(f"SELECT * FROM {dist_metric} WHERE id IN {tuple(effect_cmpds)}", db)
-    else:
-        df_dists = pd.read_sql(f"SELECT * FROM dists WHERE id IN {tuple(effect_cmpds)}", db)
-    print(df_dists.head())
+    # The table name is a controlled identifier (dist_metric/'dists') so it is interpolated, but the
+    # id list is passed as an expanding bound parameter (safe, and handles any list length cleanly).
+    dist_table = 'dists' if cmpd_pairs else dist_metric
+    query = text(f"SELECT * FROM {dist_table} WHERE id IN :ids").bindparams(
+        bindparam('ids', expanding=True))
+    df_dists = pd.read_sql(query, db, params={'ids': effect_cmpds})
     dists_map = dict(zip(df_dists['id'], df_dists['dists']))
-    dist_df = pd.DataFrame({"id":cmpd_lib})
-    dist_df.sort_values(by="id", inplace=True)
-    score_df = dist_df.copy()
-    rank_df = dist_df.copy()
-    nrank_df = dist_df.copy()
-   
+    dist_ids = _load_dist_ids(cando_db, dist_table)   # canonical id order for blob-encoded rows
+    ids_sorted = sorted(cmpd_lib)
+    m = len(effect_cmpds)
+    denom = m - 1
+
+    # Build one column per associated compound for dists, ranks, nranks (rank if <= n else 0) and
+    # scores (1 if rank <= n else 0), each aligned to the full sorted library index. Columns are
+    # assembled into a dict once and turned into a DataFrame, instead of repeatedly merging in the
+    # loop; missing rows (a compound against itself, when approved) stay NaN as before.
+    dist_cols, rank_cols, nrank_cols, score_cols = {}, {}, {}, {}
     for c in tqdm(effect_cmpds, desc=f"    {effect_id}"):
-        c_sorted = json.loads(dists_map[c].replace("'", '"'))
-        #c_sorted = json.loads(df_dists.loc[df_dists['id']==c,'dists'].values[0].replace("'",'"'))
-        df_temp = pd.DataFrame.from_dict(c_sorted, orient='index')
-        df_temp.rename(columns={0:'dists'}, inplace=True)
+        c_sorted = _decode_dist_row(dists_map[c], dist_ids, str(c))
+        s_dist = pd.Series(c_sorted, dtype=float)
         if approved:
-            cmpd_lib_temp = [x for x in cmpd_lib if x!=c]
-            df_temp = df_temp.loc[cmpd_lib_temp]
-        df_temp.reset_index(inplace=True,names='id')
-        df_temp.sort_values(by=['dists'], inplace=True)
-        df_temp['rank'] = df_temp['dists'].rank(method='min')
-        df_temp[c] = df_temp['rank'].apply(lambda x: 1 if x <= n else 0)
+            s_dist = s_dist.reindex([x for x in cmpd_lib if x != c])
+        s_rank = s_dist.rank(method='min')
+        s_score = (s_rank <= n).astype(float)
+        s_nrank = s_rank.where(s_rank <= n, 0.0)
+        dist_cols[c] = s_dist.reindex(ids_sorted)
+        rank_cols[c] = s_rank.reindex(ids_sorted)
+        nrank_cols[c] = s_nrank.reindex(ids_sorted)
+        score_cols[c] = s_score.reindex(ids_sorted)
+    del df_dists
 
-        score_df = score_df.merge(df_temp.loc[:,['id',c]], on='id', how='left')
-        rank_df = rank_df.merge(df_temp.loc[:,['id','rank']], on='id', how='left')
-        rank_df.rename(columns={'rank': c}, inplace=True)
-        dist_df = dist_df.merge(df_temp.loc[:,['id','dists']], on='id', how='left')
-        dist_df.rename(columns={'dists': c}, inplace=True)
-        df_temp['nrank'] = df_temp['rank'].apply(lambda t: t if t <= n else 0)
-        nrank_df = nrank_df.merge(df_temp.loc[:,['id','nrank']], on='id', how='left')
-        nrank_df.rename(columns={'nrank': c}, inplace=True)
-        # Pairwise accuracy
-        for c2 in effect_cmpds:
-            if c == c2:
-                continue
-            s = [c, c2, effect_id]
-            rank = rank_df.loc[(rank_df['id']==c2),c].values[0]
-            dist = dist_df.loc[(dist_df['id']==c2),c].values[0]
-            for x in metrics:
-                if rank <= x[1]:
-                    s.append('1')
-                else:
-                    s.append('0')
-            s.append(str(int(rank)))
-            s.append(str(float(dist)))
-            pa_ss.append(s)
-    del df_dists, c_sorted
+    dist_M = pd.DataFrame(dist_cols, index=ids_sorted)
+    rank_M = pd.DataFrame(rank_cols, index=ids_sorted)
+    nrank_M = pd.DataFrame(nrank_cols, index=ids_sorted)
+    score_M = pd.DataFrame(score_cols, index=ids_sorted)
+
+    # Pairwise accuracy: rank/dist of each associated compound c2 within each compound c's list.
+    # .at is an O(1) lookup (previously an O(N) boolean-mask scan for every ordered pair). This is
+    # the O(m^2) work, so it is only done when the pairwise table is actually needed (need_pa).
+    if need_pa:
+        for c in effect_cmpds:
+            for c2 in effect_cmpds:
+                if c == c2:
+                    continue
+                rank = rank_M.at[c2, c]
+                dist = dist_M.at[c2, c]
+                s = [c, c2, effect_id]
+                for x in metrics:
+                    s.append('1' if rank <= x[1] else '0')
+                s.append(str(int(rank)))
+                s.append(str(float(dist)))
+                pa_ss.append(s)
+
+    # Consensus (leave-one-out): each column-sum total is computed once, then the left-out column
+    # is subtracted per compound instead of re-summing all columns every iteration.
+    dist_total = dist_M.sum(axis=1)
+    rank_total = rank_M.sum(axis=1)
+    nrank_total = nrank_M.sum(axis=1)
+    score_total = score_M.sum(axis=1)
     for c_loo in effect_cmpds:
-        dist_df_loo = dist_df.drop(c_loo, axis=1)
-        score_df_loo = score_df.drop(c_loo, axis=1)
-        rank_df_loo = rank_df.drop(c_loo, axis=1)
-        nrank_df_loo = nrank_df.drop(c_loo, axis=1)
+        score = score_total - score_M[c_loo].fillna(0.0)
+        neg_score = denom - score
+        summed_nrank = nrank_total - nrank_M[c_loo].fillna(0.0)
+        summed_dist = dist_total - dist_M[c_loo].fillna(0.0)
+        summed_rank = rank_total - rank_M[c_loo].fillna(0.0)
+        avg_nrank = np.where(score > 0, summed_nrank / score, float(len(cmpd_lib)))
+        avg_dist = summed_dist / denom
+        avg_rank = summed_rank / denom
 
-        #dist_df_loo['avg_dist'] = dist_df_loo.iloc[:,1:].mean(axis=1)
-        dist_df_loo['summed_dist'] = dist_df_loo.iloc[:,1:].sum(axis=1)
-        score_df_loo['score'] = score_df_loo.iloc[:,1:].sum(axis=1)
-        #score_df_loo['neg_score'] = score_df_loo['score'].apply(lambda x: len(effect_cmpds)-1 - x)
-        score_df_loo['neg_score'] = (len(effect_cmpds) - 1) - score_df_loo['score']
-        #rank_df_loo['avg_rank'] = rank_df_loo.iloc[:,1:].mean(axis=1)
-        rank_df_loo['summed_rank'] = rank_df_loo.iloc[:,1:].sum(axis=1)
-        nrank_df_loo['summed_nrank'] = nrank_df_loo.iloc[:,1:].sum(axis=1)
-        
-        c_df_loo = score_df_loo.loc[:,['id','score','neg_score']].merge(nrank_df_loo.loc[:,['id','summed_nrank']], on='id', how='left')
-        #c_df_loo['avg_nrank'] = c_df_loo.loc[:,['summed_nrank','score']].apply(lambda x: x[0]/x[1] if x[1] > 0 else float(len(cmpd_lib)), axis=1)
-        c_df_loo['avg_nrank'] = np.where(
-                c_df_loo['score'] > 0,
-                c_df_loo['summed_nrank'] / c_df_loo['score'],
-                float(len(cmpd_lib))
-        )
-
-        #c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','avg_dist','summed_dist']], on='id', how='left')
-        c_df_loo = c_df_loo.merge(dist_df_loo.loc[:,['id','summed_dist']], on='id', how='left')
-        #c_df_loo['avg_dist'] = c_df_loo['summed_dist'].apply(lambda x: x / (len(effect_cmpds)-1))
-        c_df_loo['avg_dist'] = c_df_loo['summed_dist'] / (len(effect_cmpds)-1)
-        #c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','avg_rank','summed_rank']], on='id', how='left')
-        c_df_loo = c_df_loo.merge(rank_df_loo.loc[:,['id','summed_rank']], on='id', how='left')
-        #c_df_loo['avg_rank'] = c_df_loo['summed_rank'].apply(lambda x: x / (len(effect_cmpds)-1))
-        c_df_loo['avg_rank'] = c_df_loo['summed_rank'] / (len(effect_cmpds)-1)
-
-        c_df_loo = c_df_loo.sort_values(by=['score','avg_nrank','avg_rank','avg_dist'], ascending=[False,True,True,True])
-        # This is competitive ranking
-        # Add other ranking methods using polars.Series.rank
+        c_df_loo = pd.DataFrame({
+            'id': ids_sorted,
+            'score': score.values,
+            'neg_score': neg_score.values,
+            'summed_nrank': summed_nrank.values,
+            'avg_nrank': avg_nrank,
+            'summed_dist': summed_dist.values,
+            'avg_dist': avg_dist.values,
+            'summed_rank': summed_rank.values,
+            'avg_rank': avg_rank.values,
+        })
+        c_df_loo = c_df_loo.sort_values(by=['score', 'avg_nrank', 'avg_rank', 'avg_dist'],
+                                        ascending=[False, True, True, True])
+        # Competitive ranking; other tie methods available via tierank (pandas Series.rank)
         if exclude_indic:
-            other_indic = effect_cmpds[:]
-            other_indic.remove(c_loo)
-            c_df_loo = c_df_loo.loc[~c_df_loo['id'.isin(other_indic)]]
-       
-        c_df_loo['rank'] = c_df_loo[['neg_score','avg_nrank','avg_rank','summed_dist']].apply(tuple,axis=1).rank(method=tierank).astype(int)
-        #c_df_loo = pl.DataFrame(c_df_loo)
-        #c_df_loo = c_df_loo.with_columns(rank=pl.struct('neg_score','avg_nrank','avg_rank','summed_dist').rank(method=tierank))
-        #c_df_loo = c_df_loo.to_pandas(use_pyarrow_extension_array=True)
+            other_indic = [x for x in effect_cmpds if x != c_loo]
+            c_df_loo = c_df_loo[~c_df_loo['id'].isin(other_indic)]
+        # zip() over the key columns replaces a slow row-wise apply(tuple, axis=1); ranks are identical
+        c_df_loo['rank'] = pd.Series(
+            list(zip(c_df_loo['neg_score'], c_df_loo['avg_nrank'],
+                     c_df_loo['avg_rank'], c_df_loo['summed_dist'])),
+            index=c_df_loo.index).rank(method=tierank).astype(int)
 
-        rank = c_df_loo.loc[c_df_loo['id']==c_loo,'rank'].values[0]
-        score = c_df_loo.loc[c_df_loo['id']==c_loo,'score'].values[0]
-        avg_dist = c_df_loo.loc[c_df_loo['id']==c_loo,'avg_dist'].values[0]
-        avg_rank = c_df_loo.loc[c_df_loo['id']==c_loo,'avg_rank'].values[0]
-        conf = 0.5*(score/(len(effect_cmpds)-1)) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank)
+        row = c_df_loo.loc[c_df_loo['id'] == c_loo].iloc[0]
+        rank = row['rank']
+        score_v = row['score']
+        avg_dist_v = row['avg_dist']
+        avg_rank_v = row['avg_rank']
+        conf = 0.5 * (score_v / denom) + 0.3 * (1 - avg_dist_v) + 0.2 * (1 / avg_rank_v)
 
         s = [c_loo, effect_id]
         for x in metrics:
-            if rank <= x[1]:
-                s.append('1')
-            else:
-                s.append('0')
+            s.append('1' if rank <= x[1] else '0')
         s.append(str(int(rank)))
-        s.append(str(int(score)))
-        s.append(str(float(avg_rank)))
-        s.append(str(float(avg_dist)))
+        s.append(str(int(score_v)))
+        s.append(str(float(avg_rank_v)))
+        s.append(str(float(avg_dist_v)))
         s.append(str(float(conf)))
         ss.append(s)
     db_benchmark = create_engine(f'sqlite:///{db_name}', pool_pre_ping=True)
-    if not cmpd_pairs:
-        # Indication accuracies header
-        ia_benchmark_cols = ['cmpd_id', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
-        # Pairwise accuracies header
-        pw_benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'dist']
+    # One flag column per metric cutoff. Callers may supply their own labels (metric_cols) so the
+    # number of columns tracks len(metrics); default to the standard 10-cutoff labels.
+    if metric_cols is None:
+        flag_cols = ['top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}',
+                     'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
     else:
-        # Indication accuracies header
-        ia_benchmark_cols = ['cmpd_pair_id', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'score', 'avg_rank', 'avg_dist', 'conf']
-        # Pairwise accuracies header
-        pw_benchmark_cols = ['cmpd_pair_id_1', 'cmpd_pair_id_2', 'effect_id',
-                          'top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}', 'top1%', 'top5%',
-                          'top10%', 'top50%', 'top100%', 'rank', 'dist']
-    # Indication accuracies - load data to sqlite
+        flag_cols = list(metric_cols)
+    if not cmpd_pairs:
+        ia_benchmark_cols = ['cmpd_id', 'effect_id'] + flag_cols + ['rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+        pw_benchmark_cols = ['cmpd_id-1', 'cmpd_id-2', 'effect_id'] + flag_cols + ['rank', 'dist']
+    else:
+        ia_benchmark_cols = ['cmpd_pair_id', 'effect_id'] + flag_cols + ['rank', 'score', 'avg_rank', 'avg_dist', 'conf']
+        pw_benchmark_cols = ['cmpd_pair_id_1', 'cmpd_pair_id_2', 'effect_id'] + flag_cols + ['rank', 'dist']
+    # Indication accuracies - always written (the metrics stage reads the consensus ranks).
     df_temp = pd.DataFrame(ss, columns=ia_benchmark_cols)
     df_temp.to_sql('ia_results', db_benchmark, if_exists='append', index=False)
-    # Pairwise accuracies - load data to sqlite
-    df_temp = pd.DataFrame(pa_ss, columns=pw_benchmark_cols)
-    df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
+    # Pairwise accuracies - only when needed (pair-similarity metrics or raw pairwise output).
+    if need_pa:
+        df_temp = pd.DataFrame(pa_ss, columns=pw_benchmark_cols)
+        df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
     return
+
+
+def _ind_accuracies_star(args):
+    """Unpack a positional-args tuple for ind_accuracies. imap/imap_unordered take a single-arg
+    callable (unlike starmap), so this adapter lets canbenchmark_cmpds dispatch the LOO-consensus
+    stage with dynamic (per-disease) load balancing."""
+    return ind_accuracies(*args)
+
+
+# Metric families computed by canbenchmark_cmpds (similarity/consensus x recall/precision/ndcg).
+_CMPDS_METRIC_NAMES = ('sim_recall', 'sim_prec', 'sim_ndcg', 'cons_recall', 'cons_prec', 'cons_ndcg')
+# Per-worker scratch populated by the pool initializer (see canbenchmark_cmpds).
+_cmpds_ctx = {}
+
+
+def _rpn_at_k(rel_positions, R, k):
+    """Recall, precision, and NDCG at k for a ranked result with binary relevance, plus the raw
+    hits/DCG/IDCG used for pooled (micro) aggregation. rel_positions are the 1-indexed ranks of
+    the R relevant items."""
+    hits = 0
+    dcg = 0.0
+    for p in rel_positions:
+        if p <= k:
+            hits += 1
+            dcg += 1.0 / math.log2(p + 1)
+    recall = hits / R if R > 0 else 0.0
+    precision = hits / max(1, k)
+    ideal = min(k, R)
+    idcg = sum(1.0 / math.log2(j + 1) for j in range(1, ideal + 1)) if ideal > 0 else 0.0
+    ndcg = dcg / idcg if idcg > 0 else 0.0
+    return recall, precision, ndcg, hits, dcg, idcg
+
+
+def _rpn_control(R, N, k):
+    """Random-ranking baseline for recall/precision/NDCG@k: the expected value when R relevant
+    items are placed uniformly at random among N ranked positions. The number of relevant items
+    in the top k is hypergeometric with mean E[hits] = R * min(k, N) / N, so
+        E[recall] = min(k, N) / N,  E[precision] = E[hits] / k,
+        E[NDCG]   = E[DCG] / IDCG   (IDCG is fixed given R; E[DCG] = (R/N) * sum_j 1/log2(j+1))."""
+    if R <= 0 or N <= 0:
+        return 0.0, 0.0, 0.0
+    kk = min(k, N)
+    exp_hits = R * kk / N
+    recall = exp_hits / R
+    precision = exp_hits / max(1, k)
+    idcg = sum(1.0 / math.log2(j + 1) for j in range(1, min(k, R) + 1))
+    dcg = (R / N) * sum(1.0 / math.log2(j + 1) for j in range(1, kk + 1))
+    ndcg = dcg / idcg if idcg > 0 else 0.0
+    return recall, precision, ndcg
+
+
+def _cov_control(R, N, k):
+    """Random-ranking baseline for *coverage*: the probability that a uniformly random ranking of
+    N items places at least one of the R relevant items in the top k,
+        P(X >= 1) = 1 - C(N-R, k)/C(N, k)   (hypergeometric survival at 0).
+    Averaged over queries this is the expected fraction of queries retrieving >=1 relevant item.
+    Unlike _rpn_control (which returns the *expected metric value*), this is a probability and is
+    the correct null for coverage / "at least one hit"."""
+    if R <= 0 or N <= 0 or k <= 0:
+        return 0.0
+    if R >= N:
+        return 1.0
+    return float(hypergeom.sf(0, N, R, min(k, N)))
+
+
+def _rpn_pvalue(hits, R, N, k):
+    """Upper-tail hypergeometric p-value for one query: P(X >= hits) with X ~ Hypergeom(N, R, k) --
+    the probability a random ranking would retrieve at least `hits` of the R relevant items in the
+    top k (a per-query significance test, Fisher's-exact / GSEA style). Returns 1.0 for hits <= 0."""
+    if hits <= 0 or R <= 0 or N <= 0 or k <= 0:
+        return 1.0
+    return float(hypergeom.sf(hits - 1, N, R, min(k, N)))
+
+
+def _init_cmpds_worker(similar_map, cmpd_lib_set, K, benchmark_name, alpha=0.05):
+    _cmpds_ctx.update(similar_map=similar_map, cmpd_lib_set=cmpd_lib_set,
+                      K=K, benchmark_name=benchmark_name, alpha=alpha)
+
+
+def _cmpds_metrics_worker(task):
+    """Compute the summed recall/precision/NDCG vectors (observed and random-control) for one
+    disease (effect). Returns (effect_id, observed, control, n_instances)."""
+    effect_id, assoc = task
+    ctx = _cmpds_ctx
+    similar_map = ctx['similar_map']
+    cmpd_lib_set = ctx['cmpd_lib_set']
+    K = ctx['K']
+    nk = len(K)
+    N = len(cmpd_lib_set)     # candidate-library size (ranking universe for the random control)
+    benchmark_name = ctx['benchmark_name']
+
+    # LOO consensus ranks for this disease's compounds (written by ind_accuracies)
+    db_benchmark = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
+    df_ia = pd.read_sql("SELECT cmpd_id, rank FROM ia_results", db_benchmark)
+    cons_rank = dict(zip(df_ia['cmpd_id'].astype(str), df_ia['rank'].astype(int)))
+
+    assoc_set = set(assoc)
+    d = {name: np.zeros(nk) for name in _CMPDS_METRIC_NAMES}      # per-query ratio sums (macro)
+    dc = {name: np.zeros(nk) for name in _CMPDS_METRIC_NAMES}     # random-control sums (macro)
+    p = {f'{fam}_{q}': np.zeros(nk) for fam in ('sim', 'cons')    # pooled sums (micro)
+         for q in ('hits', 'dcg', 'idcg')}
+    p['sim_R'] = 0.0
+    p['cons_R'] = 0.0
+    alpha = ctx['alpha']
+    not_hit = {'sim': np.ones(nk), 'cons': np.ones(nk)}   # P(no hit) product per view (coverage ctrl)
+    sig = {'sim': np.zeros(nk), 'cons': np.zeros(nk)}     # per-query significance counts (p<alpha)
+    n_inst = 0
+    for a in assoc:
+        # Similarity: rank a's candidates, relevant = the other associated compounds
+        relevant = assoc_set - {a}
+        R = len(relevant)
+        ranked = [int(cid) for cid, dist in similar_map[a] if int(cid) in cmpd_lib_set]
+        sim_positions = [pos for pos, cid in enumerate(ranked, 1) if cid in relevant]
+        # Consensus: relevant = the single left-out compound at its consensus rank
+        cr = cons_rank.get(str(a))
+        cons_positions = [cr] if cr is not None else []
+        cons_R = 1 if cr is not None else 0
+        p['sim_R'] += R
+        p['cons_R'] += cons_R
+
+        for j, k in enumerate(K):
+            sr, sp, sn, sh, sd, si = _rpn_at_k(sim_positions, R, k)
+            d['sim_recall'][j] += sr
+            d['sim_prec'][j] += sp
+            d['sim_ndcg'][j] += sn
+            p['sim_hits'][j] += sh
+            p['sim_dcg'][j] += sd
+            p['sim_idcg'][j] += si
+            ccr, ccp, ccn, ch, cd, ci = _rpn_at_k(cons_positions, cons_R, k)
+            d['cons_recall'][j] += ccr
+            d['cons_prec'][j] += ccp
+            d['cons_ndcg'][j] += ccn
+            p['cons_hits'][j] += ch
+            p['cons_dcg'][j] += cd
+            p['cons_idcg'][j] += ci
+            # random-ranking control
+            xsr, xsp, xsn = _rpn_control(R, N, k)
+            dc['sim_recall'][j] += xsr
+            dc['sim_prec'][j] += xsp
+            dc['sim_ndcg'][j] += xsn
+            xcr, xcp, xcn = _rpn_control(cons_R, N, k)
+            dc['cons_recall'][j] += xcr
+            dc['cons_prec'][j] += xcp
+            dc['cons_ndcg'][j] += xcn
+            # coverage control (prob query retrieves >=1 relevant) and per-query significance
+            not_hit['sim'][j] *= (1.0 - _cov_control(R, N, k))
+            not_hit['cons'][j] *= (1.0 - _cov_control(cons_R, N, k))
+            if _rpn_pvalue(sh, R, N, k) < alpha:
+                sig['sim'][j] += 1.0
+            if _rpn_pvalue(ch, cons_R, N, k) < alpha:
+                sig['cons'][j] += 1.0
+        n_inst += 1
+    cov = {'sim': 1.0 - not_hit['sim'], 'cons': 1.0 - not_hit['cons']}   # per-disease P(covered)
+    return effect_id, d, p, dc, n_inst, cov, sig
+
+
+# Per-worker scratch for the compound-pair variant of canbenchmark_cmpds.
+_cmpds_pair_ctx = {}
+
+
+def _init_cmpds_pair_worker(members, K, benchmark_name, n_lib, alpha=0.05):
+    _cmpds_pair_ctx.update(members=members, K=K, benchmark_name=benchmark_name, n_lib=n_lib,
+                           alpha=alpha)
+
+
+def _cmpds_pair_metrics_worker(effect_id):
+    """Compound-pair version of _cmpds_metrics_worker: similarity ranks come from the pa_results
+    table and the LOO consensus rank from ia_results (both written by ind_accuracies with
+    cmpd_pairs=True), rather than from in-memory similarity lists."""
+    ctx = _cmpds_pair_ctx
+    K = ctx['K']
+    nk = len(K)
+    N = ctx['n_lib']          # compound-pair library size (ranking universe for the control)
+    benchmark_name = ctx['benchmark_name']
+    eng = create_engine(f'sqlite:///{benchmark_name}/{effect_id}.db')
+    df_ia = pd.read_sql("SELECT cmpd_pair_id, rank FROM ia_results", eng)
+    df_pa = pd.read_sql("SELECT `cmpd_pair_id_1`, `cmpd_pair_id_2`, rank FROM pa_results", eng)
+    cons_rank = dict(zip(df_ia['cmpd_pair_id'].astype(str), df_ia['rank'].astype(int)))
+    pa_map = {}
+    for a, b, rk in zip(df_pa['cmpd_pair_id_1'].astype(str),
+                        df_pa['cmpd_pair_id_2'].astype(str), df_pa['rank'].astype(int)):
+        pa_map.setdefault(a, {})[b] = rk
+
+    assoc = [str(pp) for pp in ctx['members'][effect_id]]
+    assoc_set = set(assoc)
+    d = {name: np.zeros(nk) for name in _CMPDS_METRIC_NAMES}
+    dc = {name: np.zeros(nk) for name in _CMPDS_METRIC_NAMES}
+    p = {f'{fam}_{q}': np.zeros(nk) for fam in ('sim', 'cons')
+         for q in ('hits', 'dcg', 'idcg')}
+    p['sim_R'] = 0.0
+    p['cons_R'] = 0.0
+    alpha = ctx['alpha']
+    not_hit = {'sim': np.ones(nk), 'cons': np.ones(nk)}   # P(no hit) product per view (coverage ctrl)
+    sig = {'sim': np.zeros(nk), 'cons': np.zeros(nk)}     # per-query significance counts (p<alpha)
+    n_inst = 0
+    for a in assoc:
+        relevant = assoc_set - {a}
+        R = len(relevant)
+        amap = pa_map.get(a, {})
+        sim_positions = [amap[b] for b in relevant if b in amap]
+        cr = cons_rank.get(a)
+        cons_positions = [cr] if cr is not None else []
+        cons_R = 1 if cr is not None else 0
+        p['sim_R'] += R
+        p['cons_R'] += cons_R
+        for j, k in enumerate(K):
+            sr, sp, sn, sh, sd, si = _rpn_at_k(sim_positions, R, k)
+            d['sim_recall'][j] += sr
+            d['sim_prec'][j] += sp
+            d['sim_ndcg'][j] += sn
+            p['sim_hits'][j] += sh
+            p['sim_dcg'][j] += sd
+            p['sim_idcg'][j] += si
+            ccr, ccp, ccn, ch, cd, ci = _rpn_at_k(cons_positions, cons_R, k)
+            d['cons_recall'][j] += ccr
+            d['cons_prec'][j] += ccp
+            d['cons_ndcg'][j] += ccn
+            p['cons_hits'][j] += ch
+            p['cons_dcg'][j] += cd
+            p['cons_idcg'][j] += ci
+            xsr, xsp, xsn = _rpn_control(R, N, k)
+            dc['sim_recall'][j] += xsr
+            dc['sim_prec'][j] += xsp
+            dc['sim_ndcg'][j] += xsn
+            xcr, xcp, xcn = _rpn_control(cons_R, N, k)
+            dc['cons_recall'][j] += xcr
+            dc['cons_prec'][j] += xcp
+            dc['cons_ndcg'][j] += xcn
+            # coverage control (prob query retrieves >=1 relevant) and per-query significance
+            not_hit['sim'][j] *= (1.0 - _cov_control(R, N, k))
+            not_hit['cons'][j] *= (1.0 - _cov_control(cons_R, N, k))
+            if _rpn_pvalue(sh, R, N, k) < alpha:
+                sig['sim'][j] += 1.0
+            if _rpn_pvalue(ch, cons_R, N, k) < alpha:
+                sig['cons'][j] += 1.0
+        n_inst += 1
+    cov = {'sim': 1.0 - not_hit['sim'], 'cons': 1.0 - not_hit['cons']}   # per-disease P(covered)
+    return effect_id, d, p, dc, n_inst, cov, sig
+
+
+def _encode_dist_row(row):
+    """Encode a full distance row (one value per candidate, in the table's canonical id order) as a
+    compact float32 blob for the sqlite distance table."""
+    return np.asarray(row, dtype=np.float32).tobytes()
+
+
+def _store_dist_ids(db_engine, table, ids):
+    """Store the canonical id order for a distance table (written once) so that blob-encoded rows
+    can be decoded back to {id: dist}."""
+    pd.DataFrame({'ids': [json.dumps([str(i) for i in ids])]}).to_sql(
+        f'{table}__ids', db_engine, if_exists='replace', index=False)
+
+
+class _DistWriter:
+    """Bulk writer for a (id TEXT, dists BLOB) distance table: a single sqlite3 connection,
+    executemany in batches, and one commit -- far faster than per-batch pandas to_sql inserts.
+    Used as a context manager so the connection/index/commit are always finalized."""
+
+    def __init__(self, db_name, table, batch_size=1000):
+        self.table = table
+        self.batch_size = batch_size
+        self._batch = []
+        self.conn = sqlite3.connect(db_name)
+        self.conn.execute("PRAGMA synchronous=OFF")     # bulk-load speed (per-connection)
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute(f'CREATE TABLE IF NOT EXISTS "{table}" (id TEXT, dists BLOB)')
+        self._sql = f'INSERT INTO "{table}" (id, dists) VALUES (?, ?)'
+
+    def add(self, id_str, blob):
+        self._batch.append((id_str, blob))
+        if len(self._batch) >= self.batch_size:
+            self._flush()
+
+    def _flush(self):
+        if self._batch:
+            self.conn.executemany(self._sql, self._batch)   # no commit yet -> one transaction
+            self._batch = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        if exc[0] is None:
+            self._flush()
+            self.conn.execute(f'CREATE INDEX IF NOT EXISTS "{self.table}_id_idx" ON "{self.table}"(id)')
+            self.conn.commit()
+        self.conn.close()
+        return False
+
+
+def _load_dist_ids(db_name, table):
+    """Return the canonical id order for a binary distance table, or None if absent (legacy JSON)."""
+    try:
+        df = pd.read_sql(f'SELECT ids FROM "{table}__ids"', create_engine(f'sqlite:///{db_name}'))
+        return json.loads(df['ids'].iloc[0])
+    except Exception:
+        return None
+
+
+def _decode_dist_row(value, id_order=None, self_id=None):
+    """Decode one stored distance row into {other_id: dist}, excluding self. Handles both the
+    float32 blob format (needs id_order) and the legacy JSON-text format."""
+    if isinstance(value, (bytes, bytearray)):
+        arr = np.frombuffer(value, dtype=np.float32)
+        return {id_order[j]: float(arr[j]) for j in range(len(arr)) if id_order[j] != self_id}
+    d = json.loads(str(value).replace("'", '"'))
+    return {k: v for k, v in d.items() if k != self_id}
+
+
+def _load_pair_similar(db_name, top=None):
+    """Read the compound-pair distance table and return {str(pair_id): sorted [(other_id, dist)]}.
+    Compound pairs have no in-memory .similar list, so their neighbours come from the db instead."""
+    df = pd.read_sql("SELECT * FROM dists", create_engine(f'sqlite:///{db_name}'))
+    ids = _load_dist_ids(db_name, 'dists')
+    sim = {}
+    for _, row in df.iterrows():
+        d = _decode_dist_row(row['dists'], ids, str(row['id']))
+        items = sorted(d.items(), key=lambda kv: kv[1] if not math.isnan(kv[1]) else 100000)
+        sim[str(row['id'])] = items if top is None else items[:top]
+    return sim
+
+
+# Per-worker scratch for canbenchmark_conds (LOO condition-prediction benchmark).
+_conds_ctx = {}
+
+
+def _init_conds_worker(similar_top, cmpd_conds, cond_index, n_app, M, n, K, alpha=0.05):
+    _conds_ctx.update(similar_top=similar_top, cmpd_conds=cmpd_conds, cond_index=cond_index,
+                      n_app=n_app, M=M, n=n, K=K, n_cond=len(cond_index), alpha=alpha)
+
+
+def _conds_metrics_worker(c_id):
+    """Predict conditions for one compound and score its true conditions.
+    Returns (cmpd_id, R, recall_row, precision_row, ndcg_row, hits_row, dcg_row, idcg_row,
+             ctrl_recall_row, ctrl_precision_row, ctrl_ndcg_row, [(cond_id, rank), ...],
+             cov_ctrl_row, sig_row)."""
+    ctx = _conds_ctx
+    cmpd_conds = ctx['cmpd_conds']
+    cond_index = ctx['cond_index']
+    n_app = ctx['n_app']
+    M = ctx['M']
+    n = ctx['n']
+    K = ctx['K']
+    n_cond = ctx['n_cond']
+    alpha = ctx['alpha']
+    nk = len(K)
+
+    relevant = [k for k in cmpd_conds[c_id] if k in cond_index]
+    R = len(relevant)
+
+    # Vote: how many of the top-n similar compounds carry each condition
+    votes = np.zeros(n_cond)
+    for nbr_id, dist in ctx['similar_top'][c_id]:
+        for k in cmpd_conds.get(nbr_id, ()):
+            idx = cond_index.get(k)
+            if idx is not None:
+                votes[idx] += 1.0
+    # Consensus probability per condition, then competitive rank by (prob asc, votes desc)
+    prob = 1.0 - stats.hypergeom.cdf(votes, M, n_app, n)
+    ranks = pd.Series(list(zip(prob, -votes))).rank(method='min')
+    rel_ranks = [(k, int(ranks.iloc[cond_index[k]])) for k in relevant]
+    rel_positions = [rk for _, rk in rel_ranks]
+
+    row_r = np.zeros(nk); row_p = np.zeros(nk); row_nd = np.zeros(nk)
+    row_h = np.zeros(nk); row_dcg = np.zeros(nk); row_idcg = np.zeros(nk)
+    ctrl_r = np.zeros(nk); ctrl_p = np.zeros(nk); ctrl_nd = np.zeros(nk)
+    cov_ctrl = np.zeros(nk)   # P(random ranking retrieves >=1 true condition) -- coverage control
+    sig = np.zeros(nk)        # per-compound significance flag (upper-tail hypergeometric p<alpha)
+    for j, k in enumerate(K):
+        r, p, nd, h, dcg, idcg = _rpn_at_k(rel_positions, R, k)
+        row_r[j] = r; row_p[j] = p; row_nd[j] = nd
+        row_h[j] = h; row_dcg[j] = dcg; row_idcg[j] = idcg
+        cr, cp, cn = _rpn_control(R, n_cond, k)   # random-ranking baseline over the condition library
+        ctrl_r[j] = cr; ctrl_p[j] = cp; ctrl_nd[j] = cn
+        cov_ctrl[j] = _cov_control(R, n_cond, k)
+        sig[j] = 1.0 if _rpn_pvalue(h, R, n_cond, k) < alpha else 0.0
+    return (c_id, R, row_r, row_p, row_nd, row_h, row_dcg, row_idcg, ctrl_r, ctrl_p, ctrl_nd,
+            rel_ranks, cov_ctrl, sig)
 
 
 def ind_accuracies_cmpd_pair(effect_id, effect_cps, cp_lib, d_name, metrics, approved, n, cando_db):
