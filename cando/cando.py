@@ -3109,27 +3109,31 @@ class CANDO(object):
         @param adrs bool: benchmark ADR prediction instead of indication prediction
         @param pairs bool: predict ADRs for compound pairs (Compound_pair objects) instead of
             compounds; neighbours come from the compound-pair distance table. Forces adrs=True.
-        @param alpha float: significance level for the per-compound hypergeometric test used by the
-            consensus_significant / consensus_significant_pct rows.
+        @param alpha float: significance level for the per-query hypergeometric test used by the
+            *_significant / *_significant_pct rows.
         @param write_raw bool: if True, write the raw_results/consensus_results CSV (one row per
             compound-condition association). Default False (summary metrics are unaffected).
-        @return Returns a pandas DataFrame of the macro/micro metric summary. In addition it
-            includes a macro-averaged random-ranking control row per metric
-            (consensus_*_control_macro) -- the expected value under a random ranking
-            (hypergeometric) -- a consensus_coverage row (count of compounds with a non-zero
-            recall@k) and a consensus_coverage_pct row (as a percentage of the compounds evaluated).
-            It also includes a hypergeometric coverage control (consensus_coverage_control expected
-            count / consensus_coverage_control_pct expected %), the null "at least one hit" baseline
-            for coverage, and per-compound significance rows (consensus_significant count /
-            consensus_significant_pct %) counting compounds whose top-k retrieval beats a random
-            ranking at level alpha.
+        @return Returns a pandas DataFrame summary reported under two averaging weightings plus a
+            shared pooled micro (each compound is a multi-label prediction of its conditions):
+              - pooled: recall_micro, precision_micro, ndcg_micro (ratio of pooled sums; sklearn micro)
+              - compound-weighted ("sample") view: compound_{recall,precision,ndcg}_macro and the
+                matching _control_macro, plus compound_coverage(_pct), compound_coverage_control(_pct)
+                and compound_significant(_pct). Each compound is weighted equally.
+              - condition-weighted ("label") view: condition_{recall,precision,ndcg}_macro etc.,
+                mirroring the compound rows but weighting each condition equally (a double average
+                over conditions, then over their member compounds; sklearn macro). This measures how
+                recoverable each condition is by its member compounds.
+            Controls are hypergeometric expectations; coverage counts units (compounds or conditions)
+            with non-zero recall@k, with a hypergeometric "at least one hit" control; significance
+            counts queries beating a random ranking at level alpha.
 
         Output files:
           - summary-conds-<file_name>-<n>[-adrs].tsv
           - results_analysed_named/results_analysed_named-conds-<metric>-<file_name>[-adrs].tsv:
-            one file per metric with the per-compound value at each k threshold
-          - raw_results/consensus_results-conds-<file_name>[-adrs].csv: per compound-condition
-            association, the predicted rank of the true condition and top-k hit flags
+            one file per metric -- compound_{recall,precision,ndcg} (per compound) and
+            condition_{recall,precision,ndcg} (per condition)
+          - raw_results/consensus_results-conds-<file_name>[-adrs].csv (write_raw): per
+            compound-condition association, the predicted rank of the true condition and top-k flags
         """
         print("Begin running canbenchmark_conds...")
         start = time.time()
@@ -3205,6 +3209,7 @@ class CANDO(object):
         # per-compound rows for results_analysed_named, and per-association rows for raw consensus
         per_cmpd = []
         cons_rows = []
+        cond_ranks = {}   # condition id -> [rho_a(d) for each member compound a] (condition/"label" view)
 
         # Per-unit prediction is independent, so it is optionally parallelised. The top-n
         # similarity lists and the unit->conditions map are shipped once per worker via the
@@ -3244,47 +3249,87 @@ class CANDO(object):
             R_total += R
             n_cmpd += 1
             per_cmpd.append((c_id, name_by_id[c_id], R, row_r, row_p, row_nd))
+            # regroup this compound's condition ranks by condition for the condition-weighted view
+            for d_id, rk in rel_ranks:
+                cond_ranks.setdefault(d_id, []).append(rk)
             # raw consensus (opt-in): one row per true condition with its predicted rank + top-k flags
             if write_raw:
                 for k, rk in rel_ranks:
                     flags = ['1' if rk <= kk else '0' for kk in K]
                     cons_rows.append([str(c_id), k] + flags + [str(rk)])
 
-        # Macro = mean over compounds; micro = pooled over compound-condition associations
         rows = {}
-        # Micro = ratio of pooled sums: recall = Sigma hits / Sigma R; precision = Sigma hits /
-        # (n_queries * k); NDCG = Sigma DCG / Sigma IDCG.
-        rows['consensus_recall_macro'] = macro['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
-        rows['consensus_recall_micro'] = w_hits / R_total if R_total else np.zeros(nk)
-        rows['consensus_precision_macro'] = macro['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
-        # precision pools hits over the fixed per-query denominator k (so micro equals macro here)
-        rows['consensus_precision_micro'] = w_hits / (n_cmpd * np.maximum(1, np.array(K))) if n_cmpd else np.zeros(nk)
-        rows['consensus_ndcg_macro'] = macro['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
-        rows['consensus_ndcg_micro'] = np.divide(w_dcg, w_idcg, out=np.zeros(nk), where=w_idcg > 0)
-        # Random-ranking (hypergeometric) control: expected metric value under random ranking,
-        # macro-averaged over compounds (matching the *_macro rows).
-        rows['consensus_recall_control_macro'] = macro_ctrl['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
-        rows['consensus_precision_control_macro'] = macro_ctrl['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
-        rows['consensus_ndcg_control_macro'] = macro_ctrl['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
-        # Coverage: how many compounds (units) have a non-zero recall@k, as a discrete count and
-        # as a percentage of the compounds evaluated.
-        rows['consensus_coverage'] = cov_count
-        rows['consensus_coverage_pct'] = cov_count / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
-        # Coverage control (hypergeometric "at least one hit" null): each compound is one query, so
-        # the summed P(X>=1) is the expected number of covered compounds (and its mean the pct).
-        rows['consensus_coverage_control'] = cov_ctrl_sum
-        rows['consensus_coverage_control_pct'] = cov_ctrl_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
-        # Significance: number (and %) of compounds whose top-k retrieval beats a random ranking at
-        # level alpha (upper-tail hypergeometric p-value < alpha).
-        rows['consensus_significant'] = sig_sum
-        rows['consensus_significant_pct'] = sig_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+        # ---- Pooled (micro) -- weighting-agnostic, ratio of pooled sums over all associations ----
+        rows['recall_micro'] = w_hits / R_total if R_total else np.zeros(nk)
+        rows['precision_micro'] = w_hits / (n_cmpd * np.maximum(1, np.array(K))) if n_cmpd else np.zeros(nk)
+        rows['ndcg_micro'] = np.divide(w_dcg, w_idcg, out=np.zeros(nk), where=w_idcg > 0)
 
-        # Per-metric results_analysed_named (per compound, sorted by #conditions).
-        # per_cmpd tuple: (cmpd_id, cmpd_name, R, recall_row, precision_row, ndcg_row)
+        # ---- Compound-weighted ("sample") view -- mean over compounds, each weighted equally ----
+        rows['compound_recall_macro'] = macro['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_precision_macro'] = macro['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_ndcg_macro'] = macro['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_recall_control_macro'] = macro_ctrl['recall'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_precision_control_macro'] = macro_ctrl['prec'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_ndcg_control_macro'] = macro_ctrl['ndcg'] / n_cmpd if n_cmpd else np.zeros(nk)
+        rows['compound_coverage'] = cov_count
+        rows['compound_coverage_pct'] = cov_count / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+        rows['compound_coverage_control'] = cov_ctrl_sum
+        rows['compound_coverage_control_pct'] = cov_ctrl_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+        rows['compound_significant'] = sig_sum
+        rows['compound_significant_pct'] = sig_sum / n_cmpd * 100.0 if n_cmpd else np.zeros(nk)
+
+        # ---- Condition-weighted ("label") view -- mean over conditions of the mean over their
+        # member compounds. Each (d, a) is a single-target instance (target = {d}, r = 1); regrouped
+        # from each compound's condition ranks (cond_ranks). Weights each condition equally.
+        D_ids = list(cond_ranks.keys())
+        n_D = len(D_ids)
+        sig_ok = np.array([_rpn_pvalue(1, 1, n_cond, k) < alpha for k in K])      # k-only (r=1, hit)
+        p_ge1 = np.array([_cov_control(1, n_cond, k) for k in K])                 # P(>=1) per instance
+        cmac = {name: np.zeros(nk) for name in ('recall', 'prec', 'ndcg')}
+        cond_cov = np.zeros(nk); cond_cov_ctrl = np.zeros(nk); cond_sig = np.zeros(nk)
+        M_inst = 0
+        per_cond = []
+        for d_id, ranks_d in cond_ranks.items():
+            md = len(ranks_d); M_inst += md
+            rr = np.zeros(nk); pp = np.zeros(nk); ndd = np.zeros(nk)
+            for j, k in enumerate(K):
+                hits = 0; dcg = 0.0
+                for rk in ranks_d:
+                    if rk <= k:
+                        hits += 1
+                        dcg += 1.0 / math.log2(rk + 1)
+                rr[j] = hits / md
+                pp[j] = hits / (md * max(1, k))
+                ndd[j] = dcg / md                                    # IDCG = 1 (single target)
+                cond_cov_ctrl[j] += 1.0 - (1.0 - p_ge1[j]) ** md
+                if sig_ok[j]:
+                    cond_sig[j] += hits
+            cmac['recall'] += rr; cmac['prec'] += pp; cmac['ndcg'] += ndd
+            cond_cov += (rr > 0)
+            per_cond.append((d_id, md, rr, pp, ndd))
+        rows['condition_recall_macro'] = cmac['recall'] / n_D if n_D else np.zeros(nk)
+        rows['condition_precision_macro'] = cmac['prec'] / n_D if n_D else np.zeros(nk)
+        rows['condition_ndcg_macro'] = cmac['ndcg'] / n_D if n_D else np.zeros(nk)
+        # Control: r = 1 for every instance, so the expected metric is _rpn_control(1, N, k) for the
+        # whole condition-macro (independent of condition).
+        cc_r = np.zeros(nk); cc_p = np.zeros(nk); cc_n = np.zeros(nk)
+        for j, k in enumerate(K):
+            cc_r[j], cc_p[j], cc_n[j] = _rpn_control(1, n_cond, k)
+        rows['condition_recall_control_macro'] = cc_r
+        rows['condition_precision_control_macro'] = cc_p
+        rows['condition_ndcg_control_macro'] = cc_n
+        rows['condition_coverage'] = cond_cov
+        rows['condition_coverage_pct'] = cond_cov / n_D * 100.0 if n_D else np.zeros(nk)
+        rows['condition_coverage_control'] = cond_cov_ctrl
+        rows['condition_coverage_control_pct'] = cond_cov_ctrl / n_D * 100.0 if n_D else np.zeros(nk)
+        rows['condition_significant'] = cond_sig
+        rows['condition_significant_pct'] = cond_sig / M_inst * 100.0 if M_inst else np.zeros(nk)
+
+        # Per-metric results_analysed_named. Compound view: one row per compound (sorted by
+        # #conditions). per_cmpd tuple: (cmpd_id, cmpd_name, R, recall_row, precision_row, ndcg_row)
         ra_header = "cmpd_id\tconds_per_cmpd\t" + "\t".join(headers) + "\tcmpd_name\n"
         per_cmpd_sorted = sorted(per_cmpd, key=lambda t: (t[2], t[0]), reverse=True)
-        metric_slot = {'consensus_recall': 3, 'consensus_precision': 4, 'consensus_ndcg': 5}
-        for label, slot in metric_slot.items():
+        for label, slot in {'compound_recall': 3, 'compound_precision': 4, 'compound_ndcg': 5}.items():
             with open(ra_named % label, 'w', encoding="utf8") as fo:
                 fo.write(ra_header)
                 for tup in per_cmpd_sorted:
@@ -3292,6 +3337,17 @@ class CANDO(object):
                     vals = tup[slot]
                     fo.write("{}\t{}\t{}\t{}\n".format(
                         c_id, R, '\t'.join(f'{v:.5f}' for v in vals), c_name))
+        # Condition view: one row per condition (sorted by #member compounds).
+        # per_cond tuple: (cond_id, m_d, recall_row, precision_row, ndcg_row)
+        ra_header_cond = "cond_id\tcmpds_per_cond\t" + "\t".join(headers) + "\n"
+        per_cond_sorted = sorted(per_cond, key=lambda t: (t[1], str(t[0])), reverse=True)
+        for label, slot in {'condition_recall': 2, 'condition_precision': 3, 'condition_ndcg': 4}.items():
+            with open(ra_named % label, 'w', encoding="utf8") as fo:
+                fo.write(ra_header_cond)
+                for tup in per_cond_sorted:
+                    d_id, md = tup[0], tup[1]
+                    vals = tup[slot]
+                    fo.write("{}\t{}\t{}\n".format(d_id, md, '\t'.join(f'{v:.5f}' for v in vals)))
 
         # Raw per-association consensus results (opt-in via write_raw)
         if write_raw:
@@ -3302,12 +3358,262 @@ class CANDO(object):
 
         df_summ = pd.DataFrame.from_dict(rows, orient='index', columns=headers)
         df_summ.to_csv(summ, sep='\t', float_format='%.5f')
-        print("\nSummary (consensus recall@k / precision@k / NDCG@k)")
+        print("\nSummary (recall@k / precision@k / NDCG@k; compound- and condition-weighted views)")
         print(df_summ)
         print()
         t_tot = time.time() - start
         print(f"Done running canbenchmark_conds ({t_tot:.0f} s).\n")
         return df_summ
+
+    def _load_ext_associations(self, ext_map, adrs=False, pairs=False):
+        """Parse an EXTERNAL (held-out) mapping file (same format as i_map / adr_map / ddi_adr_map)
+        into held-out compound<->condition associations. Only associations between entities already
+        in the internal library are kept, and any association that is already internal is dropped, so
+        what remains is a genuine hold-out set. Returns (cond_to_units, unit_to_conds, stats_str)
+        where a unit is a compound id (int) or, in pairs mode, a compound-pair key str(cp.id_)."""
+        cmpd_ids = {c.id_ for c in self.compounds}
+        ind_ids = {i.id_ for i in self.indications}
+        adr_ids = {a.id_ for a in self.adrs}
+        cond_to_units, unit_to_conds = {}, {}
+        n_rows = kept = skip_entity = skip_internal = 0
+        with open(ext_map, encoding='utf8') as f:
+            h2i = {h: i for i, h in enumerate(f.readline().rstrip('\n').split('\t'))}
+            for line in f:
+                ls = line.rstrip('\n').split('\t')
+                if len(ls) < len(h2i):
+                    continue
+                n_rows += 1
+                try:
+                    if pairs:
+                        a, b = int(ls[h2i['CANDO_ID-1']]), int(ls[h2i['CANDO_ID-2']])
+                        cond_id = ls[h2i['CONDITION_MEDDRA_ID']]
+                        cp = self.get_compound_pair((a, b))
+                        if cp is None or cond_id not in adr_ids:
+                            skip_entity += 1; continue
+                        unit_key, internal = str(cp.id_), set(cp.adrs)
+                    elif adrs:
+                        cid = int(ls[h2i['CANDO_ID']]); cond_id = ls[h2i['CONDITION_MEDDRA_ID']]
+                        if cid not in cmpd_ids or cond_id not in adr_ids:
+                            skip_entity += 1; continue
+                        unit_key, internal = cid, set(self.get_compound(cid).adrs)
+                    else:
+                        cid = int(ls[h2i['CANDO_ID']]); cond_id = ls[h2i['MESH_ID']]
+                        if cid not in cmpd_ids or cond_id not in ind_ids:
+                            skip_entity += 1; continue
+                        unit_key, internal = cid, set(self.get_compound(cid).indications)
+                except (KeyError, ValueError, LookupError):
+                    skip_entity += 1; continue
+                if cond_id in internal:
+                    skip_internal += 1; continue
+                cond_to_units.setdefault(cond_id, set()).add(unit_key)
+                unit_to_conds.setdefault(unit_key, set()).add(cond_id)
+                kept += 1
+        stats = (f"  external mapping: {kept} held-out associations kept, {skip_internal} already "
+                 f"internal, {skip_entity} non-library skipped (of {n_rows} rows).")
+        return cond_to_units, unit_to_conds, stats
+
+    def _ext_cutoffs(self, n_universe):
+        """K cutoffs + column headers over a ranking universe of size n_universe (mirrors the
+        canbenchmark_conds cutoffs: absolute counts, topAll, then percentiles)."""
+        x = n_universe / 100.0
+        K = [1, 5, 10, 25, 50, 100, int(x * 100.0001), int(x * 1.0001), int(x * 5.0001),
+             int(x * 10.0001), int(x * 50.0001), int(x * 100.0001)]
+        headers = ['top1', 'top5', 'top10', 'top25', 'top50', 'top100', f'top{n_universe}',
+                   'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        return K, headers
+
+    def _finish_ext(self, rows, per_query, per_target, headers, query_prefix, target_prefix,
+                    summ, ra_named):
+        """Write the summary tsv and per-metric results_analysed_named files (query view from
+        per_query, target view from per_target) and return the summary DataFrame."""
+        os.makedirs('results_analysed_named', exist_ok=True)
+        df_summ = pd.DataFrame.from_dict(rows, orient='index', columns=headers)
+        df_summ.to_csv(summ, sep='\t', float_format='%.5f')
+        for rows_list, prefix, unit_col in ((per_query, query_prefix, 'targets_per_query'),
+                                            (per_target, target_prefix, 'queries_per_target')):
+            hdr = f"id\t{unit_col}\t" + "\t".join(headers) + "\n"
+            rows_sorted = sorted(rows_list, key=lambda t: (t[1], str(t[0])), reverse=True)
+            for label, slot in {f'{prefix}_recall': 2, f'{prefix}_precision': 3,
+                                f'{prefix}_ndcg': 4}.items():
+                with open(ra_named % label, 'w', encoding="utf8") as fo:
+                    fo.write(hdr)
+                    for tup in rows_sorted:
+                        fo.write("{}\t{}\t{}\n".format(
+                            tup[0], tup[1], '\t'.join(f'{v:.5f}' for v in tup[slot])))
+        return df_summ
+
+    def canbenchmark_conds_ext(self, file_name, ext_map, n=10, adrs=False, pairs=False,
+                               alpha=0.05, write_raw=False):
+        """!
+        EXTRINSIC benchmark: predict conditions (indications/ADRs) for each unit (compound or
+        compound pair) from the INTERNAL mapping, and score them against a held-out EXTERNAL mapping.
+        For each unit its top-n internal neighbours vote their internal conditions (vote +
+        hypergeometric consensus, as in canpredict_indications/canpredict_adr); the unit's known
+        internal conditions are filtered out of the ranking; the target set is the unit's external
+        conditions. The dual of canbenchmark_cmpds_ext.
+
+        @param file_name str: base name for the output files
+        @param ext_map str: path to the external held-out mapping (i_map / adr_map / ddi_adr_map format)
+        @param n int: number of most-similar neighbours used to vote for conditions
+        @param adrs bool: predict ADRs instead of indications
+        @param pairs bool: predict ADRs for compound pairs instead of compounds (forces adrs)
+        @param alpha float: significance level for the per-query hypergeometric test
+        @param write_raw bool: if True, write the raw per-association CSV
+        @return the summary DataFrame (27 rows: pooled *_micro + compound_* query-weighted +
+            condition_* target-weighted views, each with control/coverage/significance).
+        """
+        print("Begin running canbenchmark_conds_ext...")
+        start = time.time()
+        if pairs:
+            adrs = True
+        _, ext_unit_to_conds, stats = self._load_ext_associations(ext_map, adrs, pairs)
+        print(stats)
+
+        if pairs:
+            units = self.compound_pairs
+            conds = self.adrs
+            unit_conds = {str(u.id_): list(u.adrs) for u in units}
+            cond_size = {c.id_: len(c.compound_pairs) for c in conds}
+            M = max(1, len(self.compound_pairs) - 1)
+            similar_top = _load_pair_similar(self.db_name, top=n)
+            key = lambda u: str(u.id_)
+        else:
+            if self.compounds and not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar_sorted = True
+            units = self.compounds
+            conds = self.adrs if adrs else self.indications
+            unit_conds = {c.id_: list(c.adrs if adrs else c.indications) for c in units}
+            cond_size = {c.id_: len(c.compounds) for c in conds}
+            M = max(1, len(self.compounds) - 1)
+            similar_top = {c.id_: c.similar[:n] for c in units}
+            key = lambda u: u.id_
+
+        cond_ids = [c.id_ for c in conds]
+        cond_index = {cid: i for i, cid in enumerate(cond_ids)}
+        n_app = np.array([cond_size[cid] for cid in cond_ids], dtype=float)
+        n_cond = len(cond_ids)
+        # only external conditions that are library conditions are recoverable
+        ext_conds = {u: [d for d in ds if d in cond_index] for u, ds in ext_unit_to_conds.items()}
+        query_keys = [key(u) for u in units
+                      if key(u) in ext_conds and len(ext_conds[key(u)]) > 0]
+        K, headers = self._ext_cutoffs(n_cond)
+        print(f"  Scoring external conditions for {len(query_keys)} "
+              f"{'compound pairs' if pairs else ('compounds' )} (of {n_cond} candidate conditions)...")
+
+        init_args = (similar_top, unit_conds, ext_conds, cond_index, n_app, M, n, K, alpha)
+        results = self._run_ext_pool(_conds_ext_worker, _init_conds_ext_worker, init_args, query_keys)
+        rows, per_query, per_target = _ext_summary(results, K, alpha, 'compound', 'condition')
+
+        eff = ('-pairs' if pairs else '') + ('-adrs' if adrs and not pairs else '')
+        summ = f"summary-conds_ext{eff}-{file_name}-{n}.tsv"
+        ra_named = f'results_analysed_named/results_analysed_named-conds_ext{eff}-%s-{file_name}.tsv'
+        df_summ = self._finish_ext(rows, per_query, per_target, headers, 'compound', 'condition',
+                                   summ, ra_named)
+        if write_raw:
+            self._write_ext_raw(f'raw_results/consensus_results-conds_ext{eff}-{file_name}.csv',
+                                per_query, results, 'cmpd_id', 'cond_id', K, headers)
+        print(df_summ)
+        print(f"Done running canbenchmark_conds_ext ({time.time()-start:.0f} s).\n")
+        return df_summ
+
+    def canbenchmark_cmpds_ext(self, file_name, ext_map, n=10, adrs=False, pairs=False,
+                               alpha=0.05, write_raw=False):
+        """!
+        EXTRINSIC benchmark: predict compounds (or compound pairs) for each condition
+        (indication/ADR) from the INTERNAL mapping, and score them against a held-out EXTERNAL
+        mapping. Each of a condition's internal member units votes its top-n similar candidates (as
+        in canpredict_compounds); candidates are ranked by (votes desc, avg-rank asc); the condition's
+        known internal members are filtered out of the ranking; the target set is the condition's
+        external member units. The dual of canbenchmark_conds_ext.
+
+        @param file_name str: base name for the output files
+        @param ext_map str: path to the external held-out mapping (i_map / adr_map / ddi_adr_map format)
+        @param n int: number of most-similar candidates each internal member contributes
+        @param adrs bool: benchmark ADRs instead of indications
+        @param pairs bool: rank compound pairs for ADRs instead of compounds (forces adrs)
+        @param alpha float: significance level for the per-query hypergeometric test
+        @param write_raw bool: if True, write the raw per-association CSV
+        @return the summary DataFrame (27 rows: pooled *_micro + condition_* query-weighted +
+            compound_* target-weighted views, each with control/coverage/significance).
+        """
+        print("Begin running canbenchmark_cmpds_ext...")
+        start = time.time()
+        if pairs:
+            adrs = True
+        ext_cond_to_units, _, stats = self._load_ext_associations(ext_map, adrs, pairs)
+        print(stats)
+
+        if pairs:
+            effects = self.adrs
+            cand_ids = [str(cp.id_) for cp in self.compound_pairs]
+            members = {}
+            for e in effects:
+                mk = [str(self.get_compound_pair(p).id_) for p in e.compound_pairs
+                      if self.get_compound_pair(p) is not None]
+                members[e.id_] = mk
+            similar = _load_pair_similar(self.db_name)          # full neighbour lists per pair
+        else:
+            if self.compounds and not self.compounds[0].similar_sorted:
+                for c in self.compounds:
+                    c.similar = sorted(c.similar, key=lambda x: x[1] if not math.isnan(x[1]) else 100000)
+                    c.similar_sorted = True
+            effects = self.adrs if adrs else self.indications
+            cand_ids = [c.id_ for c in self.compounds]
+            members = {e.id_: list(e.compounds) for e in effects}
+            cmpd_by_id = {c.id_: c for c in self.compounds}
+            member_ids = {m for e in effects for m in members[e.id_]}
+            similar = {m: cmpd_by_id[m].similar for m in member_ids if m in cmpd_by_id}
+
+        cand_set = set(cand_ids)
+        n_cand = len(cand_ids)
+        ext_targets = {d: [u for u in us if u in cand_set] for d, us in ext_cond_to_units.items()}
+        query_keys = [e.id_ for e in effects
+                      if e.id_ in ext_targets and len(ext_targets[e.id_]) > 0
+                      and len(members.get(e.id_, [])) > 0]
+        K, headers = self._ext_cutoffs(n_cand)
+        print(f"  Scoring external {'compound pairs' if pairs else 'compounds'} for "
+              f"{len(query_keys)} conditions (of {n_cand} candidates)...")
+
+        init_args = (members, ext_targets, similar, cand_set, n_cand, n, K, alpha)
+        results = self._run_ext_pool(_cmpds_ext_worker, _init_cmpds_ext_worker, init_args, query_keys)
+        rows, per_query, per_target = _ext_summary(results, K, alpha, 'condition', 'compound')
+
+        eff = ('-pairs' if pairs else '') + ('-adrs' if adrs and not pairs else '')
+        summ = f"summary-cmpds_ext{eff}-{file_name}-{n}.tsv"
+        ra_named = f'results_analysed_named/results_analysed_named-cmpds_ext{eff}-%s-{file_name}.tsv'
+        df_summ = self._finish_ext(rows, per_query, per_target, headers, 'condition', 'compound',
+                                   summ, ra_named)
+        if write_raw:
+            self._write_ext_raw(f'raw_results/consensus_results-cmpds_ext{eff}-{file_name}.csv',
+                                per_query, results, 'effect_id', 'cmpd_id', K, headers)
+        print(df_summ)
+        print(f"Done running canbenchmark_cmpds_ext ({time.time()-start:.0f} s).\n")
+        return df_summ
+
+    def _run_ext_pool(self, worker, init_fn, init_args, tasks):
+        """Run one extrinsic worker over `tasks`, serial or across a pool (parallel path mirrors
+        canbenchmark_conds)."""
+        if self.ncpus > 1 and len(tasks) > 1:
+            chunksize = max(1, len(tasks) // (self.ncpus * 4))
+            with mp.Pool(self.ncpus, initializer=init_fn, initargs=init_args) as pool:
+                return pool.map(worker, tasks, chunksize=chunksize)
+        init_fn(*init_args)
+        it = tqdm(tasks) if self.pbar else tasks
+        return [worker(t) for t in it]
+
+    def _write_ext_raw(self, path, per_query, results, qcol, tcol, K, headers):
+        """Raw per-association CSV: one row per (query, external target) with the target's rank and
+        the top-k hit flags."""
+        os.makedirs('raw_results', exist_ok=True)
+        with open(path, 'w', encoding="utf8") as fo:
+            fo.write(','.join([qcol, tcol] + headers + ['rank']) + '\n')
+            for res in results:
+                qid, rel_ranks = res[0], res[11]
+                for t, rk in rel_ranks:
+                    flags = ['1' if rk <= kk else '0' for kk in K]
+                    fo.write(','.join([str(qid), str(t)] + flags + [str(rk)]) + '\n')
 
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
@@ -8406,6 +8712,227 @@ def _conds_metrics_worker(c_id):
         sig[j] = 1.0 if _rpn_pvalue(h, R, n_cond, k) < alpha else 0.0
     return (c_id, R, row_r, row_p, row_nd, row_h, row_dcg, row_idcg, ctrl_r, ctrl_p, ctrl_nd,
             rel_ranks, cov_ctrl, sig)
+
+
+# ===========================================================================================
+# Extrinsic benchmarks (canbenchmark_cmpds_ext / canbenchmark_conds_ext): build a consensus from
+# the INTERNAL mapping and score it against a held-out EXTERNAL mapping. Each query yields one
+# ranked list; the query's known internal positives are filtered out of that list; the target set
+# is the query's external associations. Both directions share one dual-view aggregator.
+# ===========================================================================================
+
+# Per-worker scratch for the two extrinsic benchmarks.
+_conds_ext_ctx = {}
+_cmpds_ext_ctx = {}
+
+
+def _init_conds_ext_worker(similar_top, unit_conds, ext_conds, cond_index, n_app, M, n, K, alpha=0.05):
+    _conds_ext_ctx.update(similar_top=similar_top, unit_conds=unit_conds, ext_conds=ext_conds,
+                          cond_index=cond_index, n_app=n_app, M=M, n=n, K=K,
+                          n_cond=len(cond_index), alpha=alpha)
+
+
+def _conds_ext_worker(u_id):
+    """Extrinsic 'conditions for a unit': predict conditions from the unit's top-n neighbours'
+    INTERNAL conditions (vote + hypergeometric consensus, as in canpredict_indications/adr), drop
+    the unit's internal conditions from the ranking (filtered), and score its EXTERNAL conditions.
+    Returns the standard per-query tuple plus the filtered universe size N."""
+    ctx = _conds_ext_ctx
+    unit_conds = ctx['unit_conds']; ext_conds = ctx['ext_conds']; cond_index = ctx['cond_index']
+    n_app = ctx['n_app']; M = ctx['M']; n = ctx['n']; K = ctx['K']; alpha = ctx['alpha']
+    n_cond = ctx['n_cond']; nk = len(K)
+
+    internal = set(unit_conds.get(u_id, ()))
+    internal_idx = {cond_index[d] for d in internal if d in cond_index}
+    votes = np.zeros(n_cond)
+    for nbr, dist in ctx['similar_top'].get(u_id, ()):
+        for d in unit_conds.get(nbr, ()):
+            idx = cond_index.get(d)
+            if idx is not None:
+                votes[idx] += 1.0
+    prob = 1.0 - stats.hypergeom.cdf(votes, M, n_app, n)
+    kept = [i for i in range(n_cond) if i not in internal_idx]     # filtered ranking universe
+    N = len(kept)
+    kept_ranks = pd.Series([(prob[i], -votes[i]) for i in kept]).rank(method='min')
+    idx_rank = {kept[j]: int(kept_ranks.iloc[j]) for j in range(N)}
+    relevant = [d for d in ext_conds.get(u_id, ())
+                if d in cond_index and cond_index[d] not in internal_idx]
+    rel_ranks = [(d, idx_rank[cond_index[d]]) for d in relevant]
+    return _ext_query_metrics(u_id, rel_ranks, N, K, alpha)
+
+
+def _init_cmpds_ext_worker(members, ext_targets, similar, cand_set, n_cand, n, K, alpha=0.05):
+    _cmpds_ext_ctx.update(members=members, ext_targets=ext_targets, similar=similar,
+                          cand_set=cand_set, n_cand=n_cand, n=n, K=K, alpha=alpha)
+
+
+def _cmpds_ext_worker(d_id):
+    """Extrinsic 'compounds (or pairs) for a condition': the condition's internal members each vote
+    their top-n similar candidates (as in canpredict_compounds); rank candidates by (votes desc,
+    avg-rank asc), drop the internal members from the ranking (filtered), and score the condition's
+    EXTERNAL member candidates. Returns the standard per-query tuple plus the filtered universe N."""
+    ctx = _cmpds_ext_ctx
+    members = ctx['members'][d_id]; ext = ctx['ext_targets'].get(d_id, [])
+    similar = ctx['similar']; cand_set = ctx['cand_set']; n_cand = ctx['n_cand']
+    n = ctx['n']; K = ctx['K']; alpha = ctx['alpha']
+    A = set(members)
+    votes = {}; ranksum = {}
+    for m in members:
+        c_count = 0
+        for (cid, dist) in similar.get(m, ()):
+            if c_count >= n:
+                break
+            if dist == 0.0:                       # skip identical/degenerate neighbours (as canpredict)
+                continue
+            votes[cid] = votes.get(cid, 0) + 1
+            ranksum[cid] = ranksum.get(cid, 0) + c_count
+            c_count += 1
+    voted = [u for u in votes if u not in A]       # candidates that got >=1 vote, minus known members
+    V = len(voted)
+    if V:
+        vranks = pd.Series([(-votes[u], ranksum[u] / votes[u]) for u in voted]).rank(method='min')
+        rank_of = {voted[i]: int(vranks.iloc[i]) for i in range(V)}
+    else:
+        rank_of = {}
+    N = n_cand - len(A)                            # filtered ranking universe
+    relevant = [e for e in ext if e in cand_set and e not in A]
+    rel_ranks = [(e, rank_of.get(e, V + 1)) for e in relevant]   # unvoted target -> just past the voted
+    return _ext_query_metrics(d_id, rel_ranks, N, K, alpha)
+
+
+def _ext_query_metrics(q_id, rel_ranks, N, K, alpha):
+    """Shared per-query metric computation for the extrinsic workers. rel_ranks = [(target_id,
+    rank)]; N = filtered ranking-universe size. Returns the same 15-field tuple both aggregators
+    expect (per-k recall/prec/ndcg + raw hits/dcg/idcg + hypergeometric controls + rel_ranks +
+    coverage-control + significance + N)."""
+    nk = len(K)
+    rel_positions = [rk for _, rk in rel_ranks]
+    R = len(rel_positions)
+    row_r = np.zeros(nk); row_p = np.zeros(nk); row_nd = np.zeros(nk)
+    row_h = np.zeros(nk); row_dcg = np.zeros(nk); row_idcg = np.zeros(nk)
+    ctrl_r = np.zeros(nk); ctrl_p = np.zeros(nk); ctrl_nd = np.zeros(nk)
+    cov_ctrl = np.zeros(nk); sig = np.zeros(nk)
+    for j, k in enumerate(K):
+        r, p, nd, h, dcg, idcg = _rpn_at_k(rel_positions, R, k)
+        row_r[j] = r; row_p[j] = p; row_nd[j] = nd
+        row_h[j] = h; row_dcg[j] = dcg; row_idcg[j] = idcg
+        cr, cp, cn = _rpn_control(R, N, k)
+        ctrl_r[j] = cr; ctrl_p[j] = cp; ctrl_nd[j] = cn
+        cov_ctrl[j] = _cov_control(R, N, k)
+        sig[j] = 1.0 if _rpn_pvalue(h, R, N, k) < alpha else 0.0
+    return (q_id, R, row_r, row_p, row_nd, row_h, row_dcg, row_idcg, ctrl_r, ctrl_p, ctrl_nd,
+            rel_ranks, cov_ctrl, sig, N)
+
+
+def _ext_summary(results, K, alpha, query_prefix, target_prefix):
+    """Dual-view aggregation shared by both extrinsic benchmarks. `results` is a list of the 15-field
+    tuples from _ext_query_metrics. Returns (rows, per_query, per_target):
+      - pooled micro (recall/precision/ndcg_micro),
+      - query-weighted macro (each query equal) under `query_prefix`,
+      - target-weighted macro (each external target equal) under `target_prefix`,
+    each macro with its hypergeometric control, coverage(+control), and significance. Controls use
+    each query's filtered universe N (cached by N)."""
+    nk = len(K)
+    Kd = np.maximum(1, np.array(K, dtype=float))
+    Karr = np.array(K)
+    # ---- query-weighted accumulators + pooled micro ----
+    qmac = {m: np.zeros(nk) for m in ('recall', 'prec', 'ndcg')}
+    qctrl = {m: np.zeros(nk) for m in ('recall', 'prec', 'ndcg')}
+    w_hits = np.zeros(nk); w_dcg = np.zeros(nk); w_idcg = np.zeros(nk)
+    q_cov = np.zeros(nk); q_cov_ctrl = np.zeros(nk); q_sig = np.zeros(nk)
+    R_total = 0; nq = 0
+    per_query = []
+    tgt = {}                                         # target_id -> [(rank, N), ...]
+    for (qid, R, rr, rp, rnd, rh, rdcg, ridcg, cr, cp, cn, rel_ranks, covc, sg, N) in results:
+        if R == 0:
+            continue
+        qmac['recall'] += rr; qmac['prec'] += rp; qmac['ndcg'] += rnd
+        qctrl['recall'] += cr; qctrl['prec'] += cp; qctrl['ndcg'] += cn
+        w_hits += rh; w_dcg += rdcg; w_idcg += ridcg
+        q_cov += (rr > 0); q_cov_ctrl += covc; q_sig += sg
+        R_total += R; nq += 1
+        per_query.append((qid, R, rr, rp, rnd))
+        for t, rk in rel_ranks:
+            tgt.setdefault(t, []).append((rk, N))
+
+    rows = {}
+    rows['recall_micro'] = w_hits / R_total if R_total else np.zeros(nk)
+    rows['precision_micro'] = w_hits / (nq * Kd) if nq else np.zeros(nk)
+    rows['ndcg_micro'] = np.divide(w_dcg, w_idcg, out=np.zeros(nk), where=w_idcg > 0)
+
+    qp = query_prefix
+    rows[f'{qp}_recall_macro'] = qmac['recall'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_precision_macro'] = qmac['prec'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_ndcg_macro'] = qmac['ndcg'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_recall_control_macro'] = qctrl['recall'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_precision_control_macro'] = qctrl['prec'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_ndcg_control_macro'] = qctrl['ndcg'] / nq if nq else np.zeros(nk)
+    rows[f'{qp}_coverage'] = q_cov
+    rows[f'{qp}_coverage_pct'] = q_cov / nq * 100.0 if nq else np.zeros(nk)
+    rows[f'{qp}_coverage_control'] = q_cov_ctrl
+    rows[f'{qp}_coverage_control_pct'] = q_cov_ctrl / nq * 100.0 if nq else np.zeros(nk)
+    rows[f'{qp}_significant'] = q_sig
+    rows[f'{qp}_significant_pct'] = q_sig / nq * 100.0 if nq else np.zeros(nk)
+
+    # ---- target-weighted view (each external target equal); r=1 single-target instances ----
+    ctrl_cache = {}; covp_cache = {}; sigok_cache = {}
+
+    def _ctrl(N):
+        if N not in ctrl_cache:
+            a = np.zeros(nk); b = np.zeros(nk); c = np.zeros(nk)
+            for j, k in enumerate(K):
+                a[j], b[j], c[j] = _rpn_control(1, N, k)
+            ctrl_cache[N] = (a, b, c)
+        return ctrl_cache[N]
+
+    def _covp(N):
+        if N not in covp_cache:
+            covp_cache[N] = np.array([_cov_control(1, N, k) for k in K])
+        return covp_cache[N]
+
+    def _sigok(N):
+        if N not in sigok_cache:
+            sigok_cache[N] = np.array([_rpn_pvalue(1, 1, N, k) < alpha for k in K], dtype=float)
+        return sigok_cache[N]
+
+    tmac = {m: np.zeros(nk) for m in ('recall', 'prec', 'ndcg')}
+    tctrl = {m: np.zeros(nk) for m in ('recall', 'prec', 'ndcg')}
+    t_cov = np.zeros(nk); t_cov_ctrl = np.zeros(nk); t_sig = np.zeros(nk)
+    M_inst = 0
+    per_target = []
+    for t, insts in tgt.items():
+        mt = len(insts); M_inst += mt
+        rr = np.zeros(nk); pp = np.zeros(nk); ndd = np.zeros(nk)
+        ccr = np.zeros(nk); ccp = np.zeros(nk); ccn = np.zeros(nk)
+        covp = np.ones(nk)
+        for (rk, N) in insts:
+            hit = (Karr >= rk).astype(float)
+            rr += hit
+            pp += hit / Kd
+            ndd += hit * (1.0 / math.log2(rk + 1))
+            a, b, c = _ctrl(N); ccr += a; ccp += b; ccn += c
+            covp *= (1.0 - _covp(N))
+            t_sig += hit * _sigok(N)
+        tmac['recall'] += rr / mt; tmac['prec'] += pp / mt; tmac['ndcg'] += ndd / mt
+        tctrl['recall'] += ccr / mt; tctrl['prec'] += ccp / mt; tctrl['ndcg'] += ccn / mt
+        t_cov += (rr > 0)
+        t_cov_ctrl += (1.0 - covp)
+        per_target.append((t, mt, rr / mt, pp / mt, ndd / mt))
+    n_T = len(tgt)
+    tp = target_prefix
+    rows[f'{tp}_recall_macro'] = tmac['recall'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_precision_macro'] = tmac['prec'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_ndcg_macro'] = tmac['ndcg'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_recall_control_macro'] = tctrl['recall'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_precision_control_macro'] = tctrl['prec'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_ndcg_control_macro'] = tctrl['ndcg'] / n_T if n_T else np.zeros(nk)
+    rows[f'{tp}_coverage'] = t_cov
+    rows[f'{tp}_coverage_pct'] = t_cov / n_T * 100.0 if n_T else np.zeros(nk)
+    rows[f'{tp}_coverage_control'] = t_cov_ctrl
+    rows[f'{tp}_coverage_control_pct'] = t_cov_ctrl / n_T * 100.0 if n_T else np.zeros(nk)
+    rows[f'{tp}_significant'] = t_sig
+    rows[f'{tp}_significant_pct'] = t_sig / M_inst * 100.0 if M_inst else np.zeros(nk)
+    return rows, per_query, per_target
 
 
 def ind_accuracies_cmpd_pair(effect_id, effect_cps, cp_lib, d_name, metrics, approved, n, cando_db):
