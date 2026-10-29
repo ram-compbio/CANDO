@@ -2757,6 +2757,229 @@ class CANDO(object):
 
         return df_summ
 
+    def canbenchmark_new_fast(self, file_name, n=10, indications=[], continuous=False, bottom=False,
+                              ranking='standard', adrs=False, associated=True, addl_metrics=[], write_addl=False,\
+                              exclude_indic=False, tierank='min'):
+        """!
+        Benchmarks the platform based on consensus compound similarity of those approved for the same diseases
+        Same as canbenchmark_new, but much faster: same arguments, same results and same output files.
+        Not available here: continuous, adrs, addl_metrics and write_addl (use canbenchmark_new for these).
+
+        @param file_name str: Name to be used for the various results files (e.g. file_name=test --> summary_test.tsv)
+        @param n int: Number of top similar compounds used from each compound's list (default: 10)
+        @param indications list of str: List of Indication ids to be benchmarked, otherwise all will be used.
+        @param continuous bool: Not available here, use canbenchmark_new
+        @param bottom bool: Same as canbenchmark_new
+        @param ranking str: Same as canbenchmark_new
+        @param adrs bool: Not available here, use canbenchmark_new
+        @param associated bool: Only rank compounds associated with at least one indication (default: True)
+        @param addl_metrics list of func: Not available here, use canbenchmark_new
+        @param write_addl bool: Not available here, use canbenchmark_new
+        @param exclude_indic bool: If True, will only rank left out compound against non-indicated compounds (default: False)
+        @param tierank str: rank that tied compounds will take (default: min)
+            options - min, max, average
+        @return Returns df_summ: the summary table, same as canbenchmark_new
+        """
+
+        def print_time(s):
+            if s >= 60:
+                m = s / 60.0
+                s %= 60.0
+                if m >= 60.0:
+                    h = m / 60.0
+                    m %= 60.0
+                    return f"{h:.0f} hr {m:.0f} min {s:.0f} s"
+                else:
+                    return f"{m:.0f} min {s:.0f} s"
+            else:
+                return f"{s:.0f} s"
+
+        print("Begin running canbenchmark_new_fast...")
+        start = time.time()
+
+        assert not (continuous or adrs or addl_metrics or write_addl),\
+               'continuous, adrs, addl_metrics and write_addl are not available in canbenchmark_new_fast, please use canbenchmark_new'
+        assert tierank in ('min', 'max', 'average'), 'tierank options for canbenchmark_new_fast are min, max or average'
+        assert isinstance(indications, list) or indications == 'all', 'indications must be a list of Indication ids'
+
+        associated_str = '-associated' if associated else ''
+        ra_named = f'results_analysed_named/results_analysed_named-{file_name}-{n}{associated_str}.tsv'
+        ra_named_ndcg = f"results_analysed_named/results_analysed_named-ndcg-{file_name}-{n}{associated_str}.tsv"
+        ra = f'raw_results/raw_results-{file_name}-{n}{associated_str}.csv'
+        pwr = f'pairwise_results/pairwise_results-{file_name}-{n}{associated_str}.csv'
+        summ = f'summary-{file_name}-{n}{associated_str}.tsv'
+        t_name = f"time-{file_name}-{n}{associated_str}.txt"
+
+        os.makedirs('results_analysed_named', exist_ok=True)
+        os.makedirs('raw_results', exist_ok=True)
+        os.makedirs('pairwise_results', exist_ok=True)
+
+        effect_type = 'disease'
+        effect_dct = {}
+
+        if associated:
+            cmpd_lib = [str(self.get_compound(c).id_) for effect in self.indications for c in effect.compounds]
+        else:
+            cmpd_lib = [str(c.id_) for c in self.compounds]
+
+        cmpd_lib = list(set(cmpd_lib))
+
+        if isinstance(indications, list) and len(indications) >= 1:
+            effects = list(map(self.get_indication, indications))
+        else:
+            effects = self.indications
+
+        effects = [effect for effect in effects if len(effect.compounds) > 1]
+
+        x = (len(cmpd_lib)) / 100.0
+        metrics = [(1, 10), (2, 25), (3, 50), (4, 100), (5, int(x * 100.0001)),
+                   (6, int(x * 1.0001)), (7, int(x * 5.0001)), (8, int(x * 10.0001)),
+                   (9, int(x * 50.0001)), (10, int(x * 100.0001))]
+
+        print("  Calculating scores...")
+        start_calc = time.time()
+        conn = sqlite3.connect(self.db_name)
+        rows = conn.execute(f"SELECT id, dists FROM {self.dist_metric}").fetchall()
+        conn.close()
+        cmpd_set = set(cmpd_lib)
+        lib = sorted(str(c) for c, _ in rows if not associated or str(c) in cmpd_set)
+        lib_pos = {c: i for i, c in enumerate(lib)}
+        dists = np.zeros((len(lib), len(lib)))
+        for c, d in rows:
+            if str(c) not in lib_pos:
+                continue
+            d = json.loads(d.replace("'", '"'))
+            cols = [(lib_pos[k], v) for k, v in d.items() if k in lib_pos]
+            dists[lib_pos[str(c)], [i for i, _ in cols]] = [v for _, v in cols]
+        del rows
+        assert np.all(np.isfinite(dists)), 'distance table has NaN/inf values'
+
+        # rank of compound j in compound i's similarity list (i itself excluded, ties take the lowest rank)
+        ranks = np.zeros(dists.shape, dtype=np.int32)
+        for s in range(0, len(lib), 1000):
+            block = dists[s:s + 1000].copy()
+            block[np.arange(len(block)), np.arange(s, s + len(block))] = np.inf
+            ranks[s:s + 1000] = stats.rankdata(block, method='min', axis=1)
+        np.fill_diagonal(ranks, 0)
+        topn = ((ranks > 0) & (ranks <= n)).astype(np.int32)
+        nranks = np.where(topn == 1, ranks, 0)
+
+        results = {}
+        pbar = tqdm(effects) if self.pbar else effects
+        for effect in pbar:
+            results[effect.id_] = ind_accuracies_fast(effect.id_, effect.compounds, lib_pos, dists, ranks, topn,
+                                                      nranks, metrics, exclude_indic, tierank)
+        del dists, ranks, topn, nranks
+        t_calc = print_time(time.time() - start_calc)
+        print("  Done calculating scores.")
+        print(f"  Time to calculate scores: {t_calc}")
+        with open(t_name, 'w') as tw:
+            tw.write("Number of CPUs: 1\n")
+            tw.write(f"Time to calculate scores: {t_calc}\n")
+
+        print("  Compiling and saving results...")
+        ra_out = open(ra, 'w')
+        pwr_out = open(pwr, 'w')
+        ra_out.write(f"compound_id,effect_id,top10,top25,top50,top100,"
+                     f"top{len(cmpd_lib)},top1%,top5%,top10%,top50%,top100%,"
+                     f"rank,score,avg_rank,avg_dist,conf\n")
+        pwr_out.write(f"cmpd_id-1,cmpd_id-2,effect_id,top10,top25,top50,top100,"
+                      f"top{len(cmpd_lib)},top1%,top5%,top10%,top50%,top100%,"
+                      f"rank,dist\n")
+        # Pairwise Accuracy
+        pwa_count = [0.0]*len(metrics)
+        pwa_tot = 0
+        # NDCG
+        ndcg = {}
+        for m in metrics:
+            ndcg[m[0]] = {}
+        for effect in effects:
+            ss, pa_ss = results[effect.id_]
+            tot = len(effect.compounds)
+            effect_dct[(effect, tot)] = {}
+            ndcg_l = {}
+            for m in metrics:
+                effect_dct[(effect, tot)][m] = 0.0
+                ndcg_l[m[0]] = []
+            for s in ss:
+                rank = int(s[-5])
+                for m in metrics:
+                    if rank <= m[1]:
+                        effect_dct[(effect, tot)][m] += 1.0
+                    # NDCG; equals dcg(c_rank, k) / dcg(c_ideal, k) in canbenchmark_new for one relevant compound
+                    ndcg_l[m[0]].append(1.0 / math.log2(rank + 1) if rank <= int(m[1]) else 0.0)
+                # compound-indication results
+                ra_out.write(','.join(s) + '\n')
+            # Pairwise accuracy
+            pwa_tot += len(pa_ss)
+            for s in pa_ss:
+                rank = int(s[-2])
+                for idx, m in enumerate(metrics):
+                    if rank <= m[1]:
+                        pwa_count[idx] += 1.0
+                pwr_out.write(','.join(s) + '\n')
+            # NDCG
+            for m in metrics:
+                ndcg[m[0]][effect] = np.mean(ndcg_l[m[0]])
+        ra_out.close()
+        pwr_out.close()
+
+        self.accuracies = effect_dct
+        final_accs = self.results_analysed(ra_named, metrics, effect_type)
+
+        # NDCG - results_analysed_named
+        with open(ra_named_ndcg, 'w') as o:
+            o.write(f"effect_id\tcmpds_per_effect\ttop10\ttop25\ttop50\ttop100\ttop{len(cmpd_lib)}\ttop1%\ttop5%\ttop10%\ttop50%\ttop100%\teffect_name\n")
+            for effect in effects:
+                o.write(f"{effect.id_}\t{len(effect.compounds)}")
+                for m in metrics:
+                    o.write(f"\t{ndcg[m[0]][effect]:.5f}")
+                o.write(f"\t{effect.name}\n")
+
+        pa = [(i/pwa_tot)*100.0 for i in pwa_count]
+
+        cov = [0] * 10
+        for effect, c in list(self.accuracies.keys()):
+            accs = self.accuracies[effect, c]
+            for m_i in range(len(metrics)):
+                if accs[metrics[m_i]] > 0.0:
+                    cov[m_i] += 1
+        cov = map(int, cov)
+
+        nndcg = [0.0] * 10
+        for idx, m in enumerate(metrics):
+            l = []
+            for effect in effects:
+                l.append(ndcg[m[0]][effect])
+            nndcg[idx] = np.mean(l)
+
+        # Create average indication accuracy list in percent
+        ia = []
+        for m in metrics:
+            ia.append(final_accs[m] * 100.0)
+
+        # Control calculation
+        control_aia = []
+        for i in range(len(metrics)):
+            p = hypergeom.pmf(1, len(cmpd_lib), 1, metrics[i][1])
+            control_aia.append(p * 100.0)
+        print("  Done compiling and saving results.")
+
+        headers = ['top10', 'top25', 'top50', 'top100', f'top{len(cmpd_lib)}',
+                   'top1%', 'top5%', 'top10%', 'top50%', 'top100%']
+        df_summ = pd.DataFrame(list(zip(ia, control_aia, pa, cov, nndcg)), columns=['nAIA','control-nAIA','PA','IC','nNDCG'], index=[headers])
+        print("\nSummary")
+        print(df_summ.T)
+        print()
+        df_summ.T.to_csv(summ, float_format='%.5f', sep='\t')
+        t_tot = print_time(time.time()-start)
+        print("Done running canbenchmark_new_fast.")
+        print(f"Total time to run canbenchmark_new_fast: {t_tot}\n")
+        with open(t_name,'a') as tw:
+            tw.write(f"Total time to run canbenchmark_new_fast: {t_tot}")
+
+        return df_summ
+
     def canbenchmark_associated(self, file_name, indications=[], continuous=False, ranking='standard'):
         """!
         Benchmark only the compounds in the indication mapping, aka get rid of "noisy" compounds.
@@ -7097,6 +7320,94 @@ def ind_accuracies(effect_id, effect_cmpds, cmpd_lib, d_name, metrics, approved,
     df_temp = pd.DataFrame(pa_ss, columns=benchmark_cols)
     df_temp.to_sql('pa_results', db_benchmark, if_exists='append', index=False)
     return
+
+def ind_accuracies_fast(effect_id, effect_cmpds, lib_pos, dists, ranks, topn, nranks, metrics, exclude_indic, tierank):
+    """!
+    Same per-indication results as ind_accuracies, computed from similarity lists already ranked by
+    canbenchmark_new_fast instead of being rebuilt from the database.
+
+    @param effect_id str: Indication id
+    @param effect_cmpds list: Compound ids associated with the indication
+    @param lib_pos dict: Compound id (str) -> row of dists/ranks
+    @param dists array: dists[i, j] = distance of compound j in compound i's similarity list
+    @param ranks array: rank of compound j in compound i's similarity list (0 on the diagonal)
+    @param topn array: 1 if ranks[i, j] is within the top n, else 0
+    @param nranks array: ranks[i, j] if within the top n, else 0
+    @param metrics list: Cutoffs used for the benchmarking protocol
+    @param exclude_indic bool: If True, will only rank left out compound against non-indicated compounds
+    @param tierank str: rank that tied compounds will take; min, max or average
+    @return Returns (ss, pa_ss): rows of ia_results and pa_results as in ind_accuracies
+    """
+    effect_cmpds = [str(c) for c in effect_cmpds]
+    idx = np.array([lib_pos[c] for c in effect_cmpds])
+    n_lib = len(lib_pos)
+    n_ref = len(effect_cmpds) - 1
+    ss = []
+    pa_ss = []
+    # Pairwise accuracy
+    for i, c in zip(idx, effect_cmpds):
+        for j, c2 in zip(idx, effect_cmpds):
+            if c == c2:
+                continue
+            s = [c, c2, effect_id]
+            rank = ranks[i, j]
+            for x in metrics:
+                if rank <= x[1]:
+                    s.append('1')
+                else:
+                    s.append('0')
+            s.append(str(int(rank)))
+            s.append(str(float(dists[i, j])))
+            pa_ss.append(s)
+    # sums over all indication compounds; the left out compound's list is subtracted below
+    score_all = topn[idx].sum(axis=0, dtype=np.int64)
+    rank_all = ranks[idx].sum(axis=0, dtype=np.int64)
+    nrank_all = nranks[idx].sum(axis=0, dtype=np.int64)
+    in_effect = np.zeros(n_lib, dtype=bool)
+    in_effect[idx] = True
+    for k, c_loo in zip(idx, effect_cmpds):
+        score = score_all - topn[k]
+        neg_score = n_ref - score
+        avg_rank = (rank_all - ranks[k]) / n_ref
+        with np.errstate(divide='ignore', invalid='ignore'):
+            avg_nrank = np.where(score > 0, (nrank_all - nranks[k]) / np.maximum(score, 1), float(n_lib))
+        keep = ~in_effect if exclude_indic else np.ones(n_lib, dtype=bool)
+        keep[k] = True
+        key = (neg_score[k], avg_nrank[k], avg_rank[k])
+        better = (neg_score < key[0]) | ((neg_score == key[0]) & ((avg_nrank < key[1]) |
+                                                                  ((avg_nrank == key[1]) & (avg_rank < key[2]))))
+        tied = np.flatnonzero((neg_score == key[0]) & (avg_nrank == key[1]) & (avg_rank == key[2]) & keep)
+        # summed_dist is the last sort key, so it is only needed for compounds tied on the first three;
+        # added in the same column order as ind_accuracies, skipping a compound's own column
+        summed_dist = np.zeros(len(tied))
+        for r in idx[idx != k]:
+            summed_dist = np.where(tied == r, summed_dist, summed_dist + dists[r, tied])
+        dist_loo = summed_dist[tied == k][0]
+        n_better = int(np.sum(better & keep)) + int(np.sum(summed_dist < dist_loo))
+        n_equal = int(np.sum(summed_dist == dist_loo))
+        if tierank == 'min':
+            rank = n_better + 1
+        elif tierank == 'max':
+            rank = n_better + n_equal
+        else:
+            rank = n_better + (n_equal + 1) / 2.0
+        avg_dist = dist_loo / n_ref
+        conf = 0.5*(score[k]/n_ref) + 0.3*(1-avg_dist) + 0.2*(1/avg_rank[k])
+
+        s = [c_loo, effect_id]
+        for x in metrics:
+            if rank <= x[1]:
+                s.append('1')
+            else:
+                s.append('0')
+        s.append(str(int(rank)))
+        s.append(str(int(score[k])))
+        s.append(str(float(avg_rank[k])))
+        s.append(str(float(avg_dist)))
+        s.append(str(float(conf)))
+        ss.append(s)
+    return ss, pa_ss
+
 
 def ind_accuracies_cmpd_pair(effect_id, effect_cps, cp_lib, d_name, metrics, approved, n, cando_db):
     db_name = f'{d_name}/{effect_id}.db'
